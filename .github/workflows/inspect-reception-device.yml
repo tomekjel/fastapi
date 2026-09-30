@@ -1,0 +1,29 @@
+name: Inspect reception device mapping
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/inspect-reception-device.yml"
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect mapping
+        shell: bash
+        run: |
+          set -e
+          rm -rf /tmp/msbackend
+          mkdir -p /tmp/msbackend
+          unzip -q MultiServisServer_FINAL.zip -d /tmp/msbackend
+          f=/tmp/msbackend/MultiServisServer_FINAL/app/routers/receptions.py
+          echo "=== RECEPTIONS 90-240 ==="
+          sed -n '90,240p' "$f"
+          echo "=== RECEPTIONS 240-380 ==="
+          sed -n '240,380p' "$f"
+          echo "=== CONFIG NAMES ==="
+          sed -n '1,220p' /tmp/msbackend/MultiServisServer_FINAL/app/config.py | sed -E 's/(password|secret|token)([^=]*=).*/\1\2 <redacted>/Ig'
