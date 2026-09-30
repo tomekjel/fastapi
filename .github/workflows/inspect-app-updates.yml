@@ -1,0 +1,24 @@
+name: Inspect app update deployment
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/inspect-app-updates.yml"
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect backend archive for app update paths
+        run: |
+          rm -rf /tmp/ms-server
+          mkdir -p /tmp/ms-server
+          unzip -q MultiServisServer_FINAL.zip -d /tmp/ms-server
+          echo "=== files ==="
+          find /tmp/ms-server -maxdepth 5 -type f | sort
+          echo "=== update references ==="
+          grep -RniE "app-updates|latest\.json|apk|update" /tmp/ms-server/MultiServisServer_FINAL || true
