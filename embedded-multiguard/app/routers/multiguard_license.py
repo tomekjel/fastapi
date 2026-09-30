@@ -31,6 +31,43 @@ _KEY_PATTERN = __import__("re").compile(
 )
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False
+_CONFIG_FILE = os.getenv(
+    "MULTIGUARD_CONFIG_FILE",
+    "/opt/multiservis/config/multiguard-license.json",
+)
+_CONFIG_LOCK = threading.Lock()
+_CONFIG_CACHE: dict[str, Any] | None = None
+
+
+def _config() -> dict[str, Any]:
+    global _CONFIG_CACHE
+    if _CONFIG_CACHE is not None:
+        return _CONFIG_CACHE
+    with _CONFIG_LOCK:
+        if _CONFIG_CACHE is not None:
+            return _CONFIG_CACHE
+        try:
+            with open(_CONFIG_FILE, "r", encoding="utf-8") as handle:
+                loaded = json.load(handle)
+        except FileNotFoundError:
+            loaded = {}
+        except Exception as exc:
+            raise HTTPException(
+                503, f"Błędny plik konfiguracji Multi-Guard: {exc}"
+            ) from exc
+        if not isinstance(loaded, dict):
+            raise HTTPException(
+                503, "Konfiguracja Multi-Guard musi być obiektem JSON."
+            )
+        _CONFIG_CACHE = loaded
+        return loaded
+
+
+def _setting(name: str, default: Any = "") -> Any:
+    environment = os.getenv(name)
+    if environment is not None and environment != "":
+        return environment
+    return _config().get(name, default)
 
 
 class ProvisionRequest(BaseModel):
@@ -97,15 +134,18 @@ def _hash(value: str) -> str:
 
 
 def _required_env(name: str) -> str:
-    value = os.getenv(name, "").strip()
+    value = str(_setting(name, "")).strip()
     if not value:
         raise HTTPException(503, f"Brak konfiguracji {name}.")
     return value
 
 
 def _keygate_base_url() -> str:
-    return os.getenv(
-        "MULTIGUARD_KEYGATE_BASE_URL", "https://license.multi-servis.pl"
+    return str(
+        _setting(
+            "MULTIGUARD_KEYGATE_BASE_URL",
+            "https://license.multi-servis.pl",
+        )
     ).strip().rstrip("/")
 
 
@@ -129,7 +169,7 @@ def _plan_slug(edition: str, months: int) -> str:
     }
     if key not in defaults:
         raise HTTPException(400, "Obsługiwane okresy to 3, 6 lub 12 miesięcy.")
-    return os.getenv(env_names[key], defaults[key]).strip()
+    return str(_setting(env_names[key], defaults[key])).strip()
 
 
 def _keygate_request(
@@ -211,8 +251,11 @@ def _keygate_create_license(
         body={
             "product_id": product_id,
             "plan_id": plan_id,
-            "email": os.getenv(
-                "MULTIGUARD_LICENSE_EMAIL", "licencje@multi-servis.pl"
+            "email": str(
+                _setting(
+                    "MULTIGUARD_LICENSE_EMAIL",
+                    "licencje@multi-servis.pl",
+                )
             ).strip(),
             "notes": (
                 f"Multi-Servis {reception_number}; okres licencji zaczyna się "
@@ -486,15 +529,19 @@ def _normalize_link(link: dict[str, Any]) -> dict[str, Any]:
 
 
 def _required_documents() -> list[dict[str, str]]:
-    raw = os.getenv("MULTIGUARD_REQUIRED_DOCUMENTS_JSON", "").strip()
-    if not raw:
+    source = _setting("MULTIGUARD_REQUIRED_DOCUMENTS", [])
+    if isinstance(source, str):
+        raw = source.strip()
+        if not raw:
+            return []
+        try:
+            source = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                503, "MULTIGUARD_REQUIRED_DOCUMENTS ma błędny JSON."
+            ) from exc
+    if not source:
         return []
-    try:
-        source = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            503, "MULTIGUARD_REQUIRED_DOCUMENTS_JSON ma błędny JSON."
-        ) from exc
     if not isinstance(source, list):
         raise HTTPException(503, "Dokumenty Multi-Guard muszą być tablicą.")
 
