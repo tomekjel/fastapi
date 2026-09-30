@@ -1,0 +1,8 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+psycopg[binary]==3.2.3
+cryptography==44.0.0
+python-dateutil==2.9.0.post0
+python-multipart==0.0.20
+itsdangerous==2.2.0
