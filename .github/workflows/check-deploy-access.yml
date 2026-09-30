@@ -1,0 +1,31 @@
+name: Check deploy access
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/check-deploy-access.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check configured deploy secrets
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          check() { if [ -n "$2" ]; then echo "$1=present"; else echo "$1=missing"; fi; }
+          check SSH_PRIVATE_KEY "$SSH_PRIVATE_KEY"
+          check SERVER_SSH_KEY "$SERVER_SSH_KEY"
+          check DEPLOY_SSH_KEY "$DEPLOY_SSH_KEY"
+          check SSH_HOST "$SSH_HOST"
+          check SERVER_HOST "$SERVER_HOST"
+          check SSH_USER "$SSH_USER"
+          check SERVER_USER "$SERVER_USER"
