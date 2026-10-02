@@ -16,7 +16,9 @@ from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Form, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -25,6 +27,7 @@ from app.security import CurrentUser, require_owner, require_staff
 
 
 router = APIRouter(tags=["multi-guard-license"])
+_panel_security = HTTPBasic(auto_error=False)
 
 _KEY_PATTERN = __import__("re").compile(
     r"^KG-[A-Z2-9]{8}-[A-Z2-9]{8}-[A-Z2-9]{8}-[A-Z2-9]{8}$"
@@ -525,6 +528,72 @@ def _reception(reception_id: uuid.UUID) -> dict[str, Any]:
     return dict(row)
 
 
+def _reception_by_number(reception_number: str) -> dict[str, Any]:
+    value = reception_number.strip()
+    if not value:
+        raise HTTPException(400, "Numer zlecenia jest wymagany.")
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT so.id, so.reception_number, so.device_id, so.status
+                FROM service.service_orders so
+                WHERE upper(so.reception_number)=upper(:number)
+                LIMIT 1
+                """
+            ),
+            {"number": value},
+        ).mappings().first()
+    if not row:
+        raise HTTPException(404, "Nie znaleziono zlecenia o podanym numerze.")
+    if not row["device_id"]:
+        raise HTTPException(409, "Zlecenie nie ma przypisanego urządzenia.")
+    return dict(row)
+
+
+def _panel_auth(
+    credentials: HTTPBasicCredentials | None = Depends(_panel_security),
+) -> None:
+    expected_user = _required_env("MULTIGUARD_PANEL_USER")
+    expected_password = _required_env("MULTIGUARD_PANEL_PASSWORD")
+    if (
+        credentials is None
+        or not secrets.compare_digest(credentials.username, expected_user)
+        or not secrets.compare_digest(credentials.password, expected_password)
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Nieprawidłowy login lub hasło.",
+            headers={"WWW-Authenticate": 'Basic realm="Multi-Servis Licencje"'},
+        )
+
+
+def _panel_html(body: str) -> str:
+    return f"""<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Multi-Servis — licencje Multi-Guard</title>
+<style>
+:root{{font-family:Segoe UI,Arial,sans-serif;color:#eef7ff;background:#06101f}}
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:#06101f}}
+main{{width:min(760px,94vw);margin:48px auto}}
+.card{{background:#0a192b;border:1px solid #23425f;border-radius:18px;padding:24px;box-shadow:0 20px 60px #0007}}
+h1,h2{{margin:0 0 8px}}p{{color:#9fb4c8;line-height:1.5}}
+form{{display:grid;gap:14px}}label{{display:grid;gap:6px;font-size:13px;color:#c8d9e8}}
+input,select{{width:100%;padding:12px;border:1px solid #2d5677;border-radius:9px;background:#07182a;color:#eef7ff}}
+button{{border:0;border-radius:9px;padding:12px 16px;background:#139ce7;color:#fff;font-weight:700;cursor:pointer}}
+.grid{{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px}}
+.key{{display:block;padding:15px;margin:14px 0;background:#03101c;border:1px solid #24618c;border-radius:10px;color:#67e5ff;font:700 15px Consolas,monospace;word-break:break-all}}
+a{{color:#67c8ff}}.ok{{color:#48d99a}}.warn{{color:#ffd27a}}
+@media(max-width:650px){{.grid{{grid-template-columns:1fr}}}}
+</style>
+</head>
+<body><main>{body}</main></body>
+</html>"""
+
+
 def _accepted_documents(link: dict[str, Any]) -> list[dict[str, Any]]:
     value = link.get("accepted_documents") or []
     if isinstance(value, str):
@@ -983,32 +1052,27 @@ def reception_license_status(
     return _public_status(_link_by_reception_id(rid))
 
 
-@router.post("/multiguard/licenses/receptions/{reception_id}/generate")
-def generate_reception_license(
-    reception_id: str,
-    body: GenerateLicenseRequest,
-    user: CurrentUser = Depends(require_owner),
-):
-    edition = body.edition.strip().upper()
+def _generate_license_link(
+    reception_id: uuid.UUID,
+    edition: str,
+    months: int,
+) -> tuple[dict[str, Any], str]:
+    edition = edition.strip().upper()
     if edition not in {"STANDARD", "PRO"}:
         raise HTTPException(400, "Edycja musi być STANDARD albo PRO.")
-    if body.months not in {3, 6, 12}:
+    if months not in {3, 6, 12}:
         raise HTTPException(400, "Okres musi wynosić 3, 6 albo 12 miesięcy.")
-    try:
-        rid = uuid.UUID(reception_id)
-    except ValueError as exc:
-        raise HTTPException(400, "Nieprawidłowe ID zlecenia.") from exc
 
     _ensure_schema()
-    reception = _reception(rid)
-    existing = _link_by_reception_id(rid)
+    reception = _reception(reception_id)
+    existing = _link_by_reception_id(reception_id)
     if existing:
         raise HTTPException(409, "To zlecenie ma już licencję Multi-Guard.")
 
     created = _keygate_create_license(
         reception_number=reception["reception_number"],
         edition=edition,
-        months=body.months,
+        months=months,
     )
     license_key = created["_license_key"]
     plan_code = "multi_guard_pro" if edition == "PRO" else "multi_guard"
@@ -1032,14 +1096,14 @@ def generate_reception_license(
                     """
                 ),
                 {
-                    "reception_id": rid,
+                    "reception_id": reception_id,
                     "reception_number": reception["reception_number"],
                     "service_device_id": reception["device_id"],
                     "license_id": str(created["id"]),
                     "plan_id": created["_plan_id"],
                     "license_key_hash": _hash(license_key),
                     "plan_code": plan_code,
-                    "months": body.months,
+                    "months": months,
                 },
             ).mappings().one()
             link = _normalize_link(dict(row))
@@ -1050,6 +1114,92 @@ def generate_reception_license(
             f"w Multi-Servis. Nie generuj drugiej licencji: {exc}",
         ) from exc
 
+    return link, license_key
+
+
+@router.get("/multiguard/panel", response_class=HTMLResponse)
+def multiguard_panel(
+    _: None = Depends(_panel_auth),
+):
+    return _panel_html(
+        """
+        <section class="card">
+          <h1>Multi-Servis — Multi-Guard</h1>
+          <p>Generowanie klucza i instalacja w serwisie nie uruchamiają okresu licencji.</p>
+          <form method="post" action="/multiguard/panel/generate">
+            <label>Numer zlecenia Multi-Servis
+              <input name="reception_number" placeholder="np. MS-2026-00123" required>
+            </label>
+            <div class="grid">
+              <label>Wersja
+                <select name="edition">
+                  <option value="STANDARD">Multi-Guard Standard</option>
+                  <option value="PRO">Multi-Guard Pro</option>
+                </select>
+              </label>
+              <label>Okres
+                <select name="months">
+                  <option value="3">3 miesiące</option>
+                  <option value="6">6 miesięcy</option>
+                  <option value="12" selected>12 miesięcy</option>
+                </select>
+              </label>
+              <label>&nbsp;<button type="submit">GENERUJ KLUCZ</button></label>
+            </div>
+          </form>
+        </section>
+        """
+    )
+
+
+@router.post("/multiguard/panel/generate", response_class=HTMLResponse)
+def multiguard_panel_generate(
+    reception_number: str = Form(...),
+    edition: str = Form(...),
+    months: int = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    reception = _reception_by_number(reception_number)
+    link, license_key = _generate_license_link(
+        reception_id=reception["id"],
+        edition=edition,
+        months=months,
+    )
+    product = (
+        "Multi-Guard Pro"
+        if link["plan_code"] == "multi_guard_pro"
+        else "Multi-Guard Standard"
+    )
+    return _panel_html(
+        f"""
+        <section class="card">
+          <h1>Klucz gotowy</h1>
+          <p class="ok">{product} • {link["duration_months"]} mies. • {link["reception_number"]}</p>
+          <code class="key" id="license-key">{license_key}</code>
+          <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('license-key').innerText)">KOPIUJ KLUCZ</button>
+          <p class="warn">Po wpisaniu klucza w Multi-Guard uruchomi się SERVICE_TEST. Czas licencji jeszcze nie biegnie.</p>
+          <a href="/multiguard/panel">← Wróć do generatora</a>
+        </section>
+        """
+    )
+
+
+@router.post("/multiguard/licenses/receptions/{reception_id}/generate")
+def generate_reception_license(
+    reception_id: str,
+    body: GenerateLicenseRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    try:
+        rid = uuid.UUID(reception_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowe ID zlecenia.") from exc
+
+    link, license_key = _generate_license_link(
+        reception_id=rid,
+        edition=body.edition,
+        months=body.months,
+    )
     return {
         **_public_status(link),
         "licenseKey": license_key,
