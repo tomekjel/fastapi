@@ -72,5 +72,11 @@ systemctl is-active --quiet multiservis-api.service
 sleep 2
 
 curl -fsS https://api.multi-servis.pl/health >/dev/null
+curl -fsS https://api.multi-servis.pl/openapi.json \
+  | grep -q '"/multiguard/activation-events"'
+curl -fsS https://api.multi-servis.pl/openapi.json \
+  | grep -q '"/v1/multi-guard/provision"'
+
 echo "OK: moduł licencji Multi-Guard jest wpięty do Multi-Servis API."
+echo "OK: endpoint aktywacji i powiadomień jest widoczny w OpenAPI."
 echo "Backup: $BACKUP_DIR"
