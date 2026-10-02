@@ -6,23 +6,22 @@ if [ "${EUID}" -ne 0 ]; then
   exit 1
 fi
 
-export GH_CONFIG_DIR="${GH_CONFIG_DIR:-/root/.config/gh-tomekjel}"
 REPO="tomekjel/fastapi"
+RAW_BASE="https://raw.githubusercontent.com/$REPO/main/embedded-multiguard"
 APP_ROOT="/opt/multiservis"
 ROUTER_DIR="$APP_ROOT/app/routers"
 ROUTER_FILE="$ROUTER_DIR/multiguard_license.py"
 MAIN_FILE="$APP_ROOT/app/main.py"
 BACKUP_DIR="$APP_ROOT/backups/multiguard-license-$(date +%Y%m%d-%H%M%S)"
 
-command -v gh >/dev/null || { echo "Brak gh." >&2; exit 1; }
-gh auth status >/dev/null
+command -v curl >/dev/null || { echo "Brak curl." >&2; exit 1; }
 
 test -f "$MAIN_FILE" || { echo "Brak $MAIN_FILE" >&2; exit 1; }
 mkdir -p "$ROUTER_DIR" "$BACKUP_DIR"
 cp -a "$MAIN_FILE" "$BACKUP_DIR/main.py"
 [ ! -f "$ROUTER_FILE" ] || cp -a "$ROUTER_FILE" "$BACKUP_DIR/multiguard_license.py"
 
-gh api "repos/$REPO/contents/embedded-multiguard/app/routers/multiguard_license.py?ref=main"   --jq .content | tr -d '\n' | base64 -d > "$ROUTER_FILE"
+curl -fsSL "$RAW_BASE/app/routers/multiguard_license.py" -o "$ROUTER_FILE"
 chmod 0644 "$ROUTER_FILE"
 
 PYTHON="$APP_ROOT/.venv/bin/python"
