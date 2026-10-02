@@ -510,7 +510,7 @@ def _reception(reception_id: uuid.UUID) -> dict[str, Any]:
         row = connection.execute(
             text(
                 """
-                SELECT so.id, so.reception_number, so.device_id
+                SELECT so.id, so.reception_number, so.device_id, so.status
                 FROM service.service_orders so
                 WHERE so.id=:id
                 LIMIT 1
@@ -1065,6 +1065,13 @@ def approve_reception_license(
         rid = uuid.UUID(reception_id)
     except ValueError as exc:
         raise HTTPException(400, "Nieprawidłowe ID zlecenia.") from exc
+    reception = _reception(rid)
+    if str(reception.get("status", "")).upper() != "COMPLETED":
+        raise HTTPException(
+            409,
+            "Multi-Guard może czekać na akceptację dopiero po wydaniu sprzętu.",
+        )
+
     link = _link_by_reception_id(rid)
     if not link:
         raise HTTPException(404, "Zlecenie nie ma licencji Multi-Guard.")
