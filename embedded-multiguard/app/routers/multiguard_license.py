@@ -987,7 +987,7 @@ def reception_license_status(
 def generate_reception_license(
     reception_id: str,
     body: GenerateLicenseRequest,
-    user: CurrentUser = Depends(require_staff),
+    user: CurrentUser = Depends(require_owner),
 ):
     edition = body.edition.strip().upper()
     if edition not in {"STANDARD", "PRO"}:
@@ -1099,7 +1099,7 @@ def approve_reception_license(
 @router.post("/multiguard/licenses/receptions/{reception_id}/reveal")
 def reveal_reception_license(
     reception_id: str,
-    user: CurrentUser = Depends(require_staff),
+    user: CurrentUser = Depends(require_owner),
 ):
     try:
         rid = uuid.UUID(reception_id)
