@@ -440,6 +440,19 @@ CREATE TABLE IF NOT EXISTS guard.installations (
 );
 CREATE INDEX IF NOT EXISTS idx_guard_installations_device
     ON guard.installations(service_device_id, is_current, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS guard.activation_events (
+    id BIGSERIAL PRIMARY KEY,
+    reception_id UUID NOT NULL REFERENCES service.service_orders(id) ON DELETE CASCADE,
+    reception_number TEXT NOT NULL,
+    keygate_license_id TEXT NOT NULL UNIQUE,
+    edition TEXT NOT NULL CHECK (edition IN ('STANDARD','PRO')),
+    duration_months INTEGER NOT NULL CHECK (duration_months IN (3,6,12)),
+    valid_until TIMESTAMPTZ NOT NULL,
+    activated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guard_activation_events_created
+    ON guard.activation_events(id DESC);
 """
 
 
@@ -856,10 +869,105 @@ def acceptance(req: AcceptanceRequest):
         ).mappings().one()
         link = _normalize_link(dict(row))
         _update_installation_mirror(connection, link)
+        connection.execute(
+            text(
+                """
+                INSERT INTO guard.activation_events (
+                    reception_id,
+                    reception_number,
+                    keygate_license_id,
+                    edition,
+                    duration_months,
+                    valid_until,
+                    activated_at
+                )
+                VALUES (
+                    :reception_id,
+                    :reception_number,
+                    :license_id,
+                    :edition,
+                    :duration_months,
+                    :valid_until,
+                    :activated_at
+                )
+                ON CONFLICT (keygate_license_id) DO NOTHING
+                """
+            ),
+            {
+                "reception_id": link["reception_id"],
+                "reception_number": link["reception_number"],
+                "license_id": link["keygate_license_id"],
+                "edition": (
+                    "PRO"
+                    if link["plan_code"] == "multi_guard_pro"
+                    else "STANDARD"
+                ),
+                "duration_months": link["duration_months"],
+                "valid_until": link["valid_until"],
+                "activated_at": link["accepted_at"],
+            },
+        )
 
     return {
         "requestId": req.request_id,
         "signedLicense": _signed_envelope(link),
+    }
+
+
+@router.get("/multiguard/activation-events")
+def activation_events(
+    after_id: int = 0,
+    limit: int = 20,
+    user: CurrentUser = Depends(require_owner),
+):
+    _ensure_schema()
+    after_id = max(0, int(after_id))
+    limit = min(max(1, int(limit)), 100)
+
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    reception_id,
+                    reception_number,
+                    keygate_license_id,
+                    edition,
+                    duration_months,
+                    valid_until,
+                    activated_at
+                FROM guard.activation_events
+                WHERE id > :after_id
+                ORDER BY id ASC
+                LIMIT :limit
+                """
+            ),
+            {
+                "after_id": after_id,
+                "limit": limit,
+            },
+        ).mappings().all()
+
+        latest_id = connection.execute(
+            text("SELECT COALESCE(MAX(id),0) FROM guard.activation_events")
+        ).scalar_one()
+
+    return {
+        "latestId": int(latest_id or 0),
+        "events": [
+            {
+                "id": int(row["id"]),
+                "receptionId": str(row["reception_id"]),
+                "receptionNumber": row["reception_number"],
+                "licenseId": row["keygate_license_id"],
+                "edition": row["edition"],
+                "durationMonths": row["duration_months"],
+                "validUntil": _iso(row["valid_until"]),
+                "activatedAt": _iso(row["activated_at"]),
+            }
+            for row in rows
+        ],
     }
 
 
