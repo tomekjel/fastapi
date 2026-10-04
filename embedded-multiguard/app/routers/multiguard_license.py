@@ -1871,6 +1871,12 @@ def multiguard_panel(
                   <option value="12" selected>12 miesięcy</option>
                 </select>
               </label>
+              <label>Kanał
+                <select name="release_channel">
+                  <option value="STABLE" selected>Stabilna</option>
+                  <option value="PILOT">Beta</option>
+                </select>
+              </label>
               <label>&nbsp;<button type="submit">GENERUJ KLUCZ</button></label>
             </div>
           </form>
@@ -1884,6 +1890,7 @@ def multiguard_panel_generate(
     reception_number: str = Form(...),
     edition: str = Form(...),
     months: int = Form(...),
+    release_channel: str = Form("STABLE"),
     _: None = Depends(_panel_auth),
 ):
     reception = _reception_by_number(reception_number)
@@ -1891,7 +1898,7 @@ def multiguard_panel_generate(
         reception_id=reception["id"],
         edition=edition,
         months=months,
-        release_channel="STABLE",
+        release_channel=release_channel,
     )
     product = (
         "Multi-Guard Pro"
@@ -1902,7 +1909,7 @@ def multiguard_panel_generate(
         f"""
         <section class="card">
           <h1>Klucz gotowy</h1>
-          <p class="ok">{product} • {link["duration_months"]} mies. • {link["reception_number"]}</p>
+          <p class="ok">{product} • {link["duration_months"]} mies. • {"BETA" if link.get("release_channel") == "PILOT" else "STABILNA"} • {link["reception_number"]}</p>
           <code class="key" id="license-key">{license_key}</code>
           <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('license-key').innerText)">KOPIUJ KLUCZ</button>
           <p class="warn">Po wpisaniu klucza w Multi-Guard uruchomi się SERVICE_TEST. Czas licencji jeszcze nie biegnie.</p>
