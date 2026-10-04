@@ -800,9 +800,17 @@ def notifications(
                 SELECT
                     n.id,n.service_device_id,n.installation_id,n.kind,n.severity,
                     n.title,n.message,n.created_at,n.seen_at,n.resolved_at,n.payload,
-                    d.device_type,d.manufacturer,d.model,d.serial_number
+                    d.device_type,d.manufacturer,d.model,d.serial_number,
+                    ll.reception_id,ll.reception_number
                 FROM guard.notifications n
                 LEFT JOIN core.devices d ON d.id=n.service_device_id
+                LEFT JOIN LATERAL (
+                    SELECT reception_id,reception_number
+                    FROM guard.license_links
+                    WHERE service_device_id=n.service_device_id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) ll ON TRUE
                 {where}
                 ORDER BY n.created_at DESC
                 LIMIT :limit
@@ -906,9 +914,17 @@ def support_requests(
                     sr.priority,sr.subject,sr.description,sr.status,
                     sr.diagnostics_included,sr.created_at,sr.received_at,
                     sr.seen_at,sr.started_at,sr.resolved_at,sr.resolution_note,
-                    d.device_type,d.manufacturer,d.model,d.serial_number
+                    d.device_type,d.manufacturer,d.model,d.serial_number,
+                    ll.reception_id,ll.reception_number
                 FROM guard.support_requests sr
                 LEFT JOIN core.devices d ON d.id=sr.service_device_id
+                LEFT JOIN LATERAL (
+                    SELECT reception_id,reception_number
+                    FROM guard.license_links
+                    WHERE service_device_id=sr.service_device_id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) ll ON TRUE
                 {where}
                 ORDER BY
                     CASE sr.status
@@ -957,9 +973,17 @@ def support_request_detail(
                     sr.priority,sr.subject,sr.description,sr.status,
                     sr.diagnostics_included,sr.created_at,sr.received_at,
                     sr.seen_at,sr.started_at,sr.resolved_at,sr.resolution_note,
-                    d.device_type,d.manufacturer,d.model,d.serial_number
+                    d.device_type,d.manufacturer,d.model,d.serial_number,
+                    ll.reception_id,ll.reception_number
                 FROM guard.support_requests sr
                 LEFT JOIN core.devices d ON d.id=sr.service_device_id
+                LEFT JOIN LATERAL (
+                    SELECT reception_id,reception_number
+                    FROM guard.license_links
+                    WHERE service_device_id=sr.service_device_id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) ll ON TRUE
                 WHERE sr.id=:id
                 LIMIT 1
                 """
