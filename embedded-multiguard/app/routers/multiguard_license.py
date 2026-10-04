@@ -112,6 +112,9 @@ class AcceptanceRequest(RefreshRequest):
 class GenerateLicenseRequest(BaseModel):
     edition: str
     months: int
+    release_channel: str = Field(default="STABLE", alias="releaseChannel")
+
+    model_config = {"populate_by_name": True}
 
 
 def _utcnow() -> datetime:
@@ -365,6 +368,7 @@ def _signed_envelope(link: dict[str, Any]) -> dict[str, str]:
         "installationId": str(link["installation_id"] or ""),
         "deviceId": link.get("device_id") or "",
         "planCode": link["plan_code"],
+        "releaseChannel": link.get("release_channel") or "STABLE",
         "lifecycle": link["lifecycle"],
         "validFrom": _iso(link.get("valid_from")),
         "validUntil": _iso(link.get("valid_until")),
@@ -398,6 +402,8 @@ CREATE TABLE IF NOT EXISTS guard.license_links (
     license_key_hash TEXT NOT NULL UNIQUE,
     plan_code TEXT NOT NULL CHECK (plan_code IN ('multi_guard','multi_guard_pro')),
     duration_months INTEGER NOT NULL CHECK (duration_months IN (3,6,12)),
+    release_channel TEXT NOT NULL DEFAULT 'STABLE'
+        CHECK (release_channel IN ('STABLE','PILOT')),
     lifecycle TEXT NOT NULL DEFAULT 'UNASSIGNED'
         CHECK (lifecycle IN ('UNASSIGNED','SERVICE_TEST','PENDING_ACCEPTANCE','ACTIVE','EXPIRED','REVOKED')),
     installation_id UUID UNIQUE,
@@ -434,6 +440,8 @@ CREATE TABLE IF NOT EXISTS guard.installations (
     valid_until TIMESTAMPTZ,
     accepted_at TIMESTAMPTZ,
     app_version TEXT,
+    release_channel TEXT NOT NULL DEFAULT 'STABLE'
+        CHECK (release_channel IN ('STABLE','PILOT')),
     health_level TEXT NOT NULL DEFAULT 'GREEN'
         CHECK (health_level IN ('GREEN','YELLOW','ORANGE','RED')),
     last_seen_at TIMESTAMPTZ,
@@ -456,6 +464,11 @@ CREATE TABLE IF NOT EXISTS guard.activation_events (
 );
 CREATE INDEX IF NOT EXISTS idx_guard_activation_events_created
     ON guard.activation_events(id DESC);
+
+ALTER TABLE guard.license_links
+    ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
+ALTER TABLE guard.installations
+    ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
 """
 
 
@@ -695,12 +708,12 @@ def _update_installation_mirror(connection, link: dict[str, Any]) -> None:
             INSERT INTO guard.installations (
                 service_device_id, installation_external_id, device_id_hash,
                 credential_sha256, license_id, plan_code, lifecycle,
-                valid_until, accepted_at, app_version, is_current, updated_at
+                valid_until, accepted_at, app_version, release_channel, is_current, updated_at
             )
             VALUES (
                 :service_device_id, :installation_id, :device_id,
                 :credential_sha256, :license_id, :plan_code, :lifecycle,
-                :valid_until, :accepted_at, :app_version, TRUE, now()
+                :valid_until, :accepted_at, :app_version, :release_channel, TRUE, now()
             )
             ON CONFLICT (installation_external_id) DO UPDATE SET
                 service_device_id=EXCLUDED.service_device_id,
@@ -712,6 +725,7 @@ def _update_installation_mirror(connection, link: dict[str, Any]) -> None:
                 valid_until=EXCLUDED.valid_until,
                 accepted_at=EXCLUDED.accepted_at,
                 app_version=EXCLUDED.app_version,
+                release_channel=EXCLUDED.release_channel,
                 is_current=TRUE,
                 updated_at=now()
             """
@@ -727,6 +741,7 @@ def _update_installation_mirror(connection, link: dict[str, Any]) -> None:
             "valid_until": link.get("valid_until"),
             "accepted_at": link.get("accepted_at"),
             "app_version": link.get("app_version") or "",
+            "release_channel": link.get("release_channel") or "STABLE",
         },
     )
 
@@ -744,6 +759,7 @@ def _public_status(link: dict[str, Any] | None) -> dict[str, Any]:
         "edition": "PRO" if link["plan_code"] == "multi_guard_pro" else "STANDARD",
         "planCode": link["plan_code"],
         "durationMonths": link["duration_months"],
+        "releaseChannel": link.get("release_channel") or "STABLE",
         "lifecycle": link["lifecycle"],
         "appVersion": link.get("app_version") or "",
         "validFrom": _iso(link.get("valid_from")),
@@ -1056,12 +1072,16 @@ def _generate_license_link(
     reception_id: uuid.UUID,
     edition: str,
     months: int,
+    release_channel: str = "STABLE",
 ) -> tuple[dict[str, Any], str]:
     edition = edition.strip().upper()
+    release_channel = release_channel.strip().upper()
     if edition not in {"STANDARD", "PRO"}:
         raise HTTPException(400, "Edycja musi być STANDARD albo PRO.")
     if months not in {3, 6, 12}:
         raise HTTPException(400, "Okres musi wynosić 3, 6 albo 12 miesięcy.")
+    if release_channel not in {"STABLE", "PILOT"}:
+        raise HTTPException(400, "Kanał aktualizacji musi być STABLE albo PILOT.")
 
     _ensure_schema()
     reception = _reception(reception_id)
@@ -1085,12 +1105,12 @@ def _generate_license_link(
                     INSERT INTO guard.license_links (
                         reception_id,reception_number,service_device_id,
                         keygate_license_id,keygate_plan_id,license_key_hash,
-                        plan_code,duration_months,lifecycle
+                        plan_code,duration_months,release_channel,lifecycle
                     )
                     VALUES (
                         :reception_id,:reception_number,:service_device_id,
                         :license_id,:plan_id,:license_key_hash,
-                        :plan_code,:months,'UNASSIGNED'
+                        :plan_code,:months,:release_channel,'UNASSIGNED'
                     )
                     RETURNING *
                     """
@@ -1104,6 +1124,7 @@ def _generate_license_link(
                     "license_key_hash": _hash(license_key),
                     "plan_code": plan_code,
                     "months": months,
+                    "release_channel": release_channel,
                 },
             ).mappings().one()
             link = _normalize_link(dict(row))
@@ -1164,6 +1185,7 @@ def multiguard_panel_generate(
         reception_id=reception["id"],
         edition=edition,
         months=months,
+        release_channel="STABLE",
     )
     product = (
         "Multi-Guard Pro"
@@ -1199,6 +1221,7 @@ def generate_reception_license(
         reception_id=rid,
         edition=body.edition,
         months=body.months,
+        release_channel=body.release_channel,
     )
     return {
         **_public_status(link),
