@@ -32,6 +32,8 @@ jobs:
           bash -n embedded-multiguard/install.sh
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_license.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_runtime.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_meshcentral.py
 
       - name: Configure SSH
         shell: bash
@@ -98,6 +100,14 @@ jobs:
               '/multiguard/agent/heartbeat',
               '/multiguard/agent/event',
               '/multiguard/events/{event_id}',
+              '/multiguard/agent/remote/poll',
+              '/multiguard/agent/remote/decision',
+              '/multiguard/agent/remote/end',
+              '/multiguard/remote-sessions',
+              '/multiguard/remote-sessions/{session_id}',
+              '/multiguard/remote-sessions/{session_id}/connect',
+              '/multiguard/remote-sessions/{session_id}/end',
+              '/multiguard/remote/mesh-bind',
           ]
           missing = [path for path in required if path not in paths]
           if missing:

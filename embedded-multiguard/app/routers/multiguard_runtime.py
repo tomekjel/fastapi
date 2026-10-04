@@ -576,6 +576,47 @@ def agent_event(body: EventBody):
                 },
             )
 
+        if body.eventType in {"CLIENT_LOG_BUNDLE", "CLIENT_DIAGNOSTIC_REPORT"}:
+            report_title = str(
+                payload.get("title")
+                or (
+                    "Pakiet logów Multi-Guard"
+                    if body.eventType == "CLIENT_LOG_BUNDLE"
+                    else "Raport diagnostyczny Multi-Guard"
+                )
+            ).strip()[:180]
+            report_note = str(payload.get("note") or payload.get("summary") or "").strip()[:600]
+            message = report_title if not report_note else f"{report_title} — {report_note}"
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO guard.notifications(
+                        service_device_id,installation_id,kind,severity,
+                        title,message,dedup_key,payload
+                    )
+                    VALUES(
+                        :device_id,:installation_id,:kind,:severity,
+                        :title,:message,:dedup_key,CAST(:payload AS jsonb)
+                    )
+                    ON CONFLICT DO NOTHING
+                    """
+                ),
+                {
+                    "device_id": row["service_device_id"],
+                    "installation_id": row["id"],
+                    "kind": body.eventType,
+                    "severity": severity,
+                    "title": (
+                        "Klient przesłał pakiet logów Multi-Guard"
+                        if body.eventType == "CLIENT_LOG_BUNDLE"
+                        else "Klient przesłał raport diagnostyczny Multi-Guard"
+                    ),
+                    "message": message,
+                    "dedup_key": f"client-report:{body.eventId}",
+                    "payload": _json({"eventId": str(body.eventId)}),
+                },
+            )
+
         if body.eventType in {"SUPPORT_REQUEST", "PRO_SUPPORT_REQUEST"}:
             priority = "PRIORITY" if str(row["plan_code"]).upper() == "PRO" else "NORMAL"
             try:
@@ -919,13 +960,13 @@ def support_requests(
                     ON ll.installation_id=gi.installation_external_id
                 {where}
                 ORDER BY
+                    CASE sr.priority WHEN 'PRIORITY' THEN 0 ELSE 1 END,
                     CASE sr.status
                         WHEN 'NEW' THEN 0
                         WHEN 'SEEN' THEN 1
                         WHEN 'IN_PROGRESS' THEN 2
                         ELSE 3
                     END,
-                    CASE sr.priority WHEN 'PRIORITY' THEN 0 ELSE 1 END,
                     sr.created_at DESC
                 LIMIT :limit
                 """
