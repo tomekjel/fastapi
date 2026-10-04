@@ -1,0 +1,38 @@
+name: Inspect live license schema
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/inspect-live-license-schema.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect live license schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error https://api.multi-servis.pl/openapi.json -o /tmp/openapi.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/openapi.json'))
+          p=d['paths']['/multiguard/licenses/receptions/{reception_id}/generate']['post']
+          print(json.dumps(p, ensure_ascii=False))
+          refs=[]
+          def walk(x):
+              if isinstance(x,dict):
+                  if '$ref' in x: refs.append(x['$ref'])
+                  for v in x.values(): walk(v)
+              elif isinstance(x,list):
+                  for v in x: walk(v)
+          walk(p)
+          for ref in refs:
+              name=ref.rsplit('/',1)[-1]
+              sch=d.get('components',{}).get('schemas',{}).get(name)
+              print('SCHEMA',name,json.dumps(sch,ensure_ascii=False))
+          PY
