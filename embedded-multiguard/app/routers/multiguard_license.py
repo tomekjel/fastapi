@@ -117,6 +117,12 @@ class GenerateLicenseRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ReleaseChannelRequest(BaseModel):
+    release_channel: str = Field(alias="releaseChannel")
+
+    model_config = {"populate_by_name": True}
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1274,6 +1280,47 @@ def approve_reception_license(
         _update_installation_mirror(connection, link)
 
     return {"status": "PENDING_ACCEPTANCE", **_public_status(link)}
+
+
+@router.post("/multiguard/licenses/receptions/{reception_id}/release-channel")
+def set_reception_release_channel(
+    reception_id: str,
+    body: ReleaseChannelRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    try:
+        rid = uuid.UUID(reception_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowe ID zlecenia.") from exc
+
+    channel = body.release_channel.strip().upper()
+    if channel not in {"STABLE", "PILOT"}:
+        raise HTTPException(400, "Kanał aktualizacji musi być STABLE albo PILOT.")
+
+    link = _link_by_reception_id(rid)
+    if not link:
+        raise HTTPException(404, "Zlecenie nie ma licencji Multi-Guard.")
+
+    with engine.begin() as connection:
+        row = connection.execute(
+            text(
+                """
+                UPDATE guard.license_links
+                SET release_channel=:release_channel,
+                    updated_at=now()
+                WHERE id=:id
+                RETURNING *
+                """
+            ),
+            {
+                "release_channel": channel,
+                "id": link["id"],
+            },
+        ).mappings().one()
+        link = _normalize_link(dict(row))
+        _update_installation_mirror(connection, link)
+
+    return _public_status(link)
 
 
 @router.post("/multiguard/licenses/receptions/{reception_id}/reveal")
