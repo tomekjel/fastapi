@@ -937,6 +937,74 @@ def support_requests(
     ]
 
 
+@router.get("/support-requests/{request_id}")
+def support_request_detail(
+    request_id: str,
+    user: CurrentUser = Depends(require_owner),
+):
+    _ensure_schema()
+    try:
+        request_uuid = uuid.UUID(request_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowe ID zgłoszenia.") from exc
+
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT
+                    sr.id,sr.local_request_id,sr.service_device_id,sr.installation_id,
+                    sr.priority,sr.subject,sr.description,sr.status,
+                    sr.diagnostics_included,sr.created_at,sr.received_at,
+                    sr.seen_at,sr.started_at,sr.resolved_at,sr.resolution_note,
+                    d.device_type,d.manufacturer,d.model,d.serial_number
+                FROM guard.support_requests sr
+                LEFT JOIN core.devices d ON d.id=sr.service_device_id
+                WHERE sr.id=:id
+                LIMIT 1
+                """
+            ),
+            {"id": request_uuid},
+        ).mappings().first()
+
+        if not row:
+            raise HTTPException(404, "Nie znaleziono zgłoszenia.")
+
+        diagnostic = connection.execute(
+            text(
+                """
+                SELECT
+                    schema_version,captured_at,payload,created_at,expires_at
+                FROM guard.diagnostic_packages
+                WHERE support_request_id=:id
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"id": request_uuid},
+        ).mappings().first()
+
+    response = {
+        **dict(row),
+        "id": str(row["id"]),
+        "local_request_id": str(row["local_request_id"]),
+        "service_device_id": str(row["service_device_id"]),
+        "installation_id": str(row["installation_id"]),
+        "diagnostic": None,
+    }
+
+    if diagnostic:
+        response["diagnostic"] = {
+            "schemaVersion": diagnostic["schema_version"],
+            "capturedAt": diagnostic["captured_at"],
+            "payload": diagnostic["payload"],
+            "createdAt": diagnostic["created_at"],
+            "expiresAt": diagnostic["expires_at"],
+        }
+
+    return response
+
+
 @router.post("/support-requests/{request_id}/status")
 def support_request_status(
     request_id: str,
