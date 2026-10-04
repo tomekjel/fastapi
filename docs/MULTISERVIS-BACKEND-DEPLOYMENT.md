@@ -84,6 +84,7 @@ Klient nigdy nie pobiera pliku z prywatnego repo GitHub. Dostaje URL
 `https://api.multi-servis.pl/multiguard/update-assets/...`, a podpis Tauri jest
 weryfikowany po stronie aplikacji.
 
-Dla już zainstalowanej wersji 0.3.29 backend ma ograniczony most zgodności do
-kanału TEST. Od 0.3.30 klient wysyła nagłówek `X-Multi-Guard-Channel`, więc
-kolejne wersje używają normalnego mechanizmu kanałów.
+Instalacja, której backend jeszcze nie zna, jest po stronie serwera przypisana
+wyłącznie do kanału TEST. Klient nie może sam wybrać PILOT/STABLE. Gdy
+provisioning utworzy wpis w `guard.installations`, zapisany tam
+`release_channel` staje się autorytatywny dla wszystkich kolejnych aktualizacji.
