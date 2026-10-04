@@ -38,6 +38,11 @@ jobs:
           grep -Fq '@router.post("/agent/heartbeat")' embedded-multiguard/app/routers/multiguard_runtime.py
           grep -Fq '@router.post("/agent/event")' embedded-multiguard/app/routers/multiguard_runtime.py
           grep -Fq '@router.get("/events/{event_id}")' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.get("/devices")' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.get("/telemetry")' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.get("/panel/dashboard"' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.get("/panel/licenses"' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.get("/panel/telemetry"' embedded-multiguard/app/routers/multiguard_runtime.py
           grep -Fq '@router.post("/remote-sessions")' embedded-multiguard/app/routers/multiguard_remote.py
           grep -Fq '@router.post("/agent/remote/poll")' embedded-multiguard/app/routers/multiguard_remote.py
           grep -Fq '@router.post("/agent/remote/decision")' embedded-multiguard/app/routers/multiguard_remote.py

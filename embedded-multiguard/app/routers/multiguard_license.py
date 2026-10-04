@@ -593,23 +593,56 @@ def _panel_html(body: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Multi-Servis — licencje Multi-Guard</title>
+<title>Multi-Servis — Multi-Guard</title>
 <style>
 :root{{font-family:Segoe UI,Arial,sans-serif;color:#eef7ff;background:#06101f}}
-*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:#06101f}}
-main{{width:min(760px,94vw);margin:48px auto}}
-.card{{background:#0a192b;border:1px solid #23425f;border-radius:18px;padding:24px;box-shadow:0 20px 60px #0007}}
-h1,h2{{margin:0 0 8px}}p{{color:#9fb4c8;line-height:1.5}}
+*{{box-sizing:border-box}}
+body{{margin:0;min-height:100vh;background:#06101f}}
+main{{width:min(1480px,96vw);margin:28px auto 64px}}
+nav{{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px}}
+nav a,.button-link{{display:inline-block;padding:10px 14px;border:1px solid #2d5677;border-radius:9px;background:#0a192b;color:#d8efff;text-decoration:none;font-weight:700}}
+nav a:hover,.button-link:hover{{background:#12304d}}
+.card{{background:#0a192b;border:1px solid #23425f;border-radius:18px;padding:22px;margin-bottom:16px;box-shadow:0 20px 60px #0007}}
+h1,h2{{margin:0 0 8px}}p{{color:#9fb4c8;line-height:1.5;margin:6px 0 14px}}
 form{{display:grid;gap:14px}}label{{display:grid;gap:6px;font-size:13px;color:#c8d9e8}}
 input,select{{width:100%;padding:12px;border:1px solid #2d5677;border-radius:9px;background:#07182a;color:#eef7ff}}
 button{{border:0;border-radius:9px;padding:12px 16px;background:#139ce7;color:#fff;font-weight:700;cursor:pointer}}
 .grid{{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px}}
+.metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-top:16px}}
+.metric{{padding:14px;border:1px solid #23425f;border-radius:12px;background:#07182a}}
+.metric b{{display:block;color:#9fb4c8;font-size:12px;margin-bottom:5px}}
+.metric strong{{font-size:26px}}
+.section-head{{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}}
+.table-wrap{{overflow:auto;border:1px solid #1d3b57;border-radius:12px}}
+table{{width:100%;border-collapse:collapse;min-width:900px}}
+th,td{{padding:11px 12px;text-align:left;border-bottom:1px solid #17334d;vertical-align:top}}
+th{{position:sticky;top:0;background:#0d2138;color:#b8d2e8;font-size:12px;text-transform:uppercase;letter-spacing:.04em}}
+tr:hover td{{background:#0c1f34}}
+.badge{{display:inline-block;padding:3px 7px;border-radius:999px;background:#163451;border:1px solid #2d5677;font-size:12px;font-weight:700}}
+.good{{color:#61e7a2;border-color:#267f5b}}.warn{{color:#ffd27a;border-color:#84641e}}.bad{{color:#ffad72;border-color:#9a4f24}}.critical{{color:#ff7c7c;border-color:#a63131}}
+.muted{{color:#7892a9;font-size:12px}}
+.mono{{font-family:Consolas,ui-monospace,monospace}}
+.numbers{{white-space:nowrap}}
+.detail-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:14px}}
+.detail-grid>div{{padding:12px;border:1px solid #23425f;border-radius:10px;background:#07182a}}
+.detail-grid b,.detail-grid span{{display:block}}.detail-grid span{{margin-top:5px;color:#cce0ef}}
 .key{{display:block;padding:15px;margin:14px 0;background:#03101c;border:1px solid #24618c;border-radius:10px;color:#67e5ff;font:700 15px Consolas,monospace;word-break:break-all}}
-a{{color:#67c8ff}}.ok{{color:#48d99a}}.warn{{color:#ffd27a}}
-@media(max-width:650px){{.grid{{grid-template-columns:1fr}}}}
+a{{color:#67c8ff}}.ok{{color:#48d99a}}
+@media(max-width:720px){{main{{width:96vw;margin-top:14px}}.grid{{grid-template-columns:1fr}}.card{{padding:15px}}}}
 </style>
 </head>
-<body><main>{body}</main></body>
+<body>
+<main>
+<nav>
+  <a href="/multiguard/panel/dashboard">PULPIT</a>
+  <a href="/multiguard/panel/dashboard#devices">URZĄDZENIA</a>
+  <a href="/multiguard/panel/telemetry">TELEMETRIA / ROZWÓJ</a>
+  <a href="/multiguard/panel/licenses">LICENCJE</a>
+  <a href="/multiguard/panel">NOWA LICENCJA</a>
+</nav>
+{body}
+</main>
+</body>
 </html>"""
 
 

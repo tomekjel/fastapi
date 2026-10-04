@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html as html_lib
 import json
 import threading
 import uuid
@@ -9,12 +10,17 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.database import engine
 from app.security import CurrentUser, require_owner
-from app.routers.multiguard_license import _ensure_schema as _ensure_license_schema
+from app.routers.multiguard_license import (
+    _ensure_schema as _ensure_license_schema,
+    _panel_auth,
+    _panel_html,
+)
 
 
 router = APIRouter(prefix="/multiguard", tags=["multi-guard-runtime"])
@@ -783,6 +789,7 @@ def overview(user: CurrentUser = Depends(require_owner)):
                 """
                 SELECT
                     count(*) FILTER (WHERE lifecycle='ACTIVE') active,
+                    count(*) FILTER (WHERE lifecycle='ACTIVE' AND plan_code='STANDARD') standard,
                     count(*) FILTER (WHERE lifecycle='ACTIVE' AND plan_code='PRO') pro,
                     count(*) FILTER (WHERE health_level IN ('ORANGE','RED')) needs_attention,
                     count(*) FILTER (WHERE health_level='RED') critical,
@@ -822,6 +829,700 @@ def overview(user: CurrentUser = Depends(require_owner)):
         "unreadNotifications": int(unread or 0),
         "openSupportRequests": int(open_support or 0),
     }
+
+
+
+def _short_installation_id(value: Any) -> str:
+    raw = str(value or "").replace("-", "").upper()
+    return "MG-" + (raw[:8] if raw else "--------")
+
+
+def _panel_h(value: Any) -> str:
+    if value is None:
+        return ""
+    return html_lib.escape(str(value))
+
+
+def _panel_dt(value: Any) -> str:
+    if not value:
+        return "—"
+    try:
+        return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return _panel_h(value)
+
+
+def _device_label(row: Any) -> str:
+    parts = [
+        str(row.get("manufacturer") or "").strip(),
+        str(row.get("model") or "").strip(),
+    ]
+    label = " ".join(part for part in parts if part).strip()
+    if not label:
+        label = str(row.get("hostname") or row.get("device_type") or "Komputer")
+    return label
+
+
+def _fetch_device_rows(limit: int = 250):
+    _ensure_schema()
+    limit = min(max(int(limit), 1), 500)
+    with engine.connect() as connection:
+        return connection.execute(
+            text(
+                """
+                SELECT
+                    gi.id AS installation_id,
+                    gi.installation_external_id,
+                    gi.service_device_id,
+                    gi.plan_code,
+                    gi.lifecycle,
+                    gi.valid_until,
+                    gi.last_seen_at,
+                    gi.health_level,
+                    gi.app_version,
+                    gi.release_channel,
+                    d.device_type,
+                    d.manufacturer,
+                    d.model,
+                    d.serial_number,
+                    d.hostname,
+                    ll.reception_id,
+                    ll.reception_number,
+                    COALESCE(ev.warning_30d,0) AS warning_30d,
+                    COALESCE(ev.important_30d,0) AS important_30d,
+                    COALESCE(ev.critical_30d,0) AS critical_30d,
+                    COALESCE(ev.error_30d,0) AS error_30d,
+                    COALESCE(sr.open_support,0) AS open_support,
+                    COALESCE(nn.unread_notifications,0) AS unread_notifications
+                FROM guard.installations gi
+                LEFT JOIN core.devices d
+                    ON d.id=gi.service_device_id
+                LEFT JOIN guard.license_links ll
+                    ON ll.installation_id=gi.installation_external_id
+                LEFT JOIN LATERAL (
+                    SELECT
+                        count(*) FILTER (
+                            WHERE e.occurred_at >= now()-interval '30 days'
+                              AND e.severity='WARNING'
+                        ) AS warning_30d,
+                        count(*) FILTER (
+                            WHERE e.occurred_at >= now()-interval '30 days'
+                              AND e.severity='IMPORTANT'
+                        ) AS important_30d,
+                        count(*) FILTER (
+                            WHERE e.occurred_at >= now()-interval '30 days'
+                              AND e.severity='CRITICAL'
+                        ) AS critical_30d,
+                        count(*) FILTER (
+                            WHERE e.occurred_at >= now()-interval '30 days'
+                              AND (
+                                  e.event_type LIKE 'TELEMETRY_%'
+                                  OR e.event_type IN (
+                                      'APP_ERROR',
+                                      'MODULE_ERROR',
+                                      'SENSOR_ERROR',
+                                      'UNKNOWN_ANOMALY',
+                                      'PROVIDER_FAILURE',
+                                      'READ_FAILURE'
+                                  )
+                              )
+                        ) AS error_30d
+                    FROM guard.events e
+                    WHERE e.installation_id=gi.id
+                ) ev ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT count(*) AS open_support
+                    FROM guard.support_requests s
+                    WHERE s.installation_id=gi.id
+                      AND s.status NOT IN ('RESOLVED','CANCELLED')
+                ) sr ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT count(*) AS unread_notifications
+                    FROM guard.notifications n
+                    WHERE n.installation_id=gi.id
+                      AND n.resolved_at IS NULL
+                      AND n.seen_at IS NULL
+                ) nn ON TRUE
+                WHERE gi.is_current=TRUE
+                ORDER BY
+                    CASE gi.health_level
+                        WHEN 'RED' THEN 0
+                        WHEN 'ORANGE' THEN 1
+                        WHEN 'YELLOW' THEN 2
+                        ELSE 3
+                    END,
+                    COALESCE(ev.critical_30d,0) DESC,
+                    COALESCE(ev.important_30d,0) DESC,
+                    COALESCE(ev.warning_30d,0) DESC,
+                    gi.last_seen_at DESC NULLS LAST
+                LIMIT :limit
+                """
+            ),
+            {"limit": limit},
+        ).mappings().all()
+
+
+def _fetch_telemetry_rows(days: int = 90, limit: int = 200):
+    _ensure_schema()
+    days = min(max(int(days), 1), 3650)
+    limit = min(max(int(limit), 1), 500)
+    with engine.connect() as connection:
+        return connection.execute(
+            text(
+                """
+                WITH telemetry AS (
+                    SELECT
+                        e.installation_id,
+                        e.event_type,
+                        e.severity,
+                        e.occurred_at,
+                        e.payload,
+                        COALESCE(
+                            NULLIF(e.payload->>'fingerprint',''),
+                            e.event_type || ':' ||
+                            COALESCE(NULLIF(e.payload->>'component',''),'unknown') || ':' ||
+                            COALESCE(NULLIF(e.payload->>'code',''),'unknown')
+                        ) AS fingerprint,
+                        COALESCE(
+                            NULLIF(e.payload->>'appVersion',''),
+                            NULLIF(gi.app_version,''),
+                            'unknown'
+                        ) AS app_version
+                    FROM guard.events e
+                    JOIN guard.installations gi
+                      ON gi.id=e.installation_id
+                    WHERE e.occurred_at >= now() - (:days * interval '1 day')
+                      AND (
+                          e.event_type LIKE 'TELEMETRY_%'
+                          OR e.event_type IN (
+                              'APP_ERROR',
+                              'MODULE_ERROR',
+                              'SENSOR_ERROR',
+                              'UNKNOWN_ANOMALY',
+                              'PROVIDER_FAILURE',
+                              'READ_FAILURE'
+                          )
+                      )
+                )
+                SELECT
+                    fingerprint,
+                    max(event_type) AS event_type,
+                    max(COALESCE(payload->>'component','')) AS component,
+                    max(COALESCE(payload->>'code','')) AS code,
+                    count(*) AS occurrences,
+                    count(DISTINCT installation_id) AS affected_devices,
+                    min(occurred_at) AS first_seen,
+                    max(occurred_at) AS last_seen,
+                    array_agg(DISTINCT app_version ORDER BY app_version) AS app_versions,
+                    count(*) FILTER (WHERE severity='CRITICAL') AS critical_count,
+                    count(*) FILTER (WHERE severity='IMPORTANT') AS important_count,
+                    count(*) FILTER (WHERE severity='WARNING') AS warning_count
+                FROM telemetry
+                GROUP BY fingerprint
+                ORDER BY
+                    critical_count DESC,
+                    affected_devices DESC,
+                    occurrences DESC,
+                    last_seen DESC
+                LIMIT :limit
+                """
+            ),
+            {"days": days, "limit": limit},
+        ).mappings().all()
+
+
+@router.get("/devices")
+def multi_guard_devices(
+    limit: int = 250,
+    user: CurrentUser = Depends(require_owner),
+):
+    rows = _fetch_device_rows(limit)
+    return [
+        {
+            **dict(row),
+            "installation_id": str(row["installation_id"]),
+            "installation_external_id": str(row["installation_external_id"]),
+            "service_device_id": str(row["service_device_id"]),
+            "short_id": _short_installation_id(row["installation_external_id"]),
+            "reception_id": (
+                str(row["reception_id"]) if row["reception_id"] else None
+            ),
+        }
+        for row in rows
+    ]
+
+
+@router.get("/devices/{installation_id}/events")
+def multi_guard_device_events(
+    installation_id: str,
+    limit: int = 200,
+    user: CurrentUser = Depends(require_owner),
+):
+    _ensure_schema()
+    try:
+        iid = uuid.UUID(installation_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowe ID instalacji.") from exc
+
+    limit = min(max(int(limit), 1), 500)
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT
+                    event_id,event_type,severity,occurred_at,received_at,payload
+                FROM guard.events
+                WHERE installation_id=:installation_id
+                ORDER BY occurred_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"installation_id": iid, "limit": limit},
+        ).mappings().all()
+
+    return [
+        {
+            **dict(row),
+            "event_id": str(row["event_id"]),
+        }
+        for row in rows
+    ]
+
+
+@router.get("/telemetry")
+def multi_guard_telemetry(
+    days: int = 90,
+    limit: int = 200,
+    user: CurrentUser = Depends(require_owner),
+):
+    rows = _fetch_telemetry_rows(days, limit)
+    return [dict(row) for row in rows]
+
+
+@router.get("/panel/dashboard", response_class=HTMLResponse)
+def multi_guard_panel_dashboard(
+    _: None = Depends(_panel_auth),
+):
+    _ensure_schema()
+    with engine.connect() as connection:
+        counts = connection.execute(
+            text(
+                """
+                SELECT
+                    count(*) FILTER (WHERE lifecycle='ACTIVE') active,
+                    count(*) FILTER (
+                        WHERE lifecycle='ACTIVE' AND plan_code='STANDARD'
+                    ) standard,
+                    count(*) FILTER (
+                        WHERE lifecycle='ACTIVE' AND plan_code='PRO'
+                    ) pro,
+                    count(*) FILTER (
+                        WHERE health_level IN ('ORANGE','RED')
+                    ) needs_attention,
+                    count(*) FILTER (WHERE health_level='RED') critical,
+                    count(*) FILTER (
+                        WHERE lifecycle='ACTIVE'
+                          AND valid_until BETWEEN now() AND now()+interval '30 days'
+                    ) expiring_30d,
+                    count(*) FILTER (
+                        WHERE last_seen_at < now()-interval '30 days'
+                    ) no_contact_30d
+                FROM guard.installations
+                WHERE is_current=TRUE
+                """
+            )
+        ).mappings().one()
+
+        unread = connection.execute(
+            text(
+                """
+                SELECT count(*)
+                FROM guard.notifications
+                WHERE resolved_at IS NULL AND seen_at IS NULL
+                """
+            )
+        ).scalar_one()
+
+        open_support = connection.execute(
+            text(
+                """
+                SELECT count(*)
+                FROM guard.support_requests
+                WHERE status NOT IN ('RESOLVED','CANCELLED')
+                """
+            )
+        ).scalar_one()
+
+    devices = _fetch_device_rows(250)
+
+    metrics = [
+        ("Aktywne", counts["active"]),
+        ("Standard", counts["standard"]),
+        ("Pro", counts["pro"]),
+        ("Wymagają uwagi", counts["needs_attention"]),
+        ("Krytyczne", counts["critical"]),
+        ("Wygasają ≤30 dni", counts["expiring_30d"]),
+        ("Brak kontaktu 30 dni", counts["no_contact_30d"]),
+        ("Nieodczytane", int(unread or 0)),
+        ("Otwarte zgłoszenia", int(open_support or 0)),
+    ]
+    metrics_html = "".join(
+        f'<div class="metric"><b>{_panel_h(label)}</b><strong>{int(value or 0)}</strong></div>'
+        for label, value in metrics
+    )
+
+    rows_html = []
+    for row in devices:
+        health = str(row["health_level"] or "GREEN").upper()
+        health_class = {
+            "RED": "critical",
+            "ORANGE": "bad",
+            "YELLOW": "warn",
+            "GREEN": "good",
+        }.get(health, "muted")
+        plan = "PRO" if str(row["plan_code"]).upper() == "PRO" else "STANDARD"
+        rows_html.append(
+            f"""
+            <tr>
+              <td class="mono">
+                <a href="/multiguard/panel/device/{row['installation_id']}">
+                  {_panel_h(_short_installation_id(row['installation_external_id']))}
+                </a>
+              </td>
+              <td>
+                <b>{_panel_h(_device_label(row))}</b><br>
+                <span class="muted">{_panel_h(row['serial_number'] or row['hostname'] or '')}</span>
+              </td>
+              <td><span class="badge">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(row['lifecycle'])}</span></td>
+              <td><span class="badge {health_class}">{_panel_h(health)}</span></td>
+              <td>{_panel_h(row['app_version'] or '—')}</td>
+              <td>{_panel_dt(row['last_seen_at'])}</td>
+              <td class="numbers">
+                ⚠ {_panel_h(row['warning_30d'])}
+                &nbsp; ! {_panel_h(row['important_30d'])}
+                &nbsp; ⛔ {_panel_h(row['critical_30d'])}
+                &nbsp; ERR {_panel_h(row['error_30d'])}
+              </td>
+              <td>{_panel_h(row['open_support'])}</td>
+            </tr>
+            """
+        )
+
+    if not rows_html:
+        rows_html.append(
+            '<tr><td colspan="8" class="muted">Brak zarejestrowanych instalacji Multi-Guard.</td></tr>'
+        )
+
+    return _panel_html(
+        f"""
+        <section class="card">
+          <h1>Multi-Guard — Centrum właściciela</h1>
+          <p>Widok komputerowy do zarządzania flotą, zgłoszeniami, telemetrią i licencjami.</p>
+          <div class="metrics">{metrics_html}</div>
+        </section>
+
+        <section class="card" id="devices">
+          <div class="section-head">
+            <div>
+              <h2>Urządzenia</h2>
+              <p>Liczniki zdarzeń dotyczą ostatnich 30 dni.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th><th>Komputer</th><th>Licencja</th><th>Stan</th>
+                  <th>Wersja</th><th>Ostatni kontakt</th><th>Zdarzenia 30 dni</th><th>Zgłoszenia</th>
+                </tr>
+              </thead>
+              <tbody>{''.join(rows_html)}</tbody>
+            </table>
+          </div>
+        </section>
+        """
+    )
+
+
+@router.get("/panel/device/{installation_id}", response_class=HTMLResponse)
+def multi_guard_panel_device(
+    installation_id: str,
+    _: None = Depends(_panel_auth),
+):
+    _ensure_schema()
+    try:
+        iid = uuid.UUID(installation_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowe ID instalacji.") from exc
+
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT
+                    gi.id AS installation_id,
+                    gi.installation_external_id,
+                    gi.service_device_id,
+                    gi.plan_code,gi.lifecycle,gi.valid_until,gi.last_seen_at,
+                    gi.health_level,gi.app_version,gi.release_channel,
+                    d.device_type,d.manufacturer,d.model,d.serial_number,d.hostname,
+                    ll.reception_number
+                FROM guard.installations gi
+                LEFT JOIN core.devices d ON d.id=gi.service_device_id
+                LEFT JOIN guard.license_links ll
+                  ON ll.installation_id=gi.installation_external_id
+                WHERE gi.id=:installation_id
+                LIMIT 1
+                """
+            ),
+            {"installation_id": iid},
+        ).mappings().first()
+
+        if not row:
+            raise HTTPException(404, "Nie znaleziono instalacji Multi-Guard.")
+
+        events = connection.execute(
+            text(
+                """
+                SELECT event_id,event_type,severity,occurred_at,payload
+                FROM guard.events
+                WHERE installation_id=:installation_id
+                ORDER BY occurred_at DESC
+                LIMIT 200
+                """
+            ),
+            {"installation_id": iid},
+        ).mappings().all()
+
+        support = connection.execute(
+            text(
+                """
+                SELECT id,priority,subject,status,created_at
+                FROM guard.support_requests
+                WHERE installation_id=:installation_id
+                ORDER BY created_at DESC
+                LIMIT 50
+                """
+            ),
+            {"installation_id": iid},
+        ).mappings().all()
+
+    event_rows = []
+    for event in events:
+        payload = event["payload"] or {}
+        summary = (
+            payload.get("message")
+            or payload.get("detail")
+            or payload.get("title")
+            or payload.get("code")
+            or ""
+        )
+        event_rows.append(
+            f"""
+            <tr>
+              <td>{_panel_dt(event['occurred_at'])}</td>
+              <td><span class="badge">{_panel_h(event['severity'])}</span></td>
+              <td class="mono">{_panel_h(event['event_type'])}</td>
+              <td>{_panel_h(summary)}</td>
+            </tr>
+            """
+        )
+    if not event_rows:
+        event_rows.append(
+            '<tr><td colspan="4" class="muted">Brak zapisanych zdarzeń.</td></tr>'
+        )
+
+    support_rows = []
+    for item in support:
+        priority = "PRO" if item["priority"] == "PRIORITY" else "STANDARD"
+        support_rows.append(
+            f"""
+            <tr>
+              <td>{_panel_dt(item['created_at'])}</td>
+              <td><span class="badge">{priority}</span></td>
+              <td>{_panel_h(item['subject'])}</td>
+              <td>{_panel_h(item['status'])}</td>
+            </tr>
+            """
+        )
+    if not support_rows:
+        support_rows.append(
+            '<tr><td colspan="4" class="muted">Brak zgłoszeń dla tego komputera.</td></tr>'
+        )
+
+    return _panel_html(
+        f"""
+        <section class="card">
+          <a href="/multiguard/panel/dashboard">← Wróć do urządzeń</a>
+          <h1>{_panel_h(_short_installation_id(row['installation_external_id']))} — {_panel_h(_device_label(row))}</h1>
+          <div class="detail-grid">
+            <div><b>Licencja</b><span>{_panel_h(row['plan_code'])} / {_panel_h(row['lifecycle'])}</span></div>
+            <div><b>Wersja Multi-Guard</b><span>{_panel_h(row['app_version'] or '—')}</span></div>
+            <div><b>Kanał</b><span>{_panel_h(row['release_channel'] or 'STABLE')}</span></div>
+            <div><b>Stan</b><span>{_panel_h(row['health_level'] or '—')}</span></div>
+            <div><b>Ostatni kontakt</b><span>{_panel_dt(row['last_seen_at'])}</span></div>
+            <div><b>Zlecenie</b><span>{_panel_h(row['reception_number'] or '—')}</span></div>
+            <div><b>Numer seryjny</b><span>{_panel_h(row['serial_number'] or '—')}</span></div>
+            <div><b>Ważność</b><span>{_panel_dt(row['valid_until'])}</span></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Zdarzenia — ostatnie 200</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Data</th><th>Poziom</th><th>Typ</th><th>Opis</th></tr></thead>
+              <tbody>{''.join(event_rows)}</tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Zgłoszenia klienta</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Data</th><th>Plan</th><th>Temat</th><th>Status</th></tr></thead>
+              <tbody>{''.join(support_rows)}</tbody>
+            </table>
+          </div>
+        </section>
+        """
+    )
+
+
+@router.get("/panel/telemetry", response_class=HTMLResponse)
+def multi_guard_panel_telemetry(
+    _: None = Depends(_panel_auth),
+):
+    rows = _fetch_telemetry_rows(90, 300)
+    table_rows = []
+    for row in rows:
+        versions = ", ".join(row["app_versions"] or [])
+        table_rows.append(
+            f"""
+            <tr>
+              <td class="mono">{_panel_h(row['fingerprint'])}</td>
+              <td>{_panel_h(row['component'] or '—')}</td>
+              <td>{_panel_h(row['code'] or row['event_type'])}</td>
+              <td>{_panel_h(row['affected_devices'])}</td>
+              <td>{_panel_h(row['occurrences'])}</td>
+              <td>{_panel_h(versions or '—')}</td>
+              <td>{_panel_dt(row['last_seen'])}</td>
+              <td>⚠ {_panel_h(row['warning_count'])} &nbsp; ! {_panel_h(row['important_count'])} &nbsp; ⛔ {_panel_h(row['critical_count'])}</td>
+            </tr>
+            """
+        )
+    if not table_rows:
+        table_rows.append(
+            '<tr><td colspan="8" class="muted">Telemetria jest gotowa. Zacznie się zapełniać po wdrożeniu wysyłki TELEMETRY_* w Multi-Guard dla Windows.</td></tr>'
+        )
+
+    return _panel_html(
+        f"""
+        <section class="card">
+          <h1>Telemetria / Rozwój Multi-Guard</h1>
+          <p>Grupowanie podobnych problemów z ostatnich 90 dni. To jest baza do poprawiania kolejnych wersji Multi-Guard, a nie lista zgłoszeń klienta.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fingerprint</th><th>Moduł</th><th>Kod / typ</th>
+                  <th>Urządzenia</th><th>Wystąpienia</th><th>Wersje</th>
+                  <th>Ostatnio</th><th>Poziomy</th>
+                </tr>
+              </thead>
+              <tbody>{''.join(table_rows)}</tbody>
+            </table>
+          </div>
+        </section>
+        """
+    )
+
+
+@router.get("/panel/licenses", response_class=HTMLResponse)
+def multi_guard_panel_licenses(
+    _: None = Depends(_panel_auth),
+):
+    _ensure_license_schema()
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT
+                    ll.reception_number,
+                    ll.keygate_license_id,
+                    ll.plan_code,
+                    ll.duration_months,
+                    ll.release_channel,
+                    ll.lifecycle,
+                    ll.app_version,
+                    ll.valid_until,
+                    ll.installation_id,
+                    d.manufacturer,
+                    d.model,
+                    d.serial_number
+                FROM guard.license_links ll
+                LEFT JOIN core.devices d
+                  ON d.id=ll.service_device_id
+                ORDER BY ll.updated_at DESC
+                LIMIT 500
+                """
+            )
+        ).mappings().all()
+
+    table_rows = []
+    for row in rows:
+        edition = "PRO" if row["plan_code"] == "multi_guard_pro" else "STANDARD"
+        device = " ".join(
+            part for part in [
+                str(row["manufacturer"] or "").strip(),
+                str(row["model"] or "").strip(),
+            ] if part
+        ) or "—"
+        table_rows.append(
+            f"""
+            <tr>
+              <td>{_panel_h(row['reception_number'])}</td>
+              <td><span class="badge">{edition}</span></td>
+              <td>{_panel_h(row['duration_months'])} mies.</td>
+              <td>{_panel_h(row['release_channel'] or 'STABLE')}</td>
+              <td>{_panel_h(row['lifecycle'])}</td>
+              <td>{_panel_h(device)}</td>
+              <td class="mono">{_panel_h(_short_installation_id(row['installation_id']) if row['installation_id'] else '—')}</td>
+              <td>{_panel_h(row['app_version'] or '—')}</td>
+              <td>{_panel_dt(row['valid_until'])}</td>
+            </tr>
+            """
+        )
+    if not table_rows:
+        table_rows.append(
+            '<tr><td colspan="9" class="muted">Brak licencji Multi-Guard.</td></tr>'
+        )
+
+    return _panel_html(
+        f"""
+        <section class="card">
+          <div class="section-head">
+            <div>
+              <h1>Licencje Multi-Guard</h1>
+              <p>Przegląd wystawionych licencji, kanałów aktualizacji i terminów ważności.</p>
+            </div>
+            <a class="button-link" href="/multiguard/panel">NOWA LICENCJA</a>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Zlecenie</th><th>Plan</th><th>Okres</th><th>Kanał</th>
+                  <th>Status</th><th>Komputer</th><th>ID</th><th>Wersja</th><th>Ważna do</th>
+                </tr>
+              </thead>
+              <tbody>{''.join(table_rows)}</tbody>
+            </table>
+          </div>
+        </section>
+        """
+    )
 
 
 @router.get("/notifications")
