@@ -804,13 +804,9 @@ def notifications(
                     ll.reception_id,ll.reception_number
                 FROM guard.notifications n
                 LEFT JOIN core.devices d ON d.id=n.service_device_id
-                LEFT JOIN LATERAL (
-                    SELECT reception_id,reception_number
-                    FROM guard.license_links
-                    WHERE service_device_id=n.service_device_id
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                ) ll ON TRUE
+                LEFT JOIN guard.installations gi ON gi.id=n.installation_id
+                LEFT JOIN guard.license_links ll
+                    ON ll.installation_id=gi.installation_external_id
                 {where}
                 ORDER BY n.created_at DESC
                 LIMIT :limit
@@ -918,13 +914,9 @@ def support_requests(
                     ll.reception_id,ll.reception_number
                 FROM guard.support_requests sr
                 LEFT JOIN core.devices d ON d.id=sr.service_device_id
-                LEFT JOIN LATERAL (
-                    SELECT reception_id,reception_number
-                    FROM guard.license_links
-                    WHERE service_device_id=sr.service_device_id
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                ) ll ON TRUE
+                LEFT JOIN guard.installations gi ON gi.id=sr.installation_id
+                LEFT JOIN guard.license_links ll
+                    ON ll.installation_id=gi.installation_external_id
                 {where}
                 ORDER BY
                     CASE sr.status
@@ -977,13 +969,9 @@ def support_request_detail(
                     ll.reception_id,ll.reception_number
                 FROM guard.support_requests sr
                 LEFT JOIN core.devices d ON d.id=sr.service_device_id
-                LEFT JOIN LATERAL (
-                    SELECT reception_id,reception_number
-                    FROM guard.license_links
-                    WHERE service_device_id=sr.service_device_id
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                ) ll ON TRUE
+                LEFT JOIN guard.installations gi ON gi.id=sr.installation_id
+                LEFT JOIN guard.license_links ll
+                    ON ll.installation_id=gi.installation_external_id
                 WHERE sr.id=:id
                 LIMIT 1
                 """
