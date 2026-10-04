@@ -2,7 +2,7 @@ name: Embedded Multi-Guard CI
 
 on:
   push:
-    branches: [main, work-multiservis-multiguard-owner]
+    branches: [main]
     paths:
       - "embedded-multiguard/**"
       - ".github/workflows/embedded-multiguard-ci.yml"
