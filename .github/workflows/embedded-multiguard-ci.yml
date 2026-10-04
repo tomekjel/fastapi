@@ -6,6 +6,7 @@ on:
     paths:
       - "embedded-multiguard/**"
       - ".github/workflows/embedded-multiguard-ci.yml"
+      - ".github/workflows/deploy-multiservis-backend.yml"
   workflow_dispatch:
 
 jobs:
@@ -15,16 +16,31 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+
       - name: Verify shell
         run: bash -n embedded-multiguard/install.sh
+
       - name: Verify Python syntax
         run: |
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_license.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_runtime.py
+
+      - name: Verify required API routes exist in source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq '@router.post("/multiguard/licenses/receptions/{reception_id}/release-channel")' embedded-multiguard/app/routers/multiguard_license.py
+          grep -Fq '@router.get("/overview")' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.get("/notifications")' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.get("/support-requests")' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.post("/agent/heartbeat")' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.post("/agent/event")' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.get("/events/{event_id}")' embedded-multiguard/app/routers/multiguard_runtime.py
+
       - name: Verify integration patch shape
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           rm -rf /tmp/msbackend
           mkdir -p /tmp/msbackend
           unzip -q MultiServisServer_FINAL.zip -d /tmp/msbackend

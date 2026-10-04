@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 if [ "${EUID}" -ne 0 ]; then
   echo "Uruchom jako root na kontenerze fastapi." >&2
@@ -7,21 +7,64 @@ if [ "${EUID}" -ne 0 ]; then
 fi
 
 REPO="tomekjel/fastapi"
-RAW_BASE="https://raw.githubusercontent.com/$REPO/main/embedded-multiguard"
+REF="${MULTISERVIS_BACKEND_REF:-main}"
+RAW_BASE="https://raw.githubusercontent.com/$REPO/$REF/embedded-multiguard"
 APP_ROOT="/opt/multiservis"
 ROUTER_DIR="$APP_ROOT/app/routers"
 LICENSE_ROUTER_FILE="$ROUTER_DIR/multiguard_license.py"
 RUNTIME_ROUTER_FILE="$ROUTER_DIR/multiguard_runtime.py"
 MAIN_FILE="$APP_ROOT/app/main.py"
-BACKUP_DIR="$APP_ROOT/backups/multiguard-license-$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="$APP_ROOT/backups/multiguard-backend-$(date +%Y%m%d-%H%M%S)"
+OPENAPI_TMP="$(mktemp)"
+DEPLOY_STARTED=0
+HAD_LICENSE=0
+HAD_RUNTIME=0
+
+cleanup() {
+  rm -f "$OPENAPI_TMP"
+}
+trap cleanup EXIT
+
+rollback() {
+  local rc=$?
+  trap - ERR
+  if [ "$DEPLOY_STARTED" -eq 1 ]; then
+    echo "BŁĄD: wdrożenie nie przeszło walidacji. Przywracam poprzedni backend..." >&2
+    cp -a "$BACKUP_DIR/main.py" "$MAIN_FILE"
+    if [ "$HAD_LICENSE" -eq 1 ]; then
+      cp -a "$BACKUP_DIR/multiguard_license.py" "$LICENSE_ROUTER_FILE"
+    else
+      rm -f "$LICENSE_ROUTER_FILE"
+    fi
+    if [ "$HAD_RUNTIME" -eq 1 ]; then
+      cp -a "$BACKUP_DIR/multiguard_runtime.py" "$RUNTIME_ROUTER_FILE"
+    else
+      rm -f "$RUNTIME_ROUTER_FILE"
+    fi
+    systemctl restart multiservis-api.service || true
+  fi
+  echo "Backup: $BACKUP_DIR" >&2
+  exit "$rc"
+}
+trap rollback ERR
 
 command -v curl >/dev/null || { echo "Brak curl." >&2; exit 1; }
-
+command -v systemctl >/dev/null || { echo "Brak systemctl." >&2; exit 1; }
 test -f "$MAIN_FILE" || { echo "Brak $MAIN_FILE" >&2; exit 1; }
+
 mkdir -p "$ROUTER_DIR" "$BACKUP_DIR"
 cp -a "$MAIN_FILE" "$BACKUP_DIR/main.py"
-[ ! -f "$LICENSE_ROUTER_FILE" ] || cp -a "$LICENSE_ROUTER_FILE" "$BACKUP_DIR/multiguard_license.py"
-[ ! -f "$RUNTIME_ROUTER_FILE" ] || cp -a "$RUNTIME_ROUTER_FILE" "$BACKUP_DIR/multiguard_runtime.py"
+
+if [ -f "$LICENSE_ROUTER_FILE" ]; then
+  HAD_LICENSE=1
+  cp -a "$LICENSE_ROUTER_FILE" "$BACKUP_DIR/multiguard_license.py"
+fi
+if [ -f "$RUNTIME_ROUTER_FILE" ]; then
+  HAD_RUNTIME=1
+  cp -a "$RUNTIME_ROUTER_FILE" "$BACKUP_DIR/multiguard_runtime.py"
+fi
+
+DEPLOY_STARTED=1
 
 curl -fsSL "$RAW_BASE/app/routers/multiguard_license.py" -o "$LICENSE_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_runtime.py" -o "$RUNTIME_ROUTER_FILE"
@@ -30,8 +73,10 @@ chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE"
 PYTHON="$APP_ROOT/.venv/bin/python"
 PIP="$APP_ROOT/.venv/bin/pip"
 if [ ! -x "$PYTHON" ]; then
-  PYTHON="$(command -v python3)"
+  PYTHON="$(command -v python3 || true)"
 fi
+test -n "$PYTHON" || { echo "Brak interpretera Python." >&2; exit 1; }
+
 if [ -x "$PIP" ]; then
   "$PIP" install --quiet 'cryptography>=43,<47'
 else
@@ -79,18 +124,57 @@ PY
 
 systemctl restart multiservis-api.service
 systemctl is-active --quiet multiservis-api.service
-sleep 2
 
-curl -fsS https://api.multi-servis.pl/health >/dev/null
-curl -fsS https://api.multi-servis.pl/openapi.json \
-  | grep -q '"/multiguard/activation-events"'
-curl -fsS https://api.multi-servis.pl/openapi.json \
-  | grep -q '"/v1/multi-guard/provision"'
-curl -fsS https://api.multi-servis.pl/openapi.json \
-  | grep -q '"/multiguard/agent/event"'
-curl -fsS https://api.multi-servis.pl/openapi.json \
-  | grep -q '"/multiguard/notifications"'
+HEALTH_OK=0
+for _ in $(seq 1 30); do
+  if curl -fsS --max-time 5 https://api.multi-servis.pl/health >/dev/null 2>&1; then
+    HEALTH_OK=1
+    break
+  fi
+  sleep 2
+done
+test "$HEALTH_OK" -eq 1 || { echo "API nie wróciło do stanu health=OK." >&2; exit 1; }
 
-echo "OK: moduły licencji i integracji Multi-Guard są wpięte do Multi-Servis API."
-echo "OK: licencje, zdarzenia agenta i centrum OWNER są widoczne w OpenAPI."
+curl -fsS --max-time 15 https://api.multi-servis.pl/openapi.json -o "$OPENAPI_TMP"
+
+"$PYTHON" - "$OPENAPI_TMP" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8-sig") as handle:
+    data = json.load(handle)
+
+paths = data.get("paths", {})
+required = [
+    "/multiguard/licenses/receptions/{reception_id}",
+    "/multiguard/licenses/receptions/{reception_id}/generate",
+    "/multiguard/licenses/receptions/{reception_id}/release-channel",
+    "/multiguard/overview",
+    "/multiguard/notifications",
+    "/multiguard/support-requests",
+    "/multiguard/agent/heartbeat",
+    "/multiguard/agent/event",
+    "/multiguard/events/{event_id}",
+]
+missing = [item for item in required if item not in paths]
+if missing:
+    raise SystemExit("Brak tras po wdrożeniu: " + ", ".join(missing))
+
+schema = (
+    data.get("components", {})
+    .get("schemas", {})
+    .get("GenerateLicenseRequest", {})
+)
+properties = schema.get("properties", {})
+if "releaseChannel" not in properties:
+    raise SystemExit("GenerateLicenseRequest nie zawiera releaseChannel.")
+
+print("OK: wszystkie wymagane trasy Multi-Guard są widoczne w OpenAPI.")
+print("OK: generowanie licencji obsługuje releaseChannel.")
+PY
+
+trap - ERR
+echo "OK: backend Multi-Guard został wdrożony i zweryfikowany."
+echo "Źródło: $REPO@$REF"
 echo "Backup: $BACKUP_DIR"

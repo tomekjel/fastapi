@@ -1,0 +1,116 @@
+name: Deploy Multi-Servis Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Wpisz DEPLOY, aby wdrożyć backend na serwer produkcyjny"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multiservis-backend-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ inputs.confirm == 'DEPLOY' }}
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+
+      - name: Validate deployment package
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n embedded-multiguard/install.sh
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_license.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_runtime.py
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+          SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?Brak secret MULTISERVIS_BACKEND_HOST}"
+          : "${SSH_USER:?Brak secret MULTISERVIS_BACKEND_USER}"
+          : "${SSH_KEY:?Brak secret MULTISERVIS_BACKEND_SSH_KEY}"
+          SSH_PORT="${SSH_PORT:-22}"
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/multiservis_backend
+          chmod 600 ~/.ssh/multiservis_backend
+          ssh-keyscan -T 10 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy backend through SSH
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SSH_PORT:-22}"
+          REMOTE_REF="$GITHUB_SHA"
+
+          ssh \
+            -i ~/.ssh/multiservis_backend \
+            -p "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "if [ \$(id -u) -eq 0 ]; then env MULTISERVIS_BACKEND_REF='$REMOTE_REF' bash -s; else sudo -n env MULTISERVIS_BACKEND_REF='$REMOTE_REF' bash -s; fi" \
+            < embedded-multiguard/install.sh
+
+      - name: Verify production API
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 10 --retry-delay 3 \
+            https://api.multi-servis.pl/openapi.json -o /tmp/openapi.json
+
+          python3 - <<'PY'
+          import json
+
+          with open('/tmp/openapi.json', 'r', encoding='utf-8-sig') as handle:
+              data = json.load(handle)
+
+          paths = data.get('paths', {})
+          required = [
+              '/multiguard/licenses/receptions/{reception_id}',
+              '/multiguard/licenses/receptions/{reception_id}/generate',
+              '/multiguard/licenses/receptions/{reception_id}/release-channel',
+              '/multiguard/overview',
+              '/multiguard/notifications',
+              '/multiguard/support-requests',
+              '/multiguard/agent/heartbeat',
+              '/multiguard/agent/event',
+              '/multiguard/events/{event_id}',
+          ]
+          missing = [path for path in required if path not in paths]
+          if missing:
+              raise SystemExit('Brak tras produkcyjnych: ' + ', '.join(missing))
+
+          props = (
+              data.get('components', {})
+              .get('schemas', {})
+              .get('GenerateLicenseRequest', {})
+              .get('properties', {})
+          )
+          if 'releaseChannel' not in props:
+              raise SystemExit('Produkcja nie publikuje releaseChannel w GenerateLicenseRequest.')
+
+          print('OK: produkcyjny backend Multi-Guard jest kompletny.')
+          PY
