@@ -191,6 +191,7 @@ required = [
     "/multiguard/telemetry",
     "/multiguard/panel/dashboard",
     "/multiguard/panel/telemetry",
+    "/multiguard/panel/telemetry/detail",
     "/multiguard/panel/licenses",
     "/multiguard/agent/remote/poll",
     "/multiguard/agent/remote/decision",

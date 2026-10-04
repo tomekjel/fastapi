@@ -5,6 +5,7 @@ import hmac
 import html as html_lib
 import json
 import threading
+import urllib.parse
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -1485,46 +1486,353 @@ def multi_guard_panel_device(
 
 @router.get("/panel/telemetry", response_class=HTMLResponse)
 def multi_guard_panel_telemetry(
+    days: int = 90,
+    severity: str = "ALL",
+    q: str = "",
     _: None = Depends(_panel_auth),
 ):
-    rows = _fetch_telemetry_rows(90, 300)
+    days = min(max(int(days), 1), 3650)
+    severity = severity.strip().upper()
+    if severity not in {"ALL", "WARNING", "IMPORTANT", "CRITICAL"}:
+        severity = "ALL"
+    query = q.strip().lower()
+
+    rows = [dict(row) for row in _fetch_telemetry_rows(days, 500)]
+
+    def matches(row: dict[str, Any]) -> bool:
+        if severity == "WARNING" and int(row["warning_count"] or 0) <= 0:
+            return False
+        if severity == "IMPORTANT" and int(row["important_count"] or 0) <= 0:
+            return False
+        if severity == "CRITICAL" and int(row["critical_count"] or 0) <= 0:
+            return False
+        if query:
+            haystack = " ".join(
+                [
+                    str(row.get("fingerprint") or ""),
+                    str(row.get("component") or ""),
+                    str(row.get("code") or ""),
+                    str(row.get("event_type") or ""),
+                    " ".join(row.get("app_versions") or []),
+                ]
+            ).lower()
+            if query not in haystack:
+                return False
+        return True
+
+    filtered = [row for row in rows if matches(row)]
+    total_occurrences = sum(int(row["occurrences"] or 0) for row in filtered)
+    critical_occurrences = sum(int(row["critical_count"] or 0) for row in filtered)
+    important_occurrences = sum(int(row["important_count"] or 0) for row in filtered)
+    warning_occurrences = sum(int(row["warning_count"] or 0) for row in filtered)
+
+    metrics_html = "".join(
+        [
+            f'<div class="metric"><b>Grupy problemów</b><strong>{len(filtered)}</strong></div>',
+            f'<div class="metric"><b>Wystąpienia</b><strong>{total_occurrences}</strong></div>',
+            f'<div class="metric"><b>Krytyczne</b><strong>{critical_occurrences}</strong></div>',
+            f'<div class="metric"><b>Ważne</b><strong>{important_occurrences}</strong></div>',
+            f'<div class="metric"><b>Ostrzeżenia</b><strong>{warning_occurrences}</strong></div>',
+        ]
+    )
+
     table_rows = []
-    for row in rows:
+    for row in filtered:
         versions = ", ".join(row["app_versions"] or [])
+        if int(row["critical_count"] or 0) > 0:
+            priority, priority_class = "KRYTYCZNE", "critical"
+        elif int(row["important_count"] or 0) > 0:
+            priority, priority_class = "WAŻNE", "bad"
+        elif int(row["warning_count"] or 0) > 0:
+            priority, priority_class = "OSTRZEŻENIE", "warn"
+        else:
+            priority, priority_class = "INFO", "good"
+
+        fingerprint = str(row["fingerprint"] or "")
+        detail_url = (
+            "/multiguard/panel/telemetry/detail?fingerprint="
+            + urllib.parse.quote(fingerprint, safe="")
+            + f"&days={days}"
+        )
+        problem_name = str(row["code"] or row["event_type"] or "Nieznany problem")
+        component = str(row["component"] or "Nieznany moduł")
+
         table_rows.append(
             f"""
             <tr>
-              <td class="mono">{_panel_h(row['fingerprint'])}</td>
-              <td>{_panel_h(row['component'] or '—')}</td>
-              <td>{_panel_h(row['code'] or row['event_type'])}</td>
-              <td>{_panel_h(row['affected_devices'])}</td>
-              <td>{_panel_h(row['occurrences'])}</td>
+              <td><span class="badge {priority_class}">{_panel_h(priority)}</span></td>
+              <td>
+                <b class="problem-title">{_panel_h(problem_name)}</b><br>
+                <span class="muted">{_panel_h(component)}</span><br>
+                <span class="mono muted">{_panel_h(fingerprint)}</span>
+              </td>
+              <td class="numbers"><b>{_panel_h(row['affected_devices'])}</b></td>
+              <td class="numbers"><b>{_panel_h(row['occurrences'])}</b></td>
               <td>{_panel_h(versions or '—')}</td>
+              <td>{_panel_dt(row['first_seen'])}</td>
               <td>{_panel_dt(row['last_seen'])}</td>
-              <td>⚠ {_panel_h(row['warning_count'])} &nbsp; ! {_panel_h(row['important_count'])} &nbsp; ⛔ {_panel_h(row['critical_count'])}</td>
+              <td class="numbers">
+                ⚠ {_panel_h(row['warning_count'])}
+                &nbsp; ! {_panel_h(row['important_count'])}
+                &nbsp; ⛔ {_panel_h(row['critical_count'])}
+              </td>
+              <td><a class="button-link compact" href="{detail_url}">SZCZEGÓŁY</a></td>
             </tr>
             """
         )
+
     if not table_rows:
         table_rows.append(
-            '<tr><td colspan="8" class="muted">Telemetria jest gotowa. Zacznie się zapełniać po wdrożeniu wysyłki TELEMETRY_* w Multi-Guard dla Windows.</td></tr>'
+            '<tr><td colspan="9" class="muted">Brak telemetrii pasującej do wybranych filtrów. Gdy Multi-Guard Windows zacznie wysyłać zdarzenia, pojawią się tutaj automatycznie.</td></tr>'
         )
+
+    day_options = "".join(
+        f'<option value="{value}" {"selected" if days == value else ""}>{label}</option>'
+        for value, label in [
+            (7, "7 dni"),
+            (30, "30 dni"),
+            (90, "90 dni"),
+            (180, "180 dni"),
+            (365, "1 rok"),
+        ]
+    )
+    severity_options = "".join(
+        f'<option value="{value}" {"selected" if severity == value else ""}>{label}</option>'
+        for value, label in [
+            ("ALL", "Wszystkie"),
+            ("WARNING", "Ostrzeżenia"),
+            ("IMPORTANT", "Ważne"),
+            ("CRITICAL", "Krytyczne"),
+        ]
+    )
 
     return _panel_html(
         f"""
+        <section class="card telemetry-hero">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">MULTI-GUARD • ROZWÓJ</div>
+              <h1>Telemetria</h1>
+              <p>
+                Problemy techniczne grupowane według wzorca. Kliknij „Szczegóły”,
+                aby zobaczyć konkretne urządzenia, zlecenia i wystąpienia.
+              </p>
+            </div>
+            <div class="telemetry-status">
+              <span class="badge good">● ANALIZA AKTYWNA</span>
+              <span class="muted">Zakres: ostatnie {days} dni</span>
+            </div>
+          </div>
+          <div class="metrics">{metrics_html}</div>
+        </section>
+
         <section class="card">
-          <h1>Telemetria / Rozwój Multi-Guard</h1>
-          <p>Grupowanie podobnych problemów z ostatnich 90 dni. To jest baza do poprawiania kolejnych wersji Multi-Guard, a nie lista zgłoszeń klienta.</p>
+          <form method="get" action="/multiguard/panel/telemetry" class="filter-bar">
+            <label>Zakres czasu
+              <select name="days">{day_options}</select>
+            </label>
+            <label>Poziom
+              <select name="severity">{severity_options}</select>
+            </label>
+            <label class="filter-grow">Szukaj
+              <input name="q" value="{_panel_h(q)}" placeholder="moduł, kod, fingerprint, wersja...">
+            </label>
+            <label>&nbsp;<button type="submit">FILTRUJ</button></label>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <div>
+              <h2>Grupy problemów</h2>
+              <p>Jeden wiersz oznacza jeden wzorzec problemu, nawet jeśli wystąpił wielokrotnie na wielu komputerach.</p>
+            </div>
+          </div>
           <div class="table-wrap">
-            <table>
+            <table class="telemetry-table">
               <thead>
                 <tr>
-                  <th>Fingerprint</th><th>Moduł</th><th>Kod / typ</th>
-                  <th>Urządzenia</th><th>Wystąpienia</th><th>Wersje</th>
-                  <th>Ostatnio</th><th>Poziomy</th>
+                  <th>Priorytet</th><th>Problem</th><th>Urządzenia</th>
+                  <th>Wystąpienia</th><th>Wersje</th><th>Pierwszy raz</th>
+                  <th>Ostatnio</th><th>Poziomy</th><th></th>
                 </tr>
               </thead>
               <tbody>{''.join(table_rows)}</tbody>
+            </table>
+          </div>
+        </section>
+        """
+    )
+
+
+@router.get("/panel/telemetry/detail", response_class=HTMLResponse)
+def multi_guard_panel_telemetry_detail(
+    fingerprint: str,
+    days: int = 90,
+    _: None = Depends(_panel_auth),
+):
+    _ensure_schema()
+    days = min(max(int(days), 1), 3650)
+    fingerprint = fingerprint.strip()
+    if not fingerprint:
+        raise HTTPException(400, "Brak fingerprintu telemetrii.")
+
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                """
+                WITH telemetry AS (
+                    SELECT
+                        e.event_id,e.installation_id,e.event_type,e.severity,
+                        e.occurred_at,e.payload,
+                        gi.installation_external_id,gi.app_version,
+                        gi.health_level,gi.lifecycle,gi.plan_code,gi.last_seen_at,
+                        d.device_type,d.manufacturer,d.model,d.serial_number,d.hostname,
+                        ll.reception_id,ll.reception_number,
+                        COALESCE(
+                            NULLIF(e.payload->>'fingerprint',''),
+                            e.event_type || ':' ||
+                            COALESCE(NULLIF(e.payload->>'component',''),'unknown') || ':' ||
+                            COALESCE(NULLIF(e.payload->>'code',''),'unknown')
+                        ) AS fingerprint
+                    FROM guard.events e
+                    JOIN guard.installations gi ON gi.id=e.installation_id
+                    LEFT JOIN core.devices d ON d.id=gi.service_device_id
+                    LEFT JOIN guard.license_links ll
+                      ON ll.installation_id=gi.installation_external_id
+                    WHERE e.occurred_at >= now() - (:days * interval '1 day')
+                      AND (
+                          e.event_type LIKE 'TELEMETRY_%'
+                          OR e.event_type IN (
+                              'APP_ERROR','MODULE_ERROR','SENSOR_ERROR',
+                              'UNKNOWN_ANOMALY','PROVIDER_FAILURE','READ_FAILURE'
+                          )
+                      )
+                )
+                SELECT * FROM telemetry
+                WHERE fingerprint=:fingerprint
+                ORDER BY occurred_at DESC
+                LIMIT 500
+                """
+            ),
+            {"days": days, "fingerprint": fingerprint},
+        ).mappings().all()
+
+    if not rows:
+        raise HTTPException(404, "Nie znaleziono zdarzeń dla tego wzorca w wybranym okresie.")
+
+    first = dict(rows[0])
+    devices: dict[str, dict[str, Any]] = {}
+    event_rows = []
+
+    for raw in rows:
+        row = dict(raw)
+        installation_key = str(row["installation_id"])
+        item = devices.setdefault(
+            installation_key,
+            {
+                "installation_id": row["installation_id"],
+                "installation_external_id": row["installation_external_id"],
+                "reception_number": row["reception_number"],
+                "device_type": row["device_type"],
+                "manufacturer": row["manufacturer"],
+                "model": row["model"],
+                "serial_number": row["serial_number"],
+                "hostname": row["hostname"],
+                "app_version": row["app_version"],
+                "health_level": row["health_level"],
+                "occurrences": 0,
+                "last_seen": row["occurred_at"],
+            },
+        )
+        item["occurrences"] += 1
+        if row["occurred_at"] and (
+            not item["last_seen"] or row["occurred_at"] > item["last_seen"]
+        ):
+            item["last_seen"] = row["occurred_at"]
+
+        payload = row["payload"] or {}
+        summary = (
+            payload.get("message")
+            or payload.get("detail")
+            or payload.get("title")
+            or payload.get("code")
+            or row["event_type"]
+        )
+        sev = str(row["severity"] or "INFO").upper()
+        sev_class = {"CRITICAL":"critical","IMPORTANT":"bad","WARNING":"warn"}.get(sev,"good")
+        event_rows.append(
+            f"""
+            <tr>
+              <td>{_panel_dt(row['occurred_at'])}</td>
+              <td><span class="badge {sev_class}">{_panel_h(sev)}</span></td>
+              <td><a href="/multiguard/panel/device/{row['installation_id']}">{_panel_h(_short_installation_id(row['installation_external_id']))}</a></td>
+              <td>{_panel_h(row['reception_number'] or '—')}</td>
+              <td>{_panel_h(row['app_version'] or '—')}</td>
+              <td>{_panel_h(summary)}</td>
+            </tr>
+            """
+        )
+
+    device_rows = []
+    for item in sorted(devices.values(), key=lambda value: (-int(value["occurrences"]), str(value["reception_number"] or ""))):
+        device_label = " ".join(
+            part for part in [
+                str(item["manufacturer"] or "").strip(),
+                str(item["model"] or "").strip(),
+            ] if part
+        ) or str(item["hostname"] or "Nieznany komputer")
+        device_rows.append(
+            f"""
+            <tr>
+              <td><a href="/multiguard/panel/device/{item['installation_id']}">{_panel_h(_short_installation_id(item['installation_external_id']))}</a></td>
+              <td><b>{_panel_h(device_label)}</b><br><span class="muted">{_panel_h(item['device_type'] or '')}</span></td>
+              <td class="mono">{_panel_h(item['serial_number'] or '—')}</td>
+              <td><b>{_panel_h(item['reception_number'] or '—')}</b></td>
+              <td>{_panel_h(item['app_version'] or '—')}</td>
+              <td><span class="badge">{_panel_h(item['health_level'] or '—')}</span></td>
+              <td class="numbers"><b>{_panel_h(item['occurrences'])}</b></td>
+              <td>{_panel_dt(item['last_seen'])}</td>
+            </tr>
+            """
+        )
+
+    payload = first["payload"] or {}
+    component = payload.get("component") or "Nieznany moduł"
+    code = payload.get("code") or first["event_type"]
+
+    return _panel_html(
+        f"""
+        <section class="card telemetry-hero">
+          <a href="/multiguard/panel/telemetry?days={days}">← Wróć do telemetrii</a>
+          <div class="eyebrow">SZCZEGÓŁY WZORCA</div>
+          <h1>{_panel_h(code)}</h1>
+          <p>Moduł: <b>{_panel_h(component)}</b><br><span class="mono">{_panel_h(fingerprint)}</span></p>
+          <div class="metrics">
+            <div class="metric"><b>Urządzenia</b><strong>{len(devices)}</strong></div>
+            <div class="metric"><b>Wystąpienia</b><strong>{len(rows)}</strong></div>
+            <div class="metric"><b>Zakres</b><strong>{days} d</strong></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Urządzenia i zlecenia</h2>
+          <p>Sprzęt, na którym wystąpił problem, oraz powiązane zlecenie Multi-Servis.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>ID</th><th>Sprzęt</th><th>Serial</th><th>Zlecenie</th><th>Wersja</th><th>Stan</th><th>Wystąpienia</th><th>Ostatnio</th></tr></thead>
+              <tbody>{''.join(device_rows)}</tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Historia wystąpień</h2>
+          <p>Ostatnie maksymalnie 500 zdarzeń tego samego wzorca.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Data</th><th>Poziom</th><th>Urządzenie</th><th>Zlecenie</th><th>Wersja</th><th>Opis</th></tr></thead>
+              <tbody>{''.join(event_rows)}</tbody>
             </table>
           </div>
         </section>

@@ -866,6 +866,15 @@ tr:hover td{{background:#0c1f34}}
 .detail-grid b,.detail-grid span{{display:block}}.detail-grid span{{margin-top:5px;color:#cce0ef}}
 .key{{display:block;padding:15px;margin:14px 0;background:#03101c;border:1px solid #24618c;border-radius:10px;color:#67e5ff;font:700 15px Consolas,monospace;word-break:break-all}}
 a{{color:#67c8ff}}.ok{{color:#48d99a}}
+.eyebrow{{font-size:11px;font-weight:800;letter-spacing:.14em;color:#64cfff;margin-bottom:6px}}
+.telemetry-hero{{background:linear-gradient(135deg,#0a192b 0%,#0b2035 55%,#071421 100%);border-color:#2b5b7e}}
+.telemetry-status{{display:flex;flex-direction:column;align-items:flex-end;gap:7px}}
+.filter-bar{{display:flex;grid-template-columns:none;flex-wrap:wrap;align-items:end;gap:10px}}
+.filter-bar label{{min-width:150px}}.filter-bar .filter-grow{{flex:1 1 320px}}
+.problem-title{{font-size:14px;color:#f2f8ff}}
+.button-link.compact{{padding:7px 10px;font-size:12px;white-space:nowrap}}
+.telemetry-table td{{vertical-align:middle}}
+@media(max-width:720px){{.telemetry-status{{align-items:flex-start}}.filter-bar{{display:grid;grid-template-columns:1fr}}}}
 @media(max-width:720px){{main{{width:96vw;margin-top:14px}}.grid{{grid-template-columns:1fr}}.card{{padding:15px}}}}
 </style>
 </head>

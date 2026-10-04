@@ -47,6 +47,7 @@ jobs:
           grep -Fq '@router.get("/panel/dashboard"' embedded-multiguard/app/routers/multiguard_runtime.py
           grep -Fq '@router.get("/panel/licenses"' embedded-multiguard/app/routers/multiguard_runtime.py
           grep -Fq '@router.get("/panel/telemetry"' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.get("/panel/telemetry/detail"' embedded-multiguard/app/routers/multiguard_runtime.py
           grep -Fq '@router.post("/remote-sessions")' embedded-multiguard/app/routers/multiguard_remote.py
           grep -Fq '@router.post("/agent/remote/poll")' embedded-multiguard/app/routers/multiguard_remote.py
           grep -Fq '@router.post("/agent/remote/decision")' embedded-multiguard/app/routers/multiguard_remote.py
