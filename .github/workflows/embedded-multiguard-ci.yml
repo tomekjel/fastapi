@@ -18,7 +18,9 @@ jobs:
       - name: Verify shell
         run: bash -n embedded-multiguard/install.sh
       - name: Verify Python syntax
-        run: python3 -m py_compile embedded-multiguard/app/routers/multiguard_license.py
+        run: |
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_license.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_runtime.py
       - name: Verify integration patch shape
         shell: bash
         run: |
@@ -26,23 +28,35 @@ jobs:
           rm -rf /tmp/msbackend
           mkdir -p /tmp/msbackend
           unzip -q MultiServisServer_FINAL.zip -d /tmp/msbackend
-          cp embedded-multiguard/app/routers/multiguard_license.py              /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_license.py
+          cp embedded-multiguard/app/routers/multiguard_license.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_license.py
+          cp embedded-multiguard/app/routers/multiguard_runtime.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_runtime.py
           python3 - <<'PY'
           from pathlib import Path
           p=Path('/tmp/msbackend/MultiServisServer_FINAL/app/main.py')
           s=p.read_text()
-          if 'from app.routers import multiguard_license' not in s:
-              lines=s.splitlines()
-              at=0
-              for i,line in enumerate(lines):
-                  if line.startswith('from app.routers import ') or line.startswith('import app.routers'):
-                      at=i+1
-              lines.insert(at,'from app.routers import multiguard_license')
-              s='\n'.join(lines)+'\n'
-          if 'app.include_router(multiguard_license.router)' not in s:
-              marker='@app.get("/")'
-              assert marker in s
-              s=s.replace(marker,'app.include_router(multiguard_license.router)\n\n'+marker,1)
+          for import_line in (
+              'from app.routers import multiguard_license',
+              'from app.routers import multiguard_runtime',
+          ):
+              if import_line not in s:
+                  lines=s.splitlines()
+                  at=0
+                  for i,line in enumerate(lines):
+                      if line.startswith('from app.routers import ') or line.startswith('import app.routers'):
+                          at=i+1
+                  lines.insert(at,import_line)
+                  s='\n'.join(lines)+'\n'
+          for include_line in (
+              'app.include_router(multiguard_license.router)',
+              'app.include_router(multiguard_runtime.router)',
+          ):
+              if include_line not in s:
+                  marker='@app.get("/")'
+                  assert marker in s
+                  s=s.replace(marker,include_line+'\n\n'+marker,1)
           p.write_text(s)
           PY
-          python3 -m py_compile             /tmp/msbackend/MultiServisServer_FINAL/app/main.py             /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_license.py
+          python3 -m py_compile \
+            /tmp/msbackend/MultiServisServer_FINAL/app/main.py \
+            /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_license.py \
+            /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_runtime.py
