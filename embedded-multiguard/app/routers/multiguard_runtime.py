@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from app.database import engine
 from app.security import CurrentUser, require_owner
+from app.routers.multiguard_license import _ensure_schema as _ensure_license_schema
 
 
 router = APIRouter(prefix="/multiguard", tags=["multi-guard-runtime"])
@@ -94,6 +95,8 @@ def _ensure_schema() -> None:
     global _SCHEMA_READY
     if _SCHEMA_READY:
         return
+
+    _ensure_license_schema()
 
     statements = [
         """
