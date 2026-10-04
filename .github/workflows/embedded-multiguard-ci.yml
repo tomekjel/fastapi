@@ -26,6 +26,8 @@ jobs:
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_runtime.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_meshcentral.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_updates.py
+          python3 -m py_compile embedded-multiguard/scripts/sync_multiguard_releases.py
 
       - name: Verify required API routes exist in source
         shell: bash
@@ -53,6 +55,9 @@ jobs:
           grep -Fq '@router.post("/agent/remote/decision")' embedded-multiguard/app/routers/multiguard_remote.py
           grep -Fq '@router.post("/agent/remote/end")' embedded-multiguard/app/routers/multiguard_remote.py
           grep -Fq 'CLIENT_LOG_BUNDLE' embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq '@router.get("/releases/{target}/{arch}/{current_version}")' embedded-multiguard/app/routers/multiguard_updates.py
+          grep -Fq '@router.get("/update-assets/{channel}/{version}/{filename}")' embedded-multiguard/app/routers/multiguard_updates.py
+          grep -Fq 'TEST(?:-preview)?' embedded-multiguard/scripts/sync_multiguard_releases.py
 
       - name: Verify integration patch shape
         shell: bash
@@ -65,6 +70,7 @@ jobs:
           cp embedded-multiguard/app/routers/multiguard_runtime.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_runtime.py
           cp embedded-multiguard/app/routers/multiguard_remote.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_remote.py
           cp embedded-multiguard/app/routers/multiguard_meshcentral.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_meshcentral.py
+          cp embedded-multiguard/app/routers/multiguard_updates.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_updates.py
           python3 - <<'PY'
           from pathlib import Path
           p=Path('/tmp/msbackend/MultiServisServer_FINAL/app/main.py')
@@ -73,6 +79,7 @@ jobs:
               'from app.routers import multiguard_license',
               'from app.routers import multiguard_runtime',
               'from app.routers import multiguard_remote',
+              'from app.routers import multiguard_updates',
           ):
               if import_line not in s:
                   lines=s.splitlines()
@@ -86,6 +93,7 @@ jobs:
               'app.include_router(multiguard_license.router)',
               'app.include_router(multiguard_runtime.router)',
               'app.include_router(multiguard_remote.router)',
+              'app.include_router(multiguard_updates.router)',
           ):
               if include_line not in s:
                   marker='@app.get("/")'
@@ -98,4 +106,5 @@ jobs:
             /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_license.py \
             /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_runtime.py \
             /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_remote.py \
-            /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_meshcentral.py
+            /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_meshcentral.py \
+            /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_updates.py

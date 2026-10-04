@@ -1,6 +1,11 @@
 name: Deploy Multi-Servis Backend
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "embedded-multiguard/**"
+      - ".github/workflows/deploy-multiservis-backend.yml"
   workflow_dispatch:
     inputs:
       confirm:
@@ -17,7 +22,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: ${{ inputs.confirm == 'DEPLOY' }}
+    if: ${{ github.event_name == 'push' || inputs.confirm == 'DEPLOY' }}
     runs-on: ubuntu-latest
     environment: production
 
@@ -34,6 +39,8 @@ jobs:
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_runtime.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_meshcentral.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_updates.py
+          python3 -m py_compile embedded-multiguard/scripts/sync_multiguard_releases.py
 
       - name: Configure SSH
         shell: bash
@@ -119,6 +126,8 @@ jobs:
               '/multiguard/remote-sessions/{session_id}/connect',
               '/multiguard/remote-sessions/{session_id}/end',
               '/multiguard/remote/mesh-bind',
+              '/multiguard/releases/{target}/{arch}/{current_version}',
+              '/multiguard/update-assets/{channel}/{version}/{filename}',
           ]
           missing = [path for path in required if path not in paths]
           if missing:
@@ -134,4 +143,23 @@ jobs:
               raise SystemExit('Produkcja nie publikuje releaseChannel w GenerateLicenseRequest.')
 
           print('OK: produkcyjny backend Multi-Guard jest kompletny.')
+          PY
+
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 \
+            -H 'X-Multi-Guard-Installation: 00000000-0000-4000-8000-000000000029' \
+            https://api.multi-servis.pl/multiguard/releases/windows/x86_64/0.3.29 \
+            -o /tmp/multiguard-update.json
+
+          python3 - <<'PY'
+          import json
+          with open('/tmp/multiguard-update.json', 'r', encoding='utf-8-sig') as handle:
+              payload = json.load(handle)
+          version = tuple(int(part) for part in payload['version'].split('.'))
+          if version <= (0, 3, 29):
+              raise SystemExit('Updater nie oferuje wersji nowszej niż 0.3.29.')
+          if not payload.get('url', '').startswith('https://api.multi-servis.pl/multiguard/update-assets/'):
+              raise SystemExit('Updater nie serwuje artefaktu przez api.multi-servis.pl.')
+          if len(payload.get('sha256', '')) != 64 or not payload.get('signature'):
+              raise SystemExit('Updater nie zwraca pełnych danych podpisanego artefaktu.')
+          print('OK: 0.3.29 widzi aktualizację przez produkcyjny przycisk updatera.')
           PY

@@ -15,6 +15,11 @@ LICENSE_ROUTER_FILE="$ROUTER_DIR/multiguard_license.py"
 RUNTIME_ROUTER_FILE="$ROUTER_DIR/multiguard_runtime.py"
 REMOTE_ROUTER_FILE="$ROUTER_DIR/multiguard_remote.py"
 MESH_ADAPTER_FILE="$ROUTER_DIR/multiguard_meshcentral.py"
+UPDATES_ROUTER_FILE="$ROUTER_DIR/multiguard_updates.py"
+SCRIPT_DIR="$APP_ROOT/scripts"
+SYNC_SCRIPT_FILE="$SCRIPT_DIR/sync_multiguard_releases.py"
+RELEASE_ROOT="$APP_ROOT/releases/multiguard"
+GH_CONFIG_DIR="${MULTI_GUARD_GH_CONFIG_DIR:-/root/.config/gh-tomekjel}"
 MAIN_FILE="$APP_ROOT/app/main.py"
 BACKUP_DIR="$APP_ROOT/backups/multiguard-backend-$(date +%Y%m%d-%H%M%S)"
 OPENAPI_TMP="$(mktemp)"
@@ -23,6 +28,7 @@ HAD_LICENSE=0
 HAD_RUNTIME=0
 HAD_REMOTE=0
 HAD_MESH=0
+HAD_UPDATES=0
 
 cleanup() {
   rm -f "$OPENAPI_TMP"
@@ -55,6 +61,15 @@ rollback() {
     else
       rm -f "$MESH_ADAPTER_FILE"
     fi
+    if [ "$HAD_UPDATES" -eq 1 ]; then
+      cp -a "$BACKUP_DIR/multiguard_updates.py" "$UPDATES_ROUTER_FILE"
+    else
+      rm -f "$UPDATES_ROUTER_FILE"
+    fi
+    systemctl disable --now multiservis-multiguard-release-sync.timer >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/multiservis-multiguard-release-sync.service
+    rm -f /etc/systemd/system/multiservis-multiguard-release-sync.timer
+    systemctl daemon-reload || true
     systemctl restart multiservis-api.service || true
   fi
   echo "Backup: $BACKUP_DIR" >&2
@@ -64,9 +79,16 @@ trap rollback ERR
 
 command -v curl >/dev/null || { echo "Brak curl." >&2; exit 1; }
 command -v systemctl >/dev/null || { echo "Brak systemctl." >&2; exit 1; }
+command -v gh >/dev/null || { echo "Brak GitHub CLI (gh)." >&2; exit 1; }
 test -f "$MAIN_FILE" || { echo "Brak $MAIN_FILE" >&2; exit 1; }
 
-mkdir -p "$ROUTER_DIR" "$BACKUP_DIR"
+if [ ! -d "$GH_CONFIG_DIR" ] && [ -d /root/.config/gh ]; then
+  GH_CONFIG_DIR="/root/.config/gh"
+fi
+test -d "$GH_CONFIG_DIR" || { echo "Brak konfiguracji GitHub CLI dla prywatnego repo Multi-Guard." >&2; exit 1; }
+GH_CONFIG_DIR="$GH_CONFIG_DIR" gh auth status -h github.com >/dev/null
+
+mkdir -p "$ROUTER_DIR" "$SCRIPT_DIR" "$RELEASE_ROOT" "$BACKUP_DIR"
 cp -a "$MAIN_FILE" "$BACKUP_DIR/main.py"
 
 if [ -f "$LICENSE_ROUTER_FILE" ]; then
@@ -85,6 +107,10 @@ if [ -f "$MESH_ADAPTER_FILE" ]; then
   HAD_MESH=1
   cp -a "$MESH_ADAPTER_FILE" "$BACKUP_DIR/multiguard_meshcentral.py"
 fi
+if [ -f "$UPDATES_ROUTER_FILE" ]; then
+  HAD_UPDATES=1
+  cp -a "$UPDATES_ROUTER_FILE" "$BACKUP_DIR/multiguard_updates.py"
+fi
 
 DEPLOY_STARTED=1
 
@@ -92,7 +118,10 @@ curl -fsSL "$RAW_BASE/app/routers/multiguard_license.py" -o "$LICENSE_ROUTER_FIL
 curl -fsSL "$RAW_BASE/app/routers/multiguard_runtime.py" -o "$RUNTIME_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_remote.py" -o "$REMOTE_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_meshcentral.py" -o "$MESH_ADAPTER_FILE"
-chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE"
+curl -fsSL "$RAW_BASE/app/routers/multiguard_updates.py" -o "$UPDATES_ROUTER_FILE"
+curl -fsSL "$RAW_BASE/scripts/sync_multiguard_releases.py" -o "$SYNC_SCRIPT_FILE"
+chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE"
+chmod 0755 "$SYNC_SCRIPT_FILE"
 
 PYTHON="$APP_ROOT/.venv/bin/python"
 PIP="$APP_ROOT/.venv/bin/pip"
@@ -118,11 +147,13 @@ import_lines = [
     "from app.routers import multiguard_license",
     "from app.routers import multiguard_runtime",
     "from app.routers import multiguard_remote",
+    "from app.routers import multiguard_updates",
 ]
 include_lines = [
     "app.include_router(multiguard_license.router)",
     "app.include_router(multiguard_runtime.router)",
     "app.include_router(multiguard_remote.router)",
+    "app.include_router(multiguard_updates.router)",
 ]
 
 for import_line in import_lines:
@@ -146,10 +177,43 @@ for include_line in include_lines:
 path.write_text(source, encoding="utf-8")
 PY
 
-"$PYTHON" -m py_compile "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$MAIN_FILE"
+"$PYTHON" -m py_compile "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SYNC_SCRIPT_FILE" "$MAIN_FILE"
+
+cat > /etc/systemd/system/multiservis-multiguard-release-sync.service <<EOF
+[Unit]
+Description=Synchronizacja podpisanych release Multi-Guard
+After=network-online.target multiservis-api.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$APP_ROOT
+Environment=GH_CONFIG_DIR=$GH_CONFIG_DIR
+Environment=MULTI_GUARD_RELEASE_ROOT=$RELEASE_ROOT
+ExecStart=$PYTHON $SYNC_SCRIPT_FILE
+EOF
+
+cat > /etc/systemd/system/multiservis-multiguard-release-sync.timer <<'EOF'
+[Unit]
+Description=Okresowa synchronizacja release Multi-Guard
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Persistent=true
+Unit=multiservis-multiguard-release-sync.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now multiservis-multiguard-release-sync.timer
 
 systemctl restart multiservis-api.service
 systemctl is-active --quiet multiservis-api.service
+
+GH_CONFIG_DIR="$GH_CONFIG_DIR" MULTI_GUARD_RELEASE_ROOT="$RELEASE_ROOT" "$PYTHON" "$SYNC_SCRIPT_FILE"
 
 HEALTH_OK=0
 for _ in $(seq 1 30); do
@@ -201,6 +265,8 @@ required = [
     "/multiguard/remote-sessions/{session_id}/connect",
     "/multiguard/remote-sessions/{session_id}/end",
     "/multiguard/remote/mesh-bind",
+    "/multiguard/releases/{target}/{arch}/{current_version}",
+    "/multiguard/update-assets/{channel}/{version}/{filename}",
 ]
 missing = [item for item in required if item not in paths]
 if missing:
@@ -218,6 +284,35 @@ if "releaseChannel" not in properties:
 print("OK: wszystkie wymagane trasy Multi-Guard są widoczne w OpenAPI.")
 print("OK: generowanie licencji obsługuje releaseChannel.")
 PY
+
+MANIFEST_TMP="$(mktemp)"
+curl -fsS --max-time 20 \
+  -H 'X-Multi-Guard-Installation: 00000000-0000-4000-8000-000000000029' \
+  https://api.multi-servis.pl/multiguard/releases/windows/x86_64/0.3.29 \
+  -o "$MANIFEST_TMP"
+
+"$PYTHON" - "$MANIFEST_TMP" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8-sig") as handle:
+    payload = json.load(handle)
+
+version = tuple(int(part) for part in payload["version"].split("."))
+if version <= (0, 3, 29):
+    raise SystemExit("Backend updatera nie oferuje wersji nowszej niż 0.3.29.")
+if not str(payload.get("url") or "").startswith(
+    "https://api.multi-servis.pl/multiguard/update-assets/"
+):
+    raise SystemExit("Release nie jest serwowany przez api.multi-servis.pl.")
+if not str(payload.get("signature") or "").strip():
+    raise SystemExit("Brak podpisu aktualizacji.")
+sha = str(payload.get("sha256") or "")
+if len(sha) != 64:
+    raise SystemExit("Nieprawidłowy SHA-256 aktualizacji.")
+print("OK: 0.3.29 otrzymuje podpisaną aktualizację przez backend.")
+PY
+rm -f "$MANIFEST_TMP"
 
 trap - ERR
 echo "OK: backend Multi-Guard został wdrożony i zweryfikowany."
