@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import calendar
 import hashlib
+import html
 import json
 import os
 import secrets
@@ -123,6 +124,41 @@ class ReleaseChannelRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class DiscoveryRegisterRequest(BaseModel):
+    installation_id: str = Field(alias="installationId")
+    device_id: str = Field(alias="deviceId", min_length=16, max_length=128)
+    discovery_credential: str = Field(
+        alias="discoveryCredential", min_length=32, max_length=512
+    )
+    app_version: str = Field(default="", alias="appVersion", max_length=80)
+    hostname: str = Field(default="", max_length=160)
+    manufacturer: str = Field(default="", max_length=160)
+    model: str = Field(default="", max_length=240)
+    serial_number: str = Field(default="", alias="serialNumber", max_length=240)
+    os_version: str = Field(default="", alias="osVersion", max_length=160)
+
+    model_config = {"populate_by_name": True}
+
+
+class DiscoveryAssignmentRequest(BaseModel):
+    installation_id: str = Field(alias="installationId")
+    device_id: str = Field(alias="deviceId", min_length=16, max_length=128)
+    discovery_credential: str = Field(
+        alias="discoveryCredential", min_length=32, max_length=512
+    )
+
+    model_config = {"populate_by_name": True}
+
+
+class AssignPendingInstallationRequest(BaseModel):
+    reception_id: str = Field(alias="receptionId")
+    edition: str
+    months: int
+    release_channel: str = Field(default="STABLE", alias="releaseChannel")
+
+    model_config = {"populate_by_name": True}
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -143,6 +179,10 @@ def _add_months(value: datetime, months: int) -> datetime:
 
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _panel_escape(value: Any) -> str:
+    return html.escape(str(value if value is not None else ""))
 
 
 def _required_env(name: str) -> str:
@@ -432,6 +472,33 @@ CREATE INDEX IF NOT EXISTS idx_guard_license_links_device
 CREATE INDEX IF NOT EXISTS idx_guard_license_links_lifecycle
     ON guard.license_links(lifecycle);
 
+CREATE TABLE IF NOT EXISTS guard.pending_installations (
+    installation_id UUID PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    discovery_credential_sha256 TEXT NOT NULL
+        CHECK (length(discovery_credential_sha256)=64),
+    app_version TEXT NOT NULL DEFAULT '',
+    hostname TEXT,
+    manufacturer TEXT,
+    model TEXT,
+    serial_number TEXT,
+    os_version TEXT,
+    status TEXT NOT NULL DEFAULT 'WAITING'
+        CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED')),
+    assigned_reception_id UUID REFERENCES service.service_orders(id) ON DELETE SET NULL,
+    assigned_license_id TEXT,
+    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    assigned_at TIMESTAMPTZ,
+    provisioned_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guard_pending_installations_status_seen
+    ON guard.pending_installations(status,last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_guard_pending_installations_serial
+    ON guard.pending_installations(serial_number)
+    WHERE serial_number IS NOT NULL AND serial_number <> '';
+
 CREATE TABLE IF NOT EXISTS guard.installations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     service_device_id UUID NOT NULL REFERENCES core.devices(id) ON DELETE CASCADE,
@@ -525,6 +592,177 @@ def _link_by_installation(installation_id: uuid.UUID) -> dict[str, Any] | None:
             {"id": installation_id},
         ).mappings().first()
     return dict(row) if row else None
+
+
+
+def _pending_installation(
+    installation_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    _ensure_schema()
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT *
+                FROM guard.pending_installations
+                WHERE installation_id=:installation_id
+                LIMIT 1
+                """
+            ),
+            {"installation_id": installation_id},
+        ).mappings().first()
+    return dict(row) if row else None
+
+
+def _authenticate_pending(
+    installation_id: str,
+    device_id: str,
+    discovery_credential: str,
+) -> dict[str, Any]:
+    try:
+        iid = uuid.UUID(installation_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowy installationId.") from exc
+
+    pending = _pending_installation(iid)
+    if not pending:
+        raise HTTPException(404, "Instalacja nie jest zarejestrowana w kolejce.")
+
+    if not secrets.compare_digest(
+        str(pending["device_id"]),
+        device_id.strip(),
+    ):
+        raise HTTPException(401, "Identyfikator urządzenia nie pasuje do instalacji.")
+
+    if not secrets.compare_digest(
+        str(pending["discovery_credential_sha256"]),
+        _hash(discovery_credential),
+    ):
+        raise HTTPException(401, "Nieprawidłowe poświadczenie wykrywania instalacji.")
+
+    return pending
+
+
+def _pending_public(
+    row: dict[str, Any],
+    *,
+    match_score: int = 0,
+) -> dict[str, Any]:
+    last_seen = row.get("last_seen_at")
+    online = False
+    if last_seen:
+        try:
+            online = (_utcnow() - last_seen).total_seconds() <= 300
+        except Exception:
+            online = False
+
+    installation_id = str(row["installation_id"])
+    return {
+        "installationId": installation_id,
+        "shortId": "MG-" + installation_id.replace("-", "")[:8].upper(),
+        "deviceId": str(row.get("device_id") or ""),
+        "appVersion": str(row.get("app_version") or ""),
+        "hostname": str(row.get("hostname") or ""),
+        "manufacturer": str(row.get("manufacturer") or ""),
+        "model": str(row.get("model") or ""),
+        "serialNumber": str(row.get("serial_number") or ""),
+        "osVersion": str(row.get("os_version") or ""),
+        "status": str(row.get("status") or "WAITING"),
+        "online": online,
+        "firstSeenAt": _iso(row.get("first_seen_at")),
+        "lastSeenAt": _iso(last_seen),
+        "assignedReceptionId": (
+            str(row["assigned_reception_id"])
+            if row.get("assigned_reception_id")
+            else None
+        ),
+        "assignedLicenseId": row.get("assigned_license_id"),
+        "matchScore": int(match_score),
+        "recommended": int(match_score) >= 80,
+    }
+
+
+def _assign_pending_to_reception(
+    installation_id: uuid.UUID,
+    reception_id: uuid.UUID,
+    edition: str,
+    months: int,
+    release_channel: str,
+) -> dict[str, Any]:
+    pending = _pending_installation(installation_id)
+    if not pending:
+        raise HTTPException(404, "Nie znaleziono oczekującej instalacji Multi-Guard.")
+    if pending["status"] == "PROVISIONED":
+        raise HTTPException(409, "Ta instalacja Multi-Guard jest już powiązana.")
+
+    reception = _reception(reception_id)
+    existing = _link_by_reception_id(reception_id)
+
+    edition = edition.strip().upper()
+    release_channel = release_channel.strip().upper()
+    if edition not in {"STANDARD", "PRO"}:
+        raise HTTPException(400, "Edycja musi być STANDARD albo PRO.")
+    if months not in {3, 6, 12}:
+        raise HTTPException(400, "Okres musi wynosić 3, 6 albo 12 miesięcy.")
+    if release_channel not in {"STABLE", "PILOT"}:
+        raise HTTPException(400, "Kanał aktualizacji musi być STABLE albo PILOT.")
+
+    if existing:
+        existing_edition = (
+            "PRO"
+            if existing["plan_code"] == "multi_guard_pro"
+            else "STANDARD"
+        )
+        if (
+            existing_edition != edition
+            or int(existing["duration_months"]) != int(months)
+            or str(existing.get("release_channel") or "STABLE").upper()
+            != release_channel
+        ):
+            raise HTTPException(
+                409,
+                "Zlecenie ma już inną licencję Multi-Guard. "
+                "Użyj parametrów zapisanej licencji albo zmień ją osobno.",
+            )
+        if (
+            existing.get("installation_id")
+            and existing["installation_id"] != installation_id
+        ):
+            raise HTTPException(
+                409,
+                "Licencja tego zlecenia jest już przypisana do innej instalacji.",
+            )
+        link = existing
+    else:
+        link, _ = _generate_license_link(
+            reception_id=reception_id,
+            edition=edition,
+            months=months,
+            release_channel=release_channel,
+        )
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE guard.pending_installations
+                SET
+                    status='ASSIGNED',
+                    assigned_reception_id=:reception_id,
+                    assigned_license_id=:license_id,
+                    assigned_at=COALESCE(assigned_at,now()),
+                    updated_at=now()
+                WHERE installation_id=:installation_id
+                """
+            ),
+            {
+                "reception_id": reception["id"],
+                "license_id": link["keygate_license_id"],
+                "installation_id": installation_id,
+            },
+        )
+
+    return link
 
 
 def _reception(reception_id: uuid.UUID) -> dict[str, Any]:
@@ -808,6 +1046,176 @@ def _public_status(link: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+
+@router.post("/v1/multi-guard/discovery/register")
+def discovery_register(req: DiscoveryRegisterRequest):
+    _ensure_schema()
+    try:
+        installation_id = uuid.UUID(req.installation_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowy installationId.") from exc
+
+    credential_hash = _hash(req.discovery_credential)
+    now = _utcnow()
+
+    with engine.begin() as connection:
+        existing = connection.execute(
+            text(
+                """
+                SELECT *
+                FROM guard.pending_installations
+                WHERE installation_id=:installation_id
+                FOR UPDATE
+                """
+            ),
+            {"installation_id": installation_id},
+        ).mappings().first()
+
+        if existing:
+            if not secrets.compare_digest(
+                str(existing["device_id"]),
+                req.device_id.strip(),
+            ):
+                raise HTTPException(
+                    409,
+                    "installationId jest już powiązany z innym urządzeniem.",
+                )
+            if not secrets.compare_digest(
+                str(existing["discovery_credential_sha256"]),
+                credential_hash,
+            ):
+                raise HTTPException(
+                    401,
+                    "Nieprawidłowe poświadczenie wykrywania instalacji.",
+                )
+
+            row = connection.execute(
+                text(
+                    """
+                    UPDATE guard.pending_installations
+                    SET
+                        app_version=:app_version,
+                        hostname=NULLIF(:hostname,''),
+                        manufacturer=NULLIF(:manufacturer,''),
+                        model=NULLIF(:model,''),
+                        serial_number=NULLIF(:serial_number,''),
+                        os_version=NULLIF(:os_version,''),
+                        last_seen_at=:now,
+                        updated_at=:now
+                    WHERE installation_id=:installation_id
+                    RETURNING *
+                    """
+                ),
+                {
+                    "app_version": req.app_version.strip(),
+                    "hostname": req.hostname.strip(),
+                    "manufacturer": req.manufacturer.strip(),
+                    "model": req.model.strip(),
+                    "serial_number": req.serial_number.strip(),
+                    "os_version": req.os_version.strip(),
+                    "now": now,
+                    "installation_id": installation_id,
+                },
+            ).mappings().one()
+        else:
+            row = connection.execute(
+                text(
+                    """
+                    INSERT INTO guard.pending_installations(
+                        installation_id,device_id,discovery_credential_sha256,
+                        app_version,hostname,manufacturer,model,serial_number,
+                        os_version,first_seen_at,last_seen_at,updated_at
+                    )
+                    VALUES(
+                        :installation_id,:device_id,:credential_sha256,
+                        :app_version,NULLIF(:hostname,''),NULLIF(:manufacturer,''),
+                        NULLIF(:model,''),NULLIF(:serial_number,''),
+                        NULLIF(:os_version,''),:now,:now,:now
+                    )
+                    RETURNING *
+                    """
+                ),
+                {
+                    "installation_id": installation_id,
+                    "device_id": req.device_id.strip(),
+                    "credential_sha256": credential_hash,
+                    "app_version": req.app_version.strip(),
+                    "hostname": req.hostname.strip(),
+                    "manufacturer": req.manufacturer.strip(),
+                    "model": req.model.strip(),
+                    "serial_number": req.serial_number.strip(),
+                    "os_version": req.os_version.strip(),
+                    "now": now,
+                },
+            ).mappings().one()
+
+    return {
+        **_pending_public(dict(row)),
+        "serverTime": _iso(now),
+    }
+
+
+@router.post("/v1/multi-guard/discovery/assignment")
+def discovery_assignment(req: DiscoveryAssignmentRequest):
+    pending = _authenticate_pending(
+        req.installation_id,
+        req.device_id,
+        req.discovery_credential,
+    )
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE guard.pending_installations
+                SET last_seen_at=now(),updated_at=now()
+                WHERE installation_id=:installation_id
+                """
+            ),
+            {"installation_id": pending["installation_id"]},
+        )
+
+    reception_id = pending.get("assigned_reception_id")
+    if not reception_id or pending["status"] == "WAITING":
+        return {
+            "assigned": False,
+            "status": pending["status"],
+            "serverTime": _iso(_utcnow()),
+        }
+
+    link = _link_by_reception_id(reception_id)
+    if not link:
+        raise HTTPException(
+            409,
+            "Instalacja jest przypisana do zlecenia bez licencji Multi-Guard.",
+        )
+
+    if (
+        link.get("installation_id")
+        and link["installation_id"] != pending["installation_id"]
+    ):
+        raise HTTPException(
+            409,
+            "Licencja została przypisana do innej instalacji Multi-Guard.",
+        )
+
+    return {
+        "assigned": True,
+        "status": pending["status"],
+        "receptionId": str(link["reception_id"]),
+        "receptionNumber": link["reception_number"],
+        "edition": (
+            "PRO"
+            if link["plan_code"] == "multi_guard_pro"
+            else "STANDARD"
+        ),
+        "durationMonths": int(link["duration_months"]),
+        "releaseChannel": link.get("release_channel") or "STABLE",
+        "provisioningToken": _keygate_reveal(link["keygate_license_id"]),
+        "serverTime": _iso(_utcnow()),
+    }
+
+
 @router.get("/v1/multi-guard/license/pubkey")
 def license_pubkey():
     return {
@@ -886,6 +1294,26 @@ def provision(req: ProvisionRequest):
         ).mappings().one()
         link = _normalize_link(dict(row))
         _update_installation_mirror(connection, link)
+        connection.execute(
+            text(
+                """
+                UPDATE guard.pending_installations
+                SET
+                    status='PROVISIONED',
+                    assigned_reception_id=:reception_id,
+                    assigned_license_id=:license_id,
+                    provisioned_at=COALESCE(provisioned_at,now()),
+                    last_seen_at=now(),
+                    updated_at=now()
+                WHERE installation_id=:installation_id
+                """
+            ),
+            {
+                "reception_id": link["reception_id"],
+                "license_id": link["keygate_license_id"],
+                "installation_id": installation_id,
+            },
+        )
 
     return {
         "requestId": req.request_id,
@@ -1175,6 +1603,245 @@ def _generate_license_link(
         ) from exc
 
     return link, license_key
+
+
+
+@router.get("/multiguard/pending-installations")
+def pending_installations(
+    reception_id: str = "",
+    include_assigned: bool = True,
+    user: CurrentUser = Depends(require_owner),
+):
+    _ensure_schema()
+    target = None
+
+    if reception_id.strip():
+        try:
+            rid = uuid.UUID(reception_id)
+        except ValueError as exc:
+            raise HTTPException(400, "Nieprawidłowe ID zlecenia.") from exc
+
+        with engine.connect() as connection:
+            target = connection.execute(
+                text(
+                    """
+                    SELECT
+                        d.manufacturer,d.model,d.serial_number,d.hostname
+                    FROM service.service_orders so
+                    LEFT JOIN core.devices d ON d.id=so.device_id
+                    WHERE so.id=:reception_id
+                    LIMIT 1
+                    """
+                ),
+                {"reception_id": rid},
+            ).mappings().first()
+
+    where = (
+        "WHERE status IN ('WAITING','ASSIGNED')"
+        if include_assigned
+        else "WHERE status='WAITING'"
+    )
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                f"""
+                SELECT *
+                FROM guard.pending_installations
+                {where}
+                ORDER BY
+                    CASE status WHEN 'WAITING' THEN 0 ELSE 1 END,
+                    last_seen_at DESC
+                LIMIT 250
+                """
+            )
+        ).mappings().all()
+
+    result = []
+    for raw in rows:
+        row = dict(raw)
+        score = 0
+        if target:
+            pending_serial = str(row.get("serial_number") or "").strip().lower()
+            target_serial = str(target["serial_number"] or "").strip().lower()
+            if pending_serial and target_serial and pending_serial == target_serial:
+                score += 100
+
+            pending_model = str(row.get("model") or "").strip().lower()
+            target_model = str(target["model"] or "").strip().lower()
+            if pending_model and target_model and pending_model == target_model:
+                score += 35
+
+            pending_manufacturer = (
+                str(row.get("manufacturer") or "").strip().lower()
+            )
+            target_manufacturer = (
+                str(target["manufacturer"] or "").strip().lower()
+            )
+            if (
+                pending_manufacturer
+                and target_manufacturer
+                and pending_manufacturer == target_manufacturer
+            ):
+                score += 15
+
+        result.append(_pending_public(row, match_score=score))
+
+    result.sort(
+        key=lambda item: (
+            -int(item["matchScore"]),
+            0 if item["online"] else 1,
+            item["status"] != "WAITING",
+            item["lastSeenAt"] or "",
+        )
+    )
+    return result
+
+
+@router.post("/multiguard/pending-installations/{installation_id}/assign")
+def assign_pending_installation(
+    installation_id: str,
+    body: AssignPendingInstallationRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    try:
+        iid = uuid.UUID(installation_id)
+        rid = uuid.UUID(body.reception_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowy identyfikator.") from exc
+
+    link = _assign_pending_to_reception(
+        iid,
+        rid,
+        body.edition,
+        body.months,
+        body.release_channel,
+    )
+    pending = _pending_installation(iid)
+    return {
+        **_public_status(link),
+        "pendingInstallation": (
+            _pending_public(pending) if pending else None
+        ),
+        "autoProvision": True,
+    }
+
+
+
+@router.get(
+    "/multiguard/panel/pending/{installation_id}",
+    response_class=HTMLResponse,
+)
+def multiguard_panel_pending(
+    installation_id: str,
+    _: None = Depends(_panel_auth),
+):
+    try:
+        iid = uuid.UUID(installation_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowe ID instalacji.") from exc
+
+    pending = _pending_installation(iid)
+    if not pending:
+        raise HTTPException(404, "Nie znaleziono oczekującej instalacji.")
+
+    public = _pending_public(pending)
+    device = " ".join(
+        part for part in [
+            public["manufacturer"].strip(),
+            public["model"].strip(),
+        ] if part
+    ) or public["hostname"] or "Nieznany komputer"
+
+    return _panel_html(
+        f"""
+        <section class="card">
+          <a href="/multiguard/panel/dashboard">← Wróć do pulpitu</a>
+          <h1>Przypisz {_panel_escape(public['shortId'])}</h1>
+          <p>
+            <b>{_panel_escape(device)}</b>
+            • wersja {_panel_escape(public['appVersion'] or '—')}
+            • {'ONLINE' if public['online'] else 'offline'}
+          </p>
+          <p>
+            Serial: {_panel_escape(public['serialNumber'] or '—')}
+            • host: {_panel_escape(public['hostname'] or '—')}
+          </p>
+          <form method="post" action="/multiguard/panel/pending/{installation_id}/assign">
+            <label>Numer zlecenia Multi-Servis
+              <input name="reception_number" placeholder="np. MS-2026-00123" required>
+            </label>
+            <div class="grid">
+              <label>Wersja
+                <select name="edition">
+                  <option value="STANDARD">Multi-Guard Standard</option>
+                  <option value="PRO">Multi-Guard Pro</option>
+                </select>
+              </label>
+              <label>Okres
+                <select name="months">
+                  <option value="3">3 miesiące</option>
+                  <option value="6">6 miesięcy</option>
+                  <option value="12" selected>12 miesięcy</option>
+                </select>
+              </label>
+              <label>Kanał
+                <select name="release_channel">
+                  <option value="STABLE" selected>Stabilna</option>
+                  <option value="PILOT">Beta</option>
+                </select>
+              </label>
+            </div>
+            <button type="submit">PRZYPISZ I PRZYGOTUJ LICENCJĘ</button>
+          </form>
+        </section>
+        """
+    )
+
+
+@router.post(
+    "/multiguard/panel/pending/{installation_id}/assign",
+    response_class=HTMLResponse,
+)
+def multiguard_panel_pending_assign(
+    installation_id: str,
+    reception_number: str = Form(...),
+    edition: str = Form(...),
+    months: int = Form(...),
+    release_channel: str = Form("STABLE"),
+    _: None = Depends(_panel_auth),
+):
+    try:
+        iid = uuid.UUID(installation_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowe ID instalacji.") from exc
+
+    reception = _reception_by_number(reception_number)
+    link = _assign_pending_to_reception(
+        iid,
+        reception["id"],
+        edition,
+        months,
+        release_channel,
+    )
+    pending = _pending_installation(iid)
+    public = _pending_public(pending) if pending else {}
+
+    return _panel_html(
+        f"""
+        <section class="card">
+          <h1>Licencja przypisana</h1>
+          <p class="ok">
+            {_panel_escape(public.get('shortId') or installation_id)}
+            → {_panel_escape(link['reception_number'])}
+          </p>
+          <p>
+            Multi-Guard na tym komputerze może teraz automatycznie odebrać
+            przypisanie i przejść do SERVICE_TEST bez ręcznego przepisywania klucza.
+          </p>
+          <a class="button-link" href="/multiguard/panel/dashboard">WRÓĆ DO PULPITU</a>
+        </section>
+        """
+    )
 
 
 @router.get("/multiguard/panel", response_class=HTMLResponse)

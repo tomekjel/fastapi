@@ -32,6 +32,10 @@ jobs:
         run: |
           set -euo pipefail
           grep -Fq '@router.post("/multiguard/licenses/receptions/{reception_id}/release-channel")' embedded-multiguard/app/routers/multiguard_license.py
+          grep -Fq '@router.post("/v1/multi-guard/discovery/register")' embedded-multiguard/app/routers/multiguard_license.py
+          grep -Fq '@router.post("/v1/multi-guard/discovery/assignment")' embedded-multiguard/app/routers/multiguard_license.py
+          grep -Fq '@router.get("/multiguard/pending-installations")' embedded-multiguard/app/routers/multiguard_license.py
+          grep -Fq '@router.post("/multiguard/pending-installations/{installation_id}/assign")' embedded-multiguard/app/routers/multiguard_license.py
           grep -Fq '@router.get("/overview")' embedded-multiguard/app/routers/multiguard_runtime.py
           grep -Fq '@router.get("/notifications")' embedded-multiguard/app/routers/multiguard_runtime.py
           grep -Fq '@router.get("/support-requests")' embedded-multiguard/app/routers/multiguard_runtime.py

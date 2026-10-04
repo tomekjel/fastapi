@@ -1153,6 +1153,30 @@ def multi_guard_panel_dashboard(
             )
         ).scalar_one()
 
+        pending_count = connection.execute(
+            text(
+                """
+                SELECT count(*)
+                FROM guard.pending_installations
+                WHERE status='WAITING'
+                """
+            )
+        ).scalar_one()
+
+        pending_rows = connection.execute(
+            text(
+                """
+                SELECT *
+                FROM guard.pending_installations
+                WHERE status IN ('WAITING','ASSIGNED')
+                ORDER BY
+                    CASE status WHEN 'WAITING' THEN 0 ELSE 1 END,
+                    last_seen_at DESC
+                LIMIT 100
+                """
+            )
+        ).mappings().all()
+
     devices = _fetch_device_rows(250)
 
     metrics = [
@@ -1165,6 +1189,7 @@ def multi_guard_panel_dashboard(
         ("Brak kontaktu 30 dni", counts["no_contact_30d"]),
         ("Nieodczytane", int(unread or 0)),
         ("Otwarte zgłoszenia", int(open_support or 0)),
+        ("Nowe instalacje", int(pending_count or 0)),
     ]
     metrics_html = "".join(
         f'<div class="metric"><b>{_panel_h(label)}</b><strong>{int(value or 0)}</strong></div>'
@@ -1213,12 +1238,80 @@ def multi_guard_panel_dashboard(
             '<tr><td colspan="8" class="muted">Brak zarejestrowanych instalacji Multi-Guard.</td></tr>'
         )
 
+    pending_html = []
+    for pending in pending_rows:
+        installation_external = pending["installation_id"]
+        short_id = _short_installation_id(installation_external)
+        last_seen = pending["last_seen_at"]
+        online = False
+        if last_seen:
+            try:
+                online = (
+                    datetime.now(timezone.utc) - last_seen
+                ).total_seconds() <= 300
+            except Exception:
+                online = False
+        device_label = " ".join(
+            part for part in [
+                str(pending["manufacturer"] or "").strip(),
+                str(pending["model"] or "").strip(),
+            ] if part
+        ) or str(pending["hostname"] or "Nieznany komputer")
+        state_label = (
+            "OCZEKUJE NA PRZYPISANIE"
+            if pending["status"] == "WAITING"
+            else "LICENCJA PRZYPISANA — CZEKA NA ODBIÓR"
+        )
+        action = (
+            f'<a class="button-link" href="/multiguard/panel/pending/{installation_external}">PRZYPISZ</a>'
+            if pending["status"] == "WAITING"
+            else '<span class="badge good">AUTO-PROVISION</span>'
+        )
+        pending_html.append(
+            f"""
+            <tr>
+              <td class="mono">{_panel_h(short_id)}</td>
+              <td><b>{_panel_h(device_label)}</b><br><span class="muted">{_panel_h(pending["serial_number"] or pending["hostname"] or "")}</span></td>
+              <td>{_panel_h(pending["app_version"] or "—")}</td>
+              <td><span class="badge {"good" if online else "muted"}">{"ONLINE" if online else "offline"}</span></td>
+              <td>{_panel_h(state_label)}</td>
+              <td>{_panel_dt(last_seen)}</td>
+              <td>{action}</td>
+            </tr>
+            """
+        )
+
+    if not pending_html:
+        pending_html.append(
+            '<tr><td colspan="7" class="muted">Brak nowych, nieprzypisanych instalacji Multi-Guard.</td></tr>'
+        )
+
     return _panel_html(
         f"""
         <section class="card">
           <h1>Multi-Guard — Centrum właściciela</h1>
           <p>Widok komputerowy do zarządzania flotą, zgłoszeniami, telemetrią i licencjami.</p>
           <div class="metrics">{metrics_html}</div>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <div>
+              <h2>Nowe / nieprzypisane instalacje</h2>
+              <p>Multi-Guard wykryty po instalacji, ale jeszcze bez przypisanej licencji.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th><th>Komputer</th><th>Wersja</th><th>Połączenie</th>
+                  <th>Status</th><th>Ostatnio widziany</th><th>Akcja</th>
+                </tr>
+              </thead>
+              <tbody>{''.join(pending_html)}</tbody>
+            </table>
+          </div>
         </section>
 
         <section class="card" id="devices">
