@@ -62,3 +62,28 @@ Po zielonym workflow należy na telefonie odświeżyć ekran:
 **Multi-Guard → Centrum właściciela**
 
 Błąd `HTTP 404 {"detail":"Not Found"}` nie powinien się już pojawiać. Następnie można przetestować zapis kanału Stabilna/Beta oraz dalszą integrację z Multi-Guard dla Windows.
+
+
+## Aktualizacje Multi-Guard przez przycisk
+
+Backend publikuje docelowy endpoint:
+
+`/multiguard/releases/{target}/{arch}/{current_version}`
+
+oraz serwuje podpisane artefakty spod:
+
+`/multiguard/update-assets/{channel}/{version}/{filename}`
+
+`embedded-multiguard/install.sh` instaluje timer
+`multiservis-multiguard-release-sync.timer`. Timer co 2 minuty używa lokalnego
+GitHub CLI serwera do odczytu prywatnego repo `tomekjel/multi-guard`, pobiera tylko
+podpisane release `TEST / LICENSE_TEST / PILOT / STABLE`, weryfikuje SHA-256 i
+rejestruje je w `guard.release_versions` oraz `guard.release_artifacts`.
+
+Klient nigdy nie pobiera pliku z prywatnego repo GitHub. Dostaje URL
+`https://api.multi-servis.pl/multiguard/update-assets/...`, a podpis Tauri jest
+weryfikowany po stronie aplikacji.
+
+Dla już zainstalowanej wersji 0.3.29 backend ma ograniczony most zgodności do
+kanału TEST. Od 0.3.30 klient wysyła nagłówek `X-Multi-Guard-Channel`, więc
+kolejne wersje używają normalnego mechanizmu kanałów.

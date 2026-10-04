@@ -1,11 +1,6 @@
 name: Deploy Multi-Servis Backend
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "embedded-multiguard/**"
-      - ".github/workflows/deploy-multiservis-backend.yml"
   workflow_dispatch:
     inputs:
       confirm:
@@ -22,7 +17,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'push' || inputs.confirm == 'DEPLOY' }}
+    if: ${{ inputs.confirm == 'DEPLOY' }}
     runs-on: ubuntu-latest
     environment: production
 

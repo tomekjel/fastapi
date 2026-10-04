@@ -234,7 +234,12 @@ def main() -> int:
             (semver_key(version), release, version, channel, exe_asset, sig_asset)
         )
 
-    candidates.sort(key=lambda item: item[0])
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            str(item[1].get("published_at") or item[1].get("created_at") or ""),
+        )
+    )
 
     if not candidates:
         print("Brak podpisanych release Multi-Guard do synchronizacji.")
