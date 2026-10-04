@@ -174,9 +174,7 @@ def _normalized_channel(value: Optional[str]) -> Optional[str]:
 def _resolve_channel(
     connection,
     installation_header: Optional[str],
-    requested_channel: Optional[str],
-    current_version: str,
-) -> tuple[Optional[str], Optional[uuid.UUID]]:
+) -> tuple[str, Optional[uuid.UUID]]:
     installation_uuid: Optional[uuid.UUID] = None
     if installation_header:
         try:
@@ -202,21 +200,11 @@ def _resolve_channel(
             if channel:
                 return channel, installation_uuid
 
-    # TEST builds are intentionally usable before provisioning. Starting with
-    # 0.3.30 the desktop client explicitly sends X-Multi-Guard-Channel=TEST.
-    requested = _normalized_channel(requested_channel)
-    if requested == "TEST":
-        return "TEST", installation_uuid
-
-    # Compatibility bridge for the already-installed 0.3.29 TEST build, which
-    # predates the channel header. It is deliberately bounded to <= 0.3.29.
-    try:
-        if _semver(current_version) <= (0, 3, 29):
-            return "TEST", installation_uuid
-    except HTTPException:
-        pass
-
-    return None, installation_uuid
+    # Unprovisioned/unknown installations are server-owned TEST devices.
+    # They may receive signed TEST builds, but can never select PILOT/STABLE.
+    # Once provisioning creates guard.installations, the stored release_channel
+    # becomes authoritative.
+    return "TEST", installation_uuid
 
 
 @router.get("/releases/{target}/{arch}/{current_version}")
@@ -227,9 +215,6 @@ def release_manifest(
     x_multi_guard_installation: Optional[str] = Header(
         default=None, alias="X-Multi-Guard-Installation"
     ),
-    x_multi_guard_channel: Optional[str] = Header(
-        default=None, alias="X-Multi-Guard-Channel"
-    ),
 ):
     _ensure_schema()
     current = _semver(current_version)
@@ -238,11 +223,7 @@ def release_manifest(
         channel, installation_uuid = _resolve_channel(
             connection,
             x_multi_guard_installation,
-            x_multi_guard_channel,
-            current_version,
         )
-        if channel is None:
-            return Response(status_code=204)
 
         blocked = connection.execute(
             text(
