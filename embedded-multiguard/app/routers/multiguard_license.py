@@ -860,64 +860,392 @@ def _panel_html(body: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Multi-Servis — Multi-Guard</title>
+<title>Multi-Guard — Multi-Servis</title>
 <style>
-:root{{font-family:Segoe UI,Arial,sans-serif;color:#eef7ff;background:#06101f}}
+:root{{
+  font-family:"Segoe UI Variable Text","Segoe UI",Inter,system-ui,sans-serif;
+  color:#eaf6ff;
+  background:#020d19;
+  font-weight:400;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  --bg:#020d19;
+  --panel-a:rgba(6,27,46,.90);
+  --panel-b:rgba(2,17,30,.94);
+  --panel-border:rgba(40,137,198,.44);
+  --panel-highlight:rgba(95,211,255,.05);
+  --cyan:#25baf8;
+  --cyan-soft:rgba(37,186,248,.14);
+  --blue:#168bff;
+  --warm:#ff4167;
+  --warm-soft:rgba(255,65,103,.16);
+  --muted:#91aabc;
+  --muted2:#6f8a9f;
+  --good:#64dca4;
+  --warning:#e6c35d;
+  --danger:#ff7180;
+}}
 *{{box-sizing:border-box}}
-body{{margin:0;min-height:100vh;background:#06101f}}
-main{{width:min(1480px,96vw);margin:28px auto 64px}}
-nav{{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px}}
-nav a,.button-link{{display:inline-block;padding:10px 14px;border:1px solid #2d5677;border-radius:9px;background:#0a192b;color:#d8efff;text-decoration:none;font-weight:700}}
-nav a:hover,.button-link:hover{{background:#12304d}}
-.card{{background:#0a192b;border:1px solid #23425f;border-radius:18px;padding:22px;margin-bottom:16px;box-shadow:0 20px 60px #0007}}
-h1,h2{{margin:0 0 8px}}p{{color:#9fb4c8;line-height:1.5;margin:6px 0 14px}}
-form{{display:grid;gap:14px}}label{{display:grid;gap:6px;font-size:13px;color:#c8d9e8}}
-input,select{{width:100%;padding:12px;border:1px solid #2d5677;border-radius:9px;background:#07182a;color:#eef7ff}}
-button{{border:0;border-radius:9px;padding:12px 16px;background:#139ce7;color:#fff;font-weight:700;cursor:pointer}}
-.grid{{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px}}
-.metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-top:16px}}
-.metric{{padding:14px;border:1px solid #23425f;border-radius:12px;background:#07182a}}
-.metric b{{display:block;color:#9fb4c8;font-size:12px;margin-bottom:5px}}
-.metric strong{{font-size:26px}}
-.section-head{{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}}
-.table-wrap{{overflow:auto;border:1px solid #1d3b57;border-radius:12px}}
-table{{width:100%;border-collapse:collapse;min-width:900px}}
-th,td{{padding:11px 12px;text-align:left;border-bottom:1px solid #17334d;vertical-align:top}}
-th{{position:sticky;top:0;background:#0d2138;color:#b8d2e8;font-size:12px;text-transform:uppercase;letter-spacing:.04em}}
-tr:hover td{{background:#0c1f34}}
-.badge{{display:inline-block;padding:3px 7px;border-radius:999px;background:#163451;border:1px solid #2d5677;font-size:12px;font-weight:700}}
-.good{{color:#61e7a2;border-color:#267f5b}}.warn{{color:#ffd27a;border-color:#84641e}}.bad{{color:#ffad72;border-color:#9a4f24}}.critical{{color:#ff7c7c;border-color:#a63131}}
-.muted{{color:#7892a9;font-size:12px}}
-.mono{{font-family:Consolas,ui-monospace,monospace}}
+html{{min-height:100%;background:var(--bg)}}
+body{{
+  margin:0;
+  min-height:100vh;
+  color:#eaf6ff;
+  background:
+    radial-gradient(ellipse at 20% -8%,rgba(32,116,255,.17),transparent 34%),
+    radial-gradient(ellipse at 94% 14%,rgba(31,203,255,.07),transparent 25%),
+    radial-gradient(ellipse at 76% 92%,rgba(255,65,103,.035),transparent 28%),
+    var(--bg);
+}}
+body:before{{
+  content:"";
+  position:fixed;
+  inset:-8% -5%;
+  pointer-events:none;
+  background:
+    radial-gradient(ellipse at 34% 12%,rgba(19,120,255,.08),transparent 30%),
+    radial-gradient(ellipse at 84% 40%,rgba(255,65,103,.055),transparent 26%);
+  filter:blur(28px);
+  opacity:.9;
+}}
+main{{
+  position:relative;
+  z-index:1;
+  width:min(1540px,97vw);
+  margin:18px auto 54px;
+  display:grid;
+  grid-template-columns:220px minmax(0,1fr);
+  gap:18px;
+  align-items:start;
+}}
+nav{{
+  position:sticky;
+  top:18px;
+  display:flex;
+  flex-direction:column;
+  gap:7px;
+  min-height:calc(100vh - 36px);
+  padding:16px 12px;
+  border:1px solid rgba(38,117,170,.34);
+  border-radius:18px;
+  background:linear-gradient(180deg,rgba(4,19,35,.97),rgba(2,12,24,.985));
+  box-shadow:10px 0 34px rgba(0,0,0,.24),inset -1px 0 rgba(120,215,255,.025);
+}}
+.panel-brand{{
+  padding:6px 8px 16px;
+  margin-bottom:3px;
+  border-bottom:1px solid rgba(65,139,181,.18);
+}}
+.panel-brand strong{{
+  display:block;
+  font-size:18px;
+  line-height:1.15;
+  font-weight:500;
+  letter-spacing:-.018em;
+  color:#eefaff;
+}}
+.panel-brand span{{
+  display:block;
+  margin-top:4px;
+  font-size:11px;
+  font-weight:400;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:#53d9ff;
+}}
+nav a,.button-link{{
+  display:block;
+  padding:10px 11px;
+  border:1px solid transparent;
+  border-radius:10px;
+  color:#cfe6f6;
+  text-decoration:none;
+  font-size:13px;
+  font-weight:400;
+  letter-spacing:.01em;
+  background:transparent;
+  transition:background .15s ease,border-color .15s ease,box-shadow .15s ease,color .15s ease;
+}}
+nav a:hover,.button-link:hover{{
+  color:#f1fbff;
+  border-color:rgba(71,166,220,.18);
+  background:rgba(10,71,114,.26);
+}}
+nav a.active{{
+  color:#f5fbff;
+  border-color:rgba(86,194,255,.30);
+  background:linear-gradient(90deg,rgba(15,125,242,.78),rgba(87,48,211,.58));
+  box-shadow:0 0 13px rgba(0,132,255,.20),0 0 24px rgba(103,50,221,.09);
+}}
+main>section{{
+  grid-column:2;
+  min-width:0;
+}}
+.card{{
+  background:
+    radial-gradient(ellipse at 100% 0%,rgba(61,65,255,.02),transparent 30%),
+    linear-gradient(180deg,var(--panel-a),var(--panel-b));
+  border:1px solid var(--panel-border);
+  border-radius:18px;
+  padding:20px;
+  margin-bottom:14px;
+  box-shadow:inset 0 1px 0 var(--panel-highlight),0 10px 28px rgba(0,0,0,.16);
+}}
+h1,h2,h3,h4,strong,b,button{{
+  font-weight:500;
+}}
+h1,h2,h3{{
+  margin:0 0 8px;
+  color:#edf8ff;
+  letter-spacing:-.015em;
+}}
+h1{{font-size:24px}}
+h2{{font-size:18px}}
+p{{
+  color:#9fb5c4;
+  line-height:1.55;
+  margin:6px 0 14px;
+  font-weight:400;
+}}
+a{{color:#63d9ff}}
+form{{display:grid;gap:13px}}
+label{{
+  display:grid;
+  gap:6px;
+  font-size:12px;
+  color:#bdd2e1;
+  font-weight:400;
+}}
+input,select,textarea{{
+  width:100%;
+  padding:11px 12px;
+  border:1px solid rgba(53,127,173,.42);
+  border-radius:10px;
+  outline:none;
+  background:rgba(3,18,32,.84);
+  color:#e8f6ff;
+  font:400 13px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  transition:border-color .15s ease,box-shadow .15s ease,background .15s ease;
+}}
+input:focus,select:focus,textarea:focus{{
+  border-color:rgba(53,185,239,.68);
+  box-shadow:0 0 0 2px rgba(32,183,238,.08);
+  background:rgba(4,23,40,.92);
+}}
+button{{
+  position:relative;
+  border:1px solid rgba(255,255,255,.13);
+  border-radius:10px;
+  padding:11px 15px;
+  color:#fff8fa;
+  background:linear-gradient(180deg,#ff5675,#ff315b);
+  box-shadow:0 0 8px rgba(255,45,91,.27),0 7px 18px rgba(0,0,0,.22),inset 0 1px rgba(255,255,255,.19);
+  cursor:pointer;
+  font-size:13px;
+  transition:filter .15s ease,transform .15s ease,box-shadow .15s ease;
+}}
+button:hover{{
+  filter:brightness(1.04);
+  transform:translateY(-1px);
+  box-shadow:0 0 11px rgba(255,45,91,.32),0 8px 20px rgba(0,0,0,.24),inset 0 1px rgba(255,255,255,.22);
+}}
+.button-link{{
+  display:inline-block;
+  padding:9px 12px;
+  border-color:rgba(48,135,188,.48);
+  background:linear-gradient(180deg,rgba(6,32,54,.86),rgba(3,21,38,.88));
+}}
+.grid{{
+  display:grid;
+  grid-template-columns:2fr 1fr 1fr;
+  gap:11px;
+}}
+.metrics{{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(142px,1fr));
+  gap:10px;
+  margin-top:15px;
+}}
+.metric{{
+  padding:13px 14px;
+  border:1px solid rgba(45,125,178,.34);
+  border-radius:12px;
+  background:linear-gradient(180deg,rgba(5,29,49,.72),rgba(2,19,34,.78));
+  box-shadow:inset 0 1px rgba(125,216,255,.02);
+}}
+.metric b{{
+  display:block;
+  color:#8faabd;
+  font-size:11px;
+  font-weight:400;
+  margin-bottom:6px;
+}}
+.metric strong{{
+  display:block;
+  font-size:25px;
+  font-weight:500;
+  letter-spacing:-.02em;
+  color:#edf9ff;
+}}
+.section-head{{
+  display:flex;
+  justify-content:space-between;
+  gap:16px;
+  align-items:flex-start;
+  flex-wrap:wrap;
+  padding-bottom:10px;
+  border-bottom:1px solid rgba(62,137,178,.12);
+}}
+.table-wrap{{
+  overflow:auto;
+  border:1px solid rgba(45,125,178,.30);
+  border-radius:12px;
+  background:rgba(3,18,32,.28);
+}}
+table{{
+  width:100%;
+  border-collapse:collapse;
+  min-width:900px;
+  font-size:13px;
+}}
+th,td{{
+  padding:10px 12px;
+  text-align:left;
+  border-bottom:1px solid rgba(43,105,145,.19);
+  vertical-align:top;
+  font-weight:400;
+}}
+th{{
+  position:sticky;
+  top:0;
+  z-index:1;
+  background:rgba(7,31,52,.96);
+  color:#96b4c8;
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:.09em;
+  font-weight:500;
+}}
+tr:hover td{{background:rgba(12,55,87,.24)}}
+.badge{{
+  display:inline-block;
+  padding:3px 7px;
+  border-radius:999px;
+  background:rgba(14,55,87,.58);
+  border:1px solid rgba(48,135,188,.42);
+  color:#cceaff;
+  font-size:11px;
+  font-weight:500;
+}}
+.good{{color:var(--good);border-color:rgba(60,155,108,.54)}}
+.warn{{color:var(--warning);border-color:rgba(160,127,43,.52)}}
+.bad{{color:#ffad72;border-color:rgba(154,79,36,.54)}}
+.critical{{color:var(--danger);border-color:rgba(166,49,49,.60)}}
+.muted{{color:var(--muted2);font-size:11px;font-weight:400}}
+.mono{{font-family:"Cascadia Mono",Consolas,ui-monospace,monospace;font-weight:400}}
 .numbers{{white-space:nowrap}}
-.detail-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:14px}}
-.detail-grid>div{{padding:12px;border:1px solid #23425f;border-radius:10px;background:#07182a}}
-.detail-grid b,.detail-grid span{{display:block}}.detail-grid span{{margin-top:5px;color:#cce0ef}}
-.key{{display:block;padding:15px;margin:14px 0;background:#03101c;border:1px solid #24618c;border-radius:10px;color:#67e5ff;font:700 15px Consolas,monospace;word-break:break-all}}
-a{{color:#67c8ff}}.ok{{color:#48d99a}}
-.eyebrow{{font-size:11px;font-weight:800;letter-spacing:.14em;color:#64cfff;margin-bottom:6px}}
-.telemetry-hero{{background:linear-gradient(135deg,#0a192b 0%,#0b2035 55%,#071421 100%);border-color:#2b5b7e}}
+.detail-grid{{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+  gap:10px;
+  margin-top:14px;
+}}
+.detail-grid>div{{
+  padding:12px;
+  border:1px solid rgba(45,125,178,.30);
+  border-radius:11px;
+  background:rgba(4,21,36,.46);
+}}
+.detail-grid b,.detail-grid span{{display:block}}
+.detail-grid b{{font-size:11px;color:#87a6ba;font-weight:400}}
+.detail-grid span{{margin-top:5px;color:#d7eaf5;font-weight:400}}
+.key{{
+  display:block;
+  padding:14px;
+  margin:13px 0;
+  background:rgba(2,15,27,.76);
+  border:1px solid rgba(36,126,183,.52);
+  border-radius:10px;
+  color:#69e4ff;
+  font:500 14px "Cascadia Mono",Consolas,monospace;
+  word-break:break-all;
+  box-shadow:inset 0 1px rgba(116,219,255,.03);
+}}
+.ok{{color:var(--good)}}
+.eyebrow{{
+  font-size:10px;
+  font-weight:500;
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:#64cfff;
+  margin-bottom:6px;
+}}
+.telemetry-hero{{
+  background:
+    radial-gradient(ellipse at 86% 8%,rgba(37,186,248,.05),transparent 30%),
+    linear-gradient(135deg,rgba(6,27,46,.94),rgba(2,17,30,.96));
+  border-color:rgba(46,142,197,.42);
+}}
 .telemetry-status{{display:flex;flex-direction:column;align-items:flex-end;gap:7px}}
-.filter-bar{{display:flex;grid-template-columns:none;flex-wrap:wrap;align-items:end;gap:10px}}
-.filter-bar label{{min-width:150px}}.filter-bar .filter-grow{{flex:1 1 320px}}
-.problem-title{{font-size:14px;color:#f2f8ff}}
-.button-link.compact{{padding:7px 10px;font-size:12px;white-space:nowrap}}
+.filter-bar{{display:flex;flex-wrap:wrap;align-items:end;gap:10px}}
+.filter-bar label{{min-width:150px}}
+.filter-bar .filter-grow{{flex:1 1 320px}}
+.problem-title{{font-size:13px;color:#edf8ff;font-weight:500}}
+.button-link.compact{{padding:7px 10px;font-size:11px;white-space:nowrap}}
 .telemetry-table td{{vertical-align:middle}}
-@media(max-width:720px){{.telemetry-status{{align-items:flex-start}}.filter-bar{{display:grid;grid-template-columns:1fr}}}}
-@media(max-width:720px){{main{{width:96vw;margin-top:14px}}.grid{{grid-template-columns:1fr}}.card{{padding:15px}}}}
+@media(max-width:960px){{
+  main{{display:block;width:96vw;margin-top:12px}}
+  nav{{
+    position:static;
+    min-height:0;
+    flex-direction:row;
+    flex-wrap:wrap;
+    margin-bottom:14px;
+    padding:12px;
+  }}
+  .panel-brand{{width:100%;padding:2px 5px 10px}}
+  nav a{{padding:8px 10px}}
+}}
+@media(max-width:720px){{
+  .telemetry-status{{align-items:flex-start}}
+  .filter-bar{{display:grid}}
+  .grid{{grid-template-columns:1fr}}
+  .card{{padding:15px;border-radius:15px}}
+  h1{{font-size:21px}}
+}}
+@media(prefers-reduced-motion:reduce){{
+  nav a,button,input,select,textarea{{transition:none}}
+}}
 </style>
 </head>
 <body>
 <main>
 <nav>
-  <a href="/multiguard/panel/dashboard">PULPIT</a>
-  <a href="/multiguard/panel/dashboard#devices">URZĄDZENIA</a>
-  <a href="/multiguard/panel/telemetry">TELEMETRIA / ROZWÓJ</a>
-  <a href="/multiguard/panel/licenses">LICENCJE</a>
-  <a href="/multiguard/panel">NOWA LICENCJA</a>
+  <div class="panel-brand">
+    <strong>Multi-Guard</strong>
+    <span>Multi-Servis panel</span>
+  </div>
+  <a href="/multiguard/panel/dashboard" data-nav="dashboard">Pulpit</a>
+  <a href="/multiguard/panel/dashboard#devices" data-nav="devices">Urządzenia</a>
+  <a href="/multiguard/panel/telemetry" data-nav="telemetry">Telemetria / rozwój</a>
+  <a href="/multiguard/panel/licenses" data-nav="licenses">Licencje</a>
+  <a href="/multiguard/panel" data-nav="new-license">Nowa licencja</a>
 </nav>
 {body}
 </main>
+<script>
+(function(){{
+  const p=window.location.pathname;
+  let key='dashboard';
+  if(p.includes('/telemetry')) key='telemetry';
+  else if(p.includes('/licenses')) key='licenses';
+  else if(p==='/multiguard/panel'||p==='/multiguard/panel/') key='new-license';
+  else if(p.includes('/device/')) key='devices';
+  document.querySelectorAll('nav a[data-nav]').forEach(function(a){{
+    if(a.getAttribute('data-nav')===key) a.classList.add('active');
+  }});
+}})();
+</script>
 </body>
 </html>"""
 
