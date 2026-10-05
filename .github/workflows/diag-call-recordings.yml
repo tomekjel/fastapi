@@ -1,0 +1,126 @@
+name: Diagnose call recordings
+
+on:
+  push:
+    branches:
+      - diag-call-recordings-20261005
+    paths:
+      - ".github/workflows/diag-call-recordings.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+          SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?Brak secret MULTISERVIS_BACKEND_HOST}"
+          : "${SSH_USER:?Brak secret MULTISERVIS_BACKEND_USER}"
+          : "${SSH_KEY:?Brak secret MULTISERVIS_BACKEND_SSH_KEY}"
+          SSH_PORT="${SSH_PORT:-22}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/multiservis_backend
+          chmod 600 ~/.ssh/multiservis_backend
+          ssh-keyscan -T 10 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Read-only production diagnosis
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SSH_PORT:-22}"
+
+          ssh -i ~/.ssh/multiservis_backend \
+            -p "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "if [ \$(id -u) -eq 0 ]; then bash -s; else sudo -n bash -s; fi" <<'REMOTE'
+          set -euo pipefail
+
+          # Numer jest zakodowany tylko po to, aby nie występował jawnie w logu workflow.
+          PHONE="$(printf '%s' 'NjY1NzYyMjA1' | base64 -d)"
+          PHONE_PL="48${PHONE}"
+
+          echo "== SERVICE =="
+          systemctl is-active multiservis-api.service || true
+          systemctl show multiservis-api.service -p WorkingDirectory -p ExecStart --value 2>/dev/null | sed -n '1,2p' || true
+
+          echo "== CALL RECORDING SOURCE HINTS =="
+          WORKDIR="$(systemctl show multiservis-api.service -p WorkingDirectory --value 2>/dev/null || true)"
+          if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
+            grep -R -n -E 'calls/recordings|call_recording|upload_completed|legacy_reception_id' "$WORKDIR" \
+              --include='*.py' 2>/dev/null | head -n 160 || true
+          fi
+
+          echo "== POSTGRES MATCHES =="
+          if ! command -v psql >/dev/null 2>&1; then
+            echo "psql-not-found"
+            exit 0
+          fi
+
+          DBS="$(sudo -n -u postgres psql -Atqc "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate" 2>/dev/null || true)"
+          if [ -z "$DBS" ]; then
+            echo "postgres-access-unavailable"
+            exit 0
+          fi
+
+          while IFS= read -r DB; do
+            [ -n "$DB" ] || continue
+            echo "-- database: $DB"
+
+            # Najpierw pokaż tylko strukturę tabel istotnych dla rozmów/zleceń.
+            sudo -n -u postgres psql -d "$DB" -AtF '|' -c "
+              SELECT table_schema, table_name,
+                     string_agg(column_name, ',' ORDER BY ordinal_position)
+              FROM information_schema.columns
+              WHERE table_schema NOT IN ('pg_catalog','information_schema')
+                AND (
+                  table_name ILIKE '%call%'
+                  OR table_name ILIKE '%record%'
+                  OR table_name ILIKE '%reception%'
+                  OR table_name ILIKE '%service_order%'
+                )
+              GROUP BY table_schema, table_name
+              ORDER BY table_schema, table_name;
+            " 2>/dev/null || true
+
+            # Wygeneruj i wykonaj wyłącznie SELECT-y dla tabel mających kolumnę telefoniczną.
+            sudo -n -u postgres psql -d "$DB" -v phone="$PHONE" -v phone_pl="$PHONE_PL" -At <<'SQL' 2>/dev/null || true
+            SELECT format(
+              'SELECT %L AS source_table, left(((to_jsonb(t) - %L - %L - %L - %L - %L)::text), 6000) AS matched_row FROM %I.%I t WHERE regexp_replace(coalesce(t.%I::text, ''''), ''[^0-9]'', '''', ''g'') IN (%L,%L);',
+              table_schema || '.' || table_name,
+              'phone_number','phone_number1','phone_number2','phone','normalized_phone',
+              table_schema, table_name, column_name,
+              :'phone', :'phone_pl'
+            )
+            FROM information_schema.columns
+            WHERE table_schema NOT IN ('pg_catalog','information_schema')
+              AND column_name IN ('phone_number','phone_number1','phone_number2','phone','normalized_phone')
+              AND (
+                table_name ILIKE '%call%'
+                OR table_name ILIKE '%record%'
+                OR table_name ILIKE '%reception%'
+                OR table_name ILIKE '%client%'
+                OR table_name ILIKE '%service_order%'
+              )
+            \gexec
+SQL
+          done <<< "$DBS"
+REMOTE
