@@ -159,6 +159,16 @@ class AssignPendingInstallationRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+_LICENSE_SOURCES = {"CLIENT", "WORKSHOP", "GROUP"}
+
+
+def _normalize_license_source(value: str | None, *, default: str = "CLIENT") -> str:
+    source = str(value or default).strip().upper()
+    if source not in _LICENSE_SOURCES:
+        raise HTTPException(400, "Źródło licencji musi być CLIENT, WORKSHOP albo GROUP.")
+    return source
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -415,6 +425,8 @@ def _signed_envelope(link: dict[str, Any]) -> dict[str, str]:
         "deviceId": link.get("device_id") or "",
         "planCode": link["plan_code"],
         "releaseChannel": link.get("release_channel") or "STABLE",
+        "licenseSource": str(link.get("license_source") or "CLIENT"),
+        "sourceNote": str(link.get("source_note") or ""),
         "lifecycle": link["lifecycle"],
         "validFrom": _iso(link.get("valid_from")),
         "validUntil": _iso(link.get("valid_until")),
@@ -540,8 +552,23 @@ CREATE INDEX IF NOT EXISTS idx_guard_activation_events_created
 
 ALTER TABLE guard.license_links
     ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
+ALTER TABLE guard.license_links
+    ADD COLUMN IF NOT EXISTS license_source TEXT;
+ALTER TABLE guard.license_links
+    ADD COLUMN IF NOT EXISTS source_note TEXT;
+ALTER TABLE guard.pending_installations
+    ADD COLUMN IF NOT EXISTS license_source TEXT;
+ALTER TABLE guard.pending_installations
+    ADD COLUMN IF NOT EXISTS source_note TEXT;
 ALTER TABLE guard.installations
     ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
+ALTER TABLE guard.installations
+    ADD COLUMN IF NOT EXISTS license_source TEXT;
+ALTER TABLE guard.installations
+    ADD COLUMN IF NOT EXISTS source_note TEXT;
+UPDATE guard.license_links
+SET license_source='CLIENT'
+WHERE license_source IS NULL AND reception_id IS NOT NULL;
 """
 
 
@@ -677,6 +704,8 @@ def _pending_public(
             else None
         ),
         "assignedLicenseId": row.get("assigned_license_id"),
+        "licenseSource": str(row.get("license_source") or ""),
+        "sourceNote": str(row.get("source_note") or ""),
         "matchScore": int(match_score),
         "recommended": int(match_score) >= 80,
     }
