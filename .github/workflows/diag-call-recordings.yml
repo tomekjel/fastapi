@@ -5,6 +5,10 @@ on:
     branches: [diag-call-recordings-20261005b]
     paths:
       - ".github/workflows/diag-call-recordings.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/diag-call-recordings.yml"
 
 permissions:
   contents: read
