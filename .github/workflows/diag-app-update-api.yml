@@ -1,0 +1,26 @@
+name: Diagnose app update API
+
+on:
+  push:
+    branches:
+      - diag-call-recordings-api-20261005
+    paths:
+      - ".github/workflows/diag-app-update-api.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect update endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://api.multi-servis.pl"
+          curl --fail --silent --show-error "$BASE/openapi.json" -o /tmp/openapi.json
+          python3 -c 'import json; d=json.load(open("/tmp/openapi.json")); [print(k, json.dumps(v, ensure_ascii=False)[:7000]) for k,v in d.get("paths",{}).items() if any(x in k.lower() for x in ("update","apk","release","app-"))]'
+          echo "== CURRENT LATEST =="
+          curl --fail --silent --show-error "$BASE/app-updates/android/latest.json"
+          echo
