@@ -1,4 +1,4 @@
-name: Diagnose call recording backend shape
+name: Diagnose call recording backend via API
 
 on:
   push:
@@ -12,97 +12,100 @@ permissions:
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - uses: actions/checkout@v4
 
-      - name: Query anonymized call state
-        id: query
-        continue-on-error: true
-        shell: bash
-        env:
-          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
-          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
-          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
-          SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
-        run: |
-          set -uo pipefail
-          RESULT=diag-call-recordings-result.txt
-
-          if [ -z "${SSH_HOST:-}" ] || [ -z "${SSH_USER:-}" ] || [ -z "${SSH_KEY:-}" ]; then
-            printf '%s\n' '{"status":"missing_repo_secrets"}' > "$RESULT"
-            exit 0
-          fi
-
-          SSH_PORT="${SSH_PORT:-22}"
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/multiservis_backend
-          chmod 600 ~/.ssh/multiservis_backend
-
-          if ! ssh-keyscan -T 10 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
-            printf '%s\n' '{"status":"ssh_keyscan_failed"}' > "$RESULT"
-            exit 0
-          fi
-          chmod 600 ~/.ssh/known_hosts
-
-          if ! ssh -i ~/.ssh/multiservis_backend -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" 'cd /opt/multiservis && .venv/bin/python -' > "$RESULT.tmp" <<'PY'
-          import json
-          from sqlalchemy import text
-          from app.database import engine
-
-          sql = text("""
-          SELECT
-            to_char(c.started_at AT TIME ZONE 'Europe/Warsaw', 'YYYY-MM-DD HH24:MI:SS') AS local_started,
-            c.direction::text AS direction,
-            c.duration_seconds,
-            (c.service_order_id IS NOT NULL) AS attached_to_reception,
-            COALESCE(so_status.status::text, '') AS reception_status,
-            COUNT(cr.id)::int AS recording_count,
-            COALESCE(bool_or(so.upload_completed), FALSE) AS upload_completed,
-            COALESCE(max(so.size_bytes), 0)::bigint AS max_size_bytes
-          FROM core.calls c
-          JOIN core.phone_numbers p ON p.id = c.phone_number_id
-          LEFT JOIN core.call_recordings cr ON cr.call_id = c.id
-          LEFT JOIN core.storage_objects so ON so.id = cr.storage_object_id
-          LEFT JOIN service.service_orders so_status ON so_status.id = c.service_order_id
-          WHERE (c.started_at AT TIME ZONE 'Europe/Warsaw') >= TIMESTAMP '2026-10-05 10:15:00'
-            AND (c.started_at AT TIME ZONE 'Europe/Warsaw') <  TIMESTAMP '2026-10-05 10:35:00'
-            AND right(regexp_replace(COALESCE(p.e164,p.display_number,''), '[^0-9]', '', 'g'), 3) = '205'
-          GROUP BY c.id, local_started, c.direction, c.duration_seconds, c.service_order_id, so_status.status
-          ORDER BY local_started
-          """)
-
-          with engine.connect() as con:
-              rows = [dict(r) for r in con.execute(sql).mappings().all()]
-
-          print(json.dumps({
-              "status": "ok",
-              "window_local": "2026-10-05 10:15-10:35 Europe/Warsaw",
-              "candidate_suffix": "***205",
-              "candidate_calls": len(rows),
-              "calls": rows,
-          }, ensure_ascii=False, default=str, indent=2))
-          PY
-          then
-            printf '%s\n' '{"status":"ssh_or_query_failed"}' > "$RESULT"
-            rm -f "$RESULT.tmp"
-            exit 0
-          fi
-
-          mv "$RESULT.tmp" "$RESULT"
-
-      - name: Publish anonymized diagnostic result
-        if: always()
+      - name: Query anonymized production API
         shell: bash
         run: |
           set -euo pipefail
-          test -f diag-call-recordings-result.txt || printf '%s\n' '{"status":"workflow_failed_before_result"}' > diag-call-recordings-result.txt
+          python3 - <<'PY' > diag-call-recordings-result.txt
+          import json
+          import urllib.request
+          import urllib.error
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          BASE = "https://api.multi-servis.pl"
+          TZ = ZoneInfo("Europe/Warsaw")
+          start = datetime(2026,10,5,10,15,0,tzinfo=TZ)
+          end   = datetime(2026,10,5,10,35,0,tzinfo=TZ)
+
+          def get_json(path):
+              req = urllib.request.Request(BASE + path, headers={"Accept":"application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      return r.status, json.loads(r.read().decode("utf-8"))
+              except urllib.error.HTTPError as e:
+                  return e.code, None
+              except Exception as e:
+                  return 0, {"error": type(e).__name__}
+
+          calls_status, calls = get_json("/calls?limit=500")
+          rec_status, recs = get_json("/calls/recordings?limit=1000")
+
+          result = {
+              "status": "ok" if calls_status == 200 and rec_status == 200 else "api_error",
+              "calls_http": calls_status,
+              "recordings_http": rec_status,
+              "window_local": "2026-10-05 10:15-10:35 Europe/Warsaw",
+              "candidate_suffix": "***205",
+              "calls": [],
+              "recordings": [],
+          }
+
+          def in_window(value):
+              if not value:
+                  return False
+              try:
+                  dt = datetime.fromisoformat(value.replace("Z","+00:00"))
+                  if dt.tzinfo is None:
+                      dt = dt.replace(tzinfo=TZ)
+                  dt = dt.astimezone(TZ)
+                  return start <= dt < end, dt.strftime("%Y-%m-%d %H:%M:%S")
+              except Exception:
+                  return False, None
+
+          if isinstance(calls, list):
+              for c in calls:
+                  digits = "".join(ch for ch in str(c.get("phone_number","")) if ch.isdigit())
+                  ok, local = in_window(c.get("started_at"))
+                  if digits.endswith("205") and ok:
+                      result["calls"].append({
+                          "local_started": local,
+                          "direction": c.get("direction"),
+                          "duration_seconds": c.get("duration_seconds"),
+                          "recording_count": c.get("recording_count"),
+                          "attached_to_reception": bool(c.get("reception_id")),
+                      })
+
+          if isinstance(recs, list):
+              for r in recs:
+                  digits = "".join(ch for ch in str(r.get("phone_number","")) if ch.isdigit())
+                  ok, local = in_window(r.get("started_at"))
+                  if digits.endswith("205") and ok:
+                      result["recordings"].append({
+                          "local_started": local,
+                          "direction": r.get("direction"),
+                          "size_bytes": r.get("size_bytes"),
+                          "attached_to_reception": bool(r.get("reception_id")),
+                          "has_content_url": bool(r.get("content_url")),
+                      })
+
+          result["candidate_calls"] = len(result["calls"])
+          result["candidate_recordings"] = len(result["recordings"])
+          print(json.dumps(result, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Publish anonymized diagnostic result
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add diag-call-recordings-result.txt
           if git diff --cached --quiet; then
             exit 0
           fi
-          git commit -m "chore: capture anonymized call recording diagnostics"
+          git commit -m "[skip ci] chore: capture anonymized call recording diagnostics"
           git push
