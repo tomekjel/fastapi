@@ -38,6 +38,16 @@ jobs:
             : > /tmp/reception_ids.txt
           fi
 
+          echo "== RECORDINGS BY PHONE =="
+          PHONE_STATUS="$(curl --silent --show-error -o /tmp/recordings_phone.json -w '%{http_code}' "$BASE/calls/recordings?phone=$PHONE&limit=1000")"
+          echo "recordings_by_phone_status=$PHONE_STATUS"
+          if [ "$PHONE_STATUS" = "200" ]; then
+            python3 -c 'import json; a=json.load(open("/tmp/recordings_phone.json")); print("phone_count="+str(len(a))); keep=("id","call_id","original_filename","started_at","duration_seconds","direction","client_id","legacy_reception_id","phone_number","size_bytes","mime_type","sha256"); [print(json.dumps({k:x.get(k) for k in keep if k in x},ensure_ascii=False)) for x in a]'
+          else
+            head -c 1000 /tmp/recordings_phone.json || true
+            echo
+          fi
+
           echo "== RECORDINGS BY ACTIVE RECEPTION =="
           while IFS= read -r RID; do
             [ -n "$RID" ] || continue
