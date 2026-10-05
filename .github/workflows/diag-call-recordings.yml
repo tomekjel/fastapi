@@ -1,0 +1,64 @@
+name: Diagnose call recording backend shape
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/diag-call-recordings.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/diag-call-recordings.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+          SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?missing host}"
+          : "${SSH_USER:?missing user}"
+          : "${SSH_KEY:?missing key}"
+          SSH_PORT="${SSH_PORT:-22}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/multiservis_backend
+          chmod 600 ~/.ssh/multiservis_backend
+          ssh-keyscan -T 10 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Inspect server structure read-only
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SSH_PORT:-22}"
+          ssh -i ~/.ssh/multiservis_backend -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          echo "=== SERVICE ==="
+          systemctl show multiservis-api.service -p WorkingDirectory -p ExecStart --no-pager || true
+          echo "=== PYTHON FILES RELATED TO CALL RECORDINGS ==="
+          find /opt/multiservis/app -type f -name '*.py' -print 2>/dev/null | sort | while read -r f; do
+            if grep -Eqi 'call.?record|recording|calls/recordings' "$f"; then
+              echo "$f"
+            fi
+          done
+          echo "=== ROUTE/MODEL SYMBOLS ==="
+          grep -RniE 'calls/recordings|call_record|CallRecording|recording_id|reception_id|upload_completed' /opt/multiservis/app --include='*.py' 2>/dev/null             | sed -E 's#([A-Za-z0-9_]*(PASSWORD|SECRET|TOKEN|KEY)[A-Za-z0-9_]*)=[^ ,;]+#\1=<redacted>#Ig'             | head -n 250 || true
+          echo "=== DB FILES / MIGRATIONS ==="
+          find /opt/multiservis -maxdepth 4 -type f \( -name '*.db' -o -name '*.sqlite*' -o -name 'alembic.ini' -o -path '*/alembic/versions/*.py' \) -print 2>/dev/null | head -n 100 || true
+          REMOTE
