@@ -5,19 +5,17 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/diag-call-recordings.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - ".github/workflows/diag-call-recordings.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   inspect:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      - uses: actions/checkout@v4
+
       - name: Configure SSH
         shell: bash
         env:
@@ -38,7 +36,7 @@ jobs:
           ssh-keyscan -T 10 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Inspect server structure read-only
+      - name: Query anonymized call state
         shell: bash
         env:
           SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
@@ -47,18 +45,50 @@ jobs:
         run: |
           set -euo pipefail
           SSH_PORT="${SSH_PORT:-22}"
-          ssh -i ~/.ssh/multiservis_backend -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          ssh -i ~/.ssh/multiservis_backend -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" 'cd /opt/multiservis && .venv/bin/python -' > diag-call-recordings-result.txt <<'PY'
+          import json
+          from sqlalchemy import text
+          from app.database import engine
+
+          sql = text("""
+          SELECT
+            to_char(c.started_at AT TIME ZONE 'Europe/Warsaw', 'YYYY-MM-DD HH24:MI:SS') AS local_started,
+            c.direction::text AS direction,
+            c.duration_seconds,
+            (c.service_order_id IS NOT NULL) AS attached_to_reception,
+            COALESCE(so_status.status::text, '') AS reception_status,
+            COUNT(cr.id)::int AS recording_count,
+            COALESCE(bool_or(so.upload_completed), FALSE) AS upload_completed,
+            COALESCE(max(so.size_bytes), 0)::bigint AS max_size_bytes
+          FROM core.calls c
+          JOIN core.phone_numbers p ON p.id = c.phone_number_id
+          LEFT JOIN core.call_recordings cr ON cr.call_id = c.id
+          LEFT JOIN core.storage_objects so ON so.id = cr.storage_object_id
+          LEFT JOIN service.service_orders so_status ON so_status.id = c.service_order_id
+          WHERE (c.started_at AT TIME ZONE 'Europe/Warsaw') >= TIMESTAMP '2026-10-05 10:15:00'
+            AND (c.started_at AT TIME ZONE 'Europe/Warsaw') <  TIMESTAMP '2026-10-05 10:35:00'
+            AND right(regexp_replace(COALESCE(p.e164,p.display_number,''), '[^0-9]', '', 'g'), 3) = '205'
+          GROUP BY c.id, local_started, c.direction, c.duration_seconds, c.service_order_id, so_status.status
+          ORDER BY local_started
+          """)
+
+          with engine.connect() as con:
+              rows = [dict(r) for r in con.execute(sql).mappings().all()]
+
+          print(json.dumps({
+              "window_local": "2026-10-05 10:15-10:35 Europe/Warsaw",
+              "candidate_suffix": "***205",
+              "candidate_calls": len(rows),
+              "calls": rows,
+          }, ensure_ascii=False, default=str, indent=2))
+          PY
+
+      - name: Publish anonymized diagnostic result
+        shell: bash
+        run: |
           set -euo pipefail
-          echo "=== SERVICE ==="
-          systemctl show multiservis-api.service -p WorkingDirectory -p ExecStart --no-pager || true
-          echo "=== PYTHON FILES RELATED TO CALL RECORDINGS ==="
-          find /opt/multiservis/app -type f -name '*.py' -print 2>/dev/null | sort | while read -r f; do
-            if grep -Eqi 'call.?record|recording|calls/recordings' "$f"; then
-              echo "$f"
-            fi
-          done
-          echo "=== ROUTE/MODEL SYMBOLS ==="
-          grep -RniE 'calls/recordings|call_record|CallRecording|recording_id|reception_id|upload_completed' /opt/multiservis/app --include='*.py' 2>/dev/null             | sed -E 's#([A-Za-z0-9_]*(PASSWORD|SECRET|TOKEN|KEY)[A-Za-z0-9_]*)=[^ ,;]+#\1=<redacted>#Ig'             | head -n 250 || true
-          echo "=== DB FILES / MIGRATIONS ==="
-          find /opt/multiservis -maxdepth 4 -type f \( -name '*.db' -o -name '*.sqlite*' -o -name 'alembic.ini' -o -path '*/alembic/versions/*.py' \) -print 2>/dev/null | head -n 100 || true
-          REMOTE
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add diag-call-recordings-result.txt
+          git commit -m "chore: capture anonymized call recording diagnostics"
+          git push
