@@ -21,6 +21,13 @@ jobs:
           PHONE="$(printf '%s' 'NjY1NzYyMjA1' | base64 -d)"
           BASE="https://api.multi-servis.pl"
 
+          echo "== UPDATE ENDPOINTS =="
+          curl --fail --silent --show-error "$BASE/openapi.json" -o /tmp/openapi-updates.json
+          python3 -c 'import json; d=json.load(open("/tmp/openapi-updates.json")); [print(k, json.dumps(v, ensure_ascii=False)[:5000]) for k,v in d.get("paths",{}).items() if any(x in k.lower() for x in ("update","apk","release","app-"))]'
+          echo "== CURRENT LATEST =="
+          curl --fail --silent --show-error "$BASE/app-updates/android/latest.json" || true
+          echo
+
           echo "== OPENAPI =="
           curl --fail --silent --show-error "$BASE/openapi.json" -o /tmp/openapi.json
           python3 -c 'import json; d=json.load(open("/tmp/openapi.json")); p=d.get("paths",{}); keys=["/calls/match/{phone_number}","/calls/recordings","/calls/import-recording","/receptions","/app-access/activate"]; [print(k, json.dumps(p.get(k,{}), ensure_ascii=False)[:3500]) for k in keys]'
