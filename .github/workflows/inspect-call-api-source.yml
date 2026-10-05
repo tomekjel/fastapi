@@ -16,31 +16,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract relevant call endpoints
+      - name: Extract exact call endpoints
         shell: bash
         run: |
           set -euo pipefail
           rm -rf /tmp/ms
           mkdir -p /tmp/ms
           unzip -q MultiServisServer_FINAL.zip -d /tmp/ms
-          ROOT="/tmp/ms/MultiServisServer_FINAL"
+          FILE="/tmp/ms/MultiServisServer_FINAL/app/routers/calls.py"
           python3 - <<'PY'
           from pathlib import Path
-
-          root=Path("/tmp/ms/MultiServisServer_FINAL")
-          needles=[
-              '/calls/import-recording',
-              '/calls/recordings',
-              '/calls/match/',
-              '/calls/upload-policy/',
-          ]
-          for path in root.rglob("*.py"):
-              text=path.read_text(encoding="utf-8", errors="replace")
-              for needle in needles:
-                  pos=text.find(needle)
-                  if pos >= 0:
-                      print("\n### FILE", path.relative_to(root), "NEEDLE", needle)
-                      start=max(0, text.rfind("\n",0,max(0,pos-5000)))
-                      end=min(len(text), text.find("\n\n@", pos+1) if text.find("\n\n@", pos+1)>=0 else pos+7000)
-                      print(text[start:end])
+          p=Path("/tmp/ms/MultiServisServer_FINAL/app/routers/calls.py")
+          lines=p.read_text(encoding="utf-8", errors="replace").splitlines()
+          needles=['@router.post("/import-recording")','@router.get("/recordings")','@router.get("/recordings/{recording_id}/content")','@router.get("/match/{phone}")','@router.get("/upload-policy/{phone}")']
+          for needle in needles:
+              print("\n===== ",needle," =====")
+              for i,line in enumerate(lines):
+                  if needle in line:
+                      a=max(0,i-8); b=min(len(lines),i+110)
+                      for n in range(a,b):
+                          print(f"{n+1:04d}: {lines[n]}")
+                      break
           PY
