@@ -1,0 +1,48 @@
+name: Diagnose call recordings fixed
+
+on:
+  push:
+    branches:
+      - diag-call-recordings-20261005
+    paths:
+      - ".github/workflows/diag-call-recordings-fixed.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+          SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?missing-host}"
+          : "${SSH_USER:?missing-user}"
+          : "${SSH_KEY:?missing-key}"
+          SSH_PORT="${SSH_PORT:-22}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keyscan -T 10 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Read-only diagnosis
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+          REMOTE_SCRIPT_B64: "c2V0IC1ldW8gcGlwZWZhaWwKUEhPTkU9IiQocHJpbnRmICclcycgJ05qWTFOell5TWpBMScgfCBiYXNlNjQgLWQpIgpQSE9ORV9QTD0iNDgke1BIT05FfSIKZWNobyAiPT0gU0VSVklDRSA9PSIKc3lzdGVtY3RsIGlzLWFjdGl2ZSBtdWx0aXNlcnZpcy1hcGkuc2VydmljZSB8fCB0cnVlCldPUktESVI9IiQoc3lzdGVtY3RsIHNob3cgbXVsdGlzZXJ2aXMtYXBpLnNlcnZpY2UgLXAgV29ya2luZ0RpcmVjdG9yeSAtLXZhbHVlIDI+L2Rldi9udWxsIHx8IHRydWUpIgplY2hvICJ3b3JrZGlyPSR7V09SS0RJUjotdW5rbm93bn0iCmlmIFsgLW4gIiRXT1JLRElSIiBdICYmIFsgLWQgIiRXT1JLRElSIiBdOyB0aGVuCiAgZWNobyAiPT0gU09VUkNFIEhJTlRTID09IgogIGdyZXAgLVIgLW4gLUUgJ2NhbGxzL3JlY29yZGluZ3N8Y2FsbF9yZWNvcmRpbmd8dXBsb2FkX2NvbXBsZXRlZHxsZWdhY3lfcmVjZXB0aW9uX2lkJyAiJFdPUktESVIiIC0taW5jbHVkZT0nKi5weScgMj4vZGV2L251bGwgfCBoZWFkIC1uIDE2MCB8fCB0cnVlCmZpCmVjaG8gIj09IFBPU1RHUkVTID09IgppZiAhIGNvbW1hbmQgLXYgcHNxbCA+L2Rldi9udWxsIDI+JjE7IHRoZW4KICBlY2hvICJwc3FsLW5vdC1mb3VuZCIKICBleGl0IDAKZmkKREJTPSIkKHN1ZG8gLW4gLXUgcG9zdGdyZXMgcHNxbCAtQXRxYyAiU0VMRUNUIGRhdG5hbWUgRlJPTSBwZ19kYXRhYmFzZSBXSEVSRSBkYXRhbGxvd2Nvbm4gQU5EIE5PVCBkYXRpc3RlbXBsYXRlIiAyPi9kZXYvbnVsbCB8fCB0cnVlKSIKaWYgWyAteiAiJERCUyIgXTsgdGhlbgogIGVjaG8gInBvc3RncmVzLWFjY2Vzcy11bmF2YWlsYWJsZSIKICBleGl0IDAKZmkKd2hpbGUgSUZTPSByZWFkIC1yIERCOyBkbwogIFsgLW4gIiREQiIgXSB8fCBjb250aW51ZQogIGVjaG8gIi0tIGRhdGFiYXNlOiAkREIiCiAgc3VkbyAtbiAtdSBwb3N0Z3JlcyBwc3FsIC1kICIkREIiIC1BdEYgJ3wnIC1jICJTRUxFQ1QgdGFibGVfc2NoZW1hLHRhYmxlX25hbWUsc3RyaW5nX2FnZyhjb2x1bW5fbmFtZSwnLCcgT1JERVIgQlkgb3JkaW5hbF9wb3NpdGlvbikgRlJPTSBpbmZvcm1hdGlvbl9zY2hlbWEuY29sdW1ucyBXSEVSRSB0YWJsZV9zY2hlbWEgTk9UIElOICgncGdfY2F0YWxvZycsJ2luZm9ybWF0aW9uX3NjaGVtYScpIEFORCAodGFibGVfbmFtZSBJTElLRSAnJWNhbGwlJyBPUiB0YWJsZV9uYW1lIElMSUtFICclcmVjb3JkJScgT1IgdGFibGVfbmFtZSBJTElLRSAnJXJlY2VwdGlvbiUnIE9SIHRhYmxlX25hbWUgSUxJS0UgJyVzZXJ2aWNlX29yZGVyJScpIEdST1VQIEJZIHRhYmxlX3NjaGVtYSx0YWJsZV9uYW1lIE9SREVSIEJZIHRhYmxlX3NjaGVtYSx0YWJsZV9uYW1lIiAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgQ09MUz0iJChzdWRvIC1uIC11IHBvc3RncmVzIHBzcWwgLWQgIiREQiIgLUF0RiAnfCcgLWMgIlNFTEVDVCB0YWJsZV9zY2hlbWEsdGFibGVfbmFtZSxjb2x1bW5fbmFtZSBGUk9NIGluZm9ybWF0aW9uX3NjaGVtYS5jb2x1bW5zIFdIRVJFIHRhYmxlX3NjaGVtYSBOT1QgSU4gKCdwZ19jYXRhbG9nJywnaW5mb3JtYXRpb25fc2NoZW1hJykgQU5EIGNvbHVtbl9uYW1lIElOICgncGhvbmVfbnVtYmVyJywncGhvbmVfbnVtYmVyMScsJ3Bob25lX251bWJlcjInLCdwaG9uZScsJ25vcm1hbGl6ZWRfcGhvbmUnKSBBTkQgKHRhYmxlX25hbWUgSUxJS0UgJyVjYWxsJScgT1IgdGFibGVfbmFtZSBJTElLRSAnJXJlY29yZCUnIE9SIHRhYmxlX25hbWUgSUxJS0UgJyVyZWNlcHRpb24lJyBPUiB0YWJsZV9uYW1lIElMSUtFICclY2xpZW50JScgT1IgdGFibGVfbmFtZSBJTElLRSAnJXNlcnZpY2Vfb3JkZXIlJykiIDI+L2Rldi9udWxsIHx8IHRydWUpIgogIHdoaWxlIElGUz0nfCcgcmVhZCAtciBTIFQgQzsgZG8KICAgIFsgLW4gIiRTIiBdIHx8IGNvbnRpbnVlCiAgICBRUz0iJHtTLy9cIi9cIlwifSI7IFFUPSIke1QvL1wiL1wiXCJ9IjsgUUM9IiR7Qy8vXCIvXCJcIn0iCiAgICBTUUw9IlNFTEVDVCAnJHtTfS4ke1R9JyBBUyBzb3VyY2VfdGFibGUsIGxlZnQoKCh0b19qc29uYih4KS0ncGhvbmVfbnVtYmVyJy0ncGhvbmVfbnVtYmVyMSctJ3Bob25lX251bWJlcjInLSdwaG9uZSctJ25vcm1hbGl6ZWRfcGhvbmUnKTo6dGV4dCksNjAwMCkgRlJPTSBcIiR7UVN9XCIuXCIke1FUfVwiIHggV0hFUkUgcmVnZXhwX3JlcGxhY2UoY29hbGVzY2UoeC5cIiR7UUN9XCI6OnRleHQsJycpLCdbXjAtOV0nLCcnLCdnJykgSU4gKCcke1BIT05FfScsJyR7UEhPTkVfUEx9JykiCiAgICBzdWRvIC1uIC11IHBvc3RncmVzIHBzcWwgLWQgIiREQiIgLUF0RiAnfCcgLWMgIiRTUUwiIDI+L2Rldi9udWxsIHx8IHRydWUKICBkb25lIDw8PCAiJENPTFMiCmRvbmUgPDw8ICIkREJTIgo="
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SSH_PORT:-22}"
+          printf '%s' "$REMOTE_SCRIPT_B64" | base64 -d | ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "if [ \$(id -u) -eq 0 ]; then bash -s; else sudo -n bash -s; fi"
