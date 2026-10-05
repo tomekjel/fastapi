@@ -1,0 +1,56 @@
+name: Diagnose call recordings API
+
+on:
+  push:
+    branches:
+      - diag-call-recordings-api-20261005
+    paths:
+      - ".github/workflows/diag-call-recordings-api.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-api:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe production API read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          PHONE="$(printf '%s' 'NjY1NzYyMjA1' | base64 -d)"
+          BASE="https://api.multi-servis.pl"
+
+          echo "== OPENAPI =="
+          curl --fail --silent --show-error "$BASE/openapi.json" -o /tmp/openapi.json
+          python3 -c 'import json; d=json.load(open("/tmp/openapi.json")); p=d.get("paths",{}); keys=["/calls/match/{phone_number}","/calls/recordings","/calls/import-recording","/receptions","/app-access/activate"]; [print(k, json.dumps(p.get(k,{}), ensure_ascii=False)[:3500]) for k in keys]'
+
+          echo "== MATCH =="
+          MATCH_STATUS="$(curl --silent --show-error -o /tmp/match.json -w '%{http_code}' "$BASE/calls/match/$PHONE")"
+          echo "match_status=$MATCH_STATUS"
+          if [ "$MATCH_STATUS" = "200" ]; then
+            python3 -c 'import json; d=json.load(open("/tmp/match.json")); print(json.dumps({"client_id":d.get("client_id"),"known_recorded_caller":d.get("known_recorded_caller"),"active_receptions":d.get("active_receptions",[])},ensure_ascii=False)); [print(x.get("id","")) for x in d.get("active_receptions",[]) if x.get("id")]' > /tmp/match_sanitized.txt
+            cat /tmp/match_sanitized.txt
+            tail -n +2 /tmp/match_sanitized.txt | grep -E '^[0-9a-fA-F-]{16,}$' > /tmp/reception_ids.txt || true
+          else
+            head -c 1000 /tmp/match.json || true
+            echo
+            : > /tmp/reception_ids.txt
+          fi
+
+          echo "== RECORDINGS BY ACTIVE RECEPTION =="
+          while IFS= read -r RID; do
+            [ -n "$RID" ] || continue
+            STATUS="$(curl --silent --show-error -o /tmp/recordings.json -w '%{http_code}' "$BASE/calls/recordings?reception_id=$RID")"
+            echo "reception_id=$RID recordings_status=$STATUS"
+            if [ "$STATUS" = "200" ]; then
+              python3 -c 'import json; a=json.load(open("/tmp/recordings.json")); print("count="+str(len(a))); keep=("id","call_id","original_filename","started_at","duration_seconds","direction","client_id","legacy_reception_id","phone_number","size_bytes","mime_type","sha256"); [print(json.dumps({k:x.get(k) for k in keep if k in x},ensure_ascii=False)) for x in a]'
+            else
+              head -c 1000 /tmp/recordings.json || true
+              echo
+            fi
+          done < /tmp/reception_ids.txt
+
+          echo "== RECEPTIONS STATUS =="
+          RECEPTIONS_STATUS="$(curl --silent --show-error -o /tmp/receptions.json -w '%{http_code}' "$BASE/receptions?scope=active")"
+          echo "receptions_status=$RECEPTIONS_STATUS"
