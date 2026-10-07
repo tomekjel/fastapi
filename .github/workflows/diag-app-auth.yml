@@ -1,0 +1,67 @@
+name: Diagnose Multi-Servis app auth
+
+on:
+  push:
+    paths:
+      - ".github/workflows/diag-app-auth.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check production API and app authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="https://api.multi-servis.pl"
+
+          health_code="$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 20 "$BASE/health" || true)"
+          echo "HEALTH_HTTP=$health_code"
+
+          activate_code="$(curl -sS -o /tmp/activate.json -w '%{http_code}' --max-time 20 \
+            -H 'Content-Type: application/json' \
+            --data '{"phone_number":"505012914"}' \
+            "$BASE/app-access/activate" || true)"
+          echo "ACTIVATE_HTTP=$activate_code"
+
+          python3 - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("/tmp/activate.json")
+          try:
+              data = json.loads(p.read_text(encoding="utf-8"))
+          except Exception:
+              data = {}
+          token = str(data.get("token") or "")
+          role = str(data.get("role") or "")
+          print("ACTIVATE_ROLE=" + (role or "<none>"))
+          print("TOKEN_PRESENT=" + ("yes" if token else "no"))
+          print("TOKEN_LENGTH=" + str(len(token)))
+          pathlib.Path("/tmp/token.txt").write_text(token, encoding="utf-8")
+          PY
+
+          token="$(cat /tmp/token.txt)"
+          if [ -n "$token" ]; then
+            receptions_code="$(curl -sS -o /tmp/receptions.json -w '%{http_code}' --max-time 30 \
+              -H "Authorization: Bearer $token" \
+              "$BASE/receptions?scope=all" || true)"
+            echo "RECEPTIONS_HTTP=$receptions_code"
+            python3 - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("/tmp/receptions.json")
+          try:
+              data = json.loads(p.read_text(encoding="utf-8"))
+              print("RECEPTIONS_COUNT=" + str(len(data) if isinstance(data, list) else -1))
+              if isinstance(data, dict) and "detail" in data:
+                  print("RECEPTIONS_DETAIL=" + str(data["detail"])[:160])
+          except Exception:
+              print("RECEPTIONS_COUNT=-1")
+          PY
+          else
+            echo "RECEPTIONS_HTTP=SKIPPED"
+          fi
+
+          rm -f /tmp/token.txt /tmp/activate.json /tmp/receptions.json /tmp/health.json
