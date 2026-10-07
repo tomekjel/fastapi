@@ -1,0 +1,81 @@
+name: Inspect packaged backend auth
+
+on:
+  push:
+    paths:
+      - ".github/workflows/inspect-packaged-auth.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inspect authentication source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/ms-backend
+          mkdir -p /tmp/ms-backend
+          unzip -q MultiServisServer_FINAL.zip -d /tmp/ms-backend
+
+          python3 - <<'PY' > packaged-auth-analysis.txt
+          from pathlib import Path
+          import ast, re
+
+          roots = list(Path("/tmp/ms-backend").rglob("*.py"))
+          print("PY_FILES", len(roots))
+
+          for path in roots:
+              src = path.read_text(encoding="utf-8", errors="replace")
+              if "/app-access/activate" not in src and "Authorization" not in src and "Bearer" not in src:
+                  continue
+              print("\nFILE", path.relative_to("/tmp/ms-backend"))
+
+              try:
+                  tree = ast.parse(src)
+              except Exception as e:
+                  print("AST_ERROR", type(e).__name__)
+                  continue
+
+              # top-level containers / token generators
+              for node in tree.body:
+                  if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                      targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                      for t in targets:
+                          if isinstance(t, ast.Name) and any(k in t.id.lower() for k in ("token","session","access")):
+                              val = node.value
+                              print("GLOBAL", t.id, type(val).__name__)
+
+              for node in ast.walk(tree):
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                      seg = ast.get_source_segment(src, node) or ""
+                      low = seg.lower()
+                      if any(k in low for k in ("/app-access/activate", "authorization", "bearer ")) and any(k in node.name.lower() for k in ("activ","auth","access","user","token","session")):
+                          print("\nFUNCTION", node.name)
+                          print(seg[:7000])
+
+              pats = {
+                  "TOKEN_URLSAFE": r"token_urlsafe\s*\(([^)]*)\)",
+                  "TOKEN_HEX": r"token_hex\s*\(([^)]*)\)",
+                  "UUID4": r"uuid4\s*\(",
+                  "JWT": r"\bjwt\b|\bjose\b",
+                  "DB_TOKEN_SQL": r"(select|insert|update).{0,180}(token|session)|(?:token|session).{0,180}(select|insert|update)",
+              }
+              for name,pat in pats.items():
+                  m=re.search(pat,src,re.I|re.S)
+                  print(name, "YES" if m else "NO", (m.group(1) if m and m.groups() else ""))
+          PY
+
+      - name: Publish analysis
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packaged-auth-analysis.txt
+          git commit -m "[skip ci] chore: capture packaged auth analysis"
+          git push
