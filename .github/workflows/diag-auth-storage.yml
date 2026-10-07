@@ -11,6 +11,7 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - name: Configure SSH
         shell: bash
