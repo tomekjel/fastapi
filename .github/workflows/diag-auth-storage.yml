@@ -1,0 +1,89 @@
+name: Diagnose Multi-Servis auth storage
+
+on:
+  push:
+    paths:
+      - ".github/workflows/diag-auth-storage.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+          SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SSH_PORT:-22}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keyscan -T 10 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Inspect auth implementation safely
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SSH_PORT:-22}"
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          echo "SERVICE_ACTIVE=$(systemctl is-active multiservis-api.service || true)"
+          systemctl show multiservis-api.service \
+            -p ActiveEnterTimestamp \
+            -p ExecMainStartTimestamp \
+            -p NRestarts \
+            --no-pager
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast, re
+
+          p = Path("/opt/multiservis/app/main.py")
+          src = p.read_text(encoding="utf-8")
+          tree = ast.parse(src)
+
+          funcs = sorted({
+              n.name for n in ast.walk(tree)
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+              and any(k in n.name.lower() for k in ("auth", "access", "token", "current_user"))
+          })
+          print("AUTH_FUNCTIONS=" + ",".join(funcs))
+
+          mem_targets = []
+          for n in ast.walk(tree):
+              if isinstance(n, (ast.Assign, ast.AnnAssign)):
+                  targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+                  value = n.value
+                  for t in targets:
+                      if isinstance(t, ast.Name):
+                          name = t.id
+                          if any(k in name.lower() for k in ("token", "session", "access")) and isinstance(value, (ast.Dict, ast.Set, ast.List)):
+                              mem_targets.append(name)
+          print("IN_MEMORY_AUTH_CONTAINERS=" + ",".join(sorted(set(mem_targets))) if mem_targets else "IN_MEMORY_AUTH_CONTAINERS=<none>")
+
+          checks = {
+              "USES_JWT": bool(re.search(r"\bjwt\b|pyjwt|jose", src, re.I)),
+              "USES_DB_FOR_APP_TOKEN": bool(re.search(r"(select|insert|update).{0,120}(token|session)|(?:token|session).{0,120}(select|insert|update)", src, re.I|re.S)),
+              "USES_RANDOM_TOKEN": bool(re.search(r"token_urlsafe|token_hex|uuid4\s*\(", src, re.I)),
+              "HAS_TOKEN_EXPIRY": bool(re.search(r"token.{0,80}(expir|ttl|max_age)|expir.{0,80}token", src, re.I|re.S)),
+          }
+          for k,v in checks.items():
+              print(f"{k}={'yes' if v else 'no'}")
+
+          # Count route definitions only; no phone numbers, tokens or secrets are printed.
+          print("APP_ACCESS_ROUTE_PRESENT=" + ("yes" if "/app-access/activate" in src else "no"))
+          PY
+          REMOTE
