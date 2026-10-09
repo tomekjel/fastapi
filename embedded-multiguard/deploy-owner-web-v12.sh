@@ -97,15 +97,17 @@ for name in ("multiguard_license.py","multiguard_runtime.py"):
                 if dec.args and isinstance(dec.args[0],ast.Constant) and isinstance(dec.args[0].value,str):
                     route=dec.args[0].value
                     if "/panel" in route:continue
-                    signature=ast.dump(node.args,include_attributes=False)
-                    paths[(dec.func.attr,route)]=signature
+                    # Freeze the entire existing Android/agent-facing handler,
+                    # not only its argument signature. OWNER web redesigns may
+                    # change /panel handlers, never unrelated API behaviour.
+                    paths[(dec.func.attr,route)]=ast.dump(node,include_attributes=False)
         return paths
     before=routes(old/name);after=routes(new/name)
     missing=set(before)-set(after)
     changed={k for k in before.keys()&after.keys() if before[k]!=after[k]}
     if missing or changed:
         raise SystemExit(f"BLOCKED: non-owner endpoints changed: {name}: missing={missing}; signatures={changed}")
-print("PASS: existing non-panel API endpoints and function signatures preserved")
+print("PASS: existing non-panel API endpoint bodies and signatures preserved")
 PY
 
 # Create a PREPARED copy of main before writing anything into the live service.
