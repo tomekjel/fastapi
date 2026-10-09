@@ -35,6 +35,13 @@ jobs:
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_meshcentral.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_updates.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_service_panel.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_panel_theme.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_panel_settings.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_panel_devices.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_panel_triage.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_panel_diagnostics.py
+          python3 embedded-multiguard/tests/test_owner_panel_security.py
           python3 -m py_compile embedded-multiguard/scripts/sync_multiguard_releases.py
 
       - name: Configure SSH
@@ -110,6 +117,14 @@ jobs:
               '/multiguard/devices/{installation_id}/events',
               '/multiguard/telemetry',
               '/multiguard/panel/dashboard',
+              '/multiguard/panel/service',
+              '/multiguard/panel/service/{order_id}',
+              '/multiguard/panel/service/{order_id}/media/{media_id}',
+              '/multiguard/panel/versions',
+              '/multiguard/panel/settings',
+              '/multiguard/panel/device/{installation_id}/note',
+              '/multiguard/panel/device/{installation_id}/diagnostic-plan',
+              '/multiguard/panel/incident/{event_id}',
               '/multiguard/panel/telemetry',
               '/multiguard/panel/telemetry/detail',
               '/multiguard/panel/licenses',
