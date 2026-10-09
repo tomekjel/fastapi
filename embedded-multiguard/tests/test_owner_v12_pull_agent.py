@@ -101,6 +101,20 @@ class AgentTests(unittest.TestCase):
                 agent.poll(self.fetch,self.runner)
             self.assertEqual(self.runner_calls,[])
 
+    def test_exact_owner_deploy_trigger_is_allowed_but_no_other_trigger(self):
+        """Regression: the first real rollout was blocked on this exact file."""
+        self.manifest.update(sequence=1, target_sha=NEW)
+        self.compare_file="embedded-multiguard/deploy/owner-v12-deploy.trigger"
+        self.assertEqual(agent.poll(self.fetch,self.runner),"DEPLOYED")
+        self.assertEqual(len(self.runner_calls),1)
+
+    def test_arbitrary_deploy_trigger_stays_blocked(self):
+        self.manifest.update(sequence=1, target_sha=NEW)
+        self.compare_file="embedded-multiguard/deploy/something-else.trigger"
+        with self.assertRaisesRegex(agent.Blocked,"non-owner-web"):
+            agent.poll(self.fetch,self.runner)
+        self.assertEqual(self.runner_calls,[])
+
     def test_rejects_downgrade(self):
         self.manifest.update(sequence=1,target_sha=NEW)
         agent.poll(self.fetch,self.runner)
