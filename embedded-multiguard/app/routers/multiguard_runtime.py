@@ -145,6 +145,16 @@ def _ensure_schema() -> None:
         ON guard.events(installation_id, occurred_at DESC)
         """,
         """
+        -- Separate installation/lifecycle tracking from commercial licences.
+        -- A confirmed installer event is not the same as a missing heartbeat.
+        CREATE TABLE IF NOT EXISTS guard.agent_uninstalls (
+            installation_id UUID PRIMARY KEY REFERENCES guard.installations(id) ON DELETE CASCADE,
+            event_id UUID NOT NULL UNIQUE,
+            reported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            client_occurred_at TIMESTAMPTZ
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS guard.notifications (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             service_device_id UUID NOT NULL REFERENCES core.devices(id) ON DELETE CASCADE,
@@ -326,6 +336,14 @@ def heartbeat(body: HeartbeatBody):
             raise HTTPException(409, "service_device_id nie pasuje do powiązania instalacji.")
 
         previous_lifecycle = row["lifecycle"]
+
+        # A new authenticated heartbeat is explicit evidence the agent works
+        # again, e.g. after reinstallation on the same device. Clear only
+        # the installation's removal indicator, not the audit event.
+        connection.execute(
+            text("DELETE FROM guard.agent_uninstalls WHERE installation_id=:id"),
+            {"id": row["id"]},
+        )
 
         connection.execute(
             text(
@@ -509,6 +527,50 @@ def agent_event(body: EventBody):
         )
 
         payload = body.payload or {}
+
+        if body.eventType == "CLIENT_UNINSTALLED":
+            # This records a positive *client report* from the signed-in
+            # installer path. Lack of heartbeat is NEVER considered removal.
+            # In-place updater uninstall does not send this event.
+            if payload.get("reason") == "user_uninstall" and payload.get("source") == "windows_uninstaller":
+                connection.execute(
+                    text("""
+                        INSERT INTO guard.agent_uninstalls(
+                            installation_id,event_id,client_occurred_at
+                        )
+                        VALUES(:installation_id,:event_id,:occurred_at)
+                        ON CONFLICT(installation_id) DO UPDATE SET
+                            event_id=EXCLUDED.event_id,
+                            reported_at=now(),
+                            client_occurred_at=EXCLUDED.client_occurred_at
+                    """),
+                    {
+                        "installation_id": row["id"],
+                        "event_id": body.eventId,
+                        "occurred_at": body.sentAt,
+                    },
+                )
+                connection.execute(
+                    text("""
+                        INSERT INTO guard.notifications(
+                            service_device_id,installation_id,kind,severity,
+                            title,message,dedup_key,payload
+                        )
+                        VALUES(
+                            :device_id,:installation_id,'CLIENT_UNINSTALLED','INFO',
+                            'Multi-Guard — odinstalowanie zgłoszone',
+                            'Instalator Windows zgłosił świadome odinstalowanie Multi-Guard.',
+                            :dedup_key,CAST(:payload AS jsonb)
+                        )
+                        ON CONFLICT DO NOTHING
+                    """),
+                    {
+                        "device_id": row["service_device_id"],
+                        "installation_id": row["id"],
+                        "dedup_key": f"uninstall:{body.eventId}",
+                        "payload": _json({"eventId": str(body.eventId), "source": "windows_uninstaller"}),
+                    },
+                )
 
         if body.eventType == "CLIENT_ALERT_REPORT":
             alert_title = str(payload.get("title") or "Zgłoszenie alertu Multi-Guard").strip()[:180]
@@ -879,6 +941,7 @@ def _fetch_device_rows(limit: int = 250):
                     gi.lifecycle,
                     gi.valid_until,
                     gi.last_seen_at,
+                    au.reported_at AS uninstall_reported_at,
                     gi.health_level,
                     gi.app_version,
                     gi.release_channel,
@@ -899,6 +962,8 @@ def _fetch_device_rows(limit: int = 250):
                 FROM guard.installations gi
                 LEFT JOIN core.devices d
                     ON d.id=gi.service_device_id
+                LEFT JOIN guard.agent_uninstalls au
+                    ON au.installation_id=gi.id
                 LEFT JOIN guard.license_links ll
                     ON ll.installation_id=gi.installation_external_id
                 LEFT JOIN LATERAL (
@@ -952,6 +1017,9 @@ def _fetch_device_rows(limit: int = 250):
                 ) visits ON TRUE
                 WHERE gi.is_current=TRUE
                 ORDER BY
+                    -- Client-initiated uninstalls stay accessible, at the
+                    -- bottom of the inventory instead of disappearing.
+                    CASE WHEN au.installation_id IS NOT NULL THEN 1 ELSE 0 END,
                     CASE gi.health_level
                         WHEN 'RED' THEN 0
                         WHEN 'ORANGE' THEN 1
@@ -1106,6 +1174,25 @@ def multi_guard_telemetry(
     return [dict(row) for row in rows]
 
 
+def _presence_indicator(last_seen_at: Optional[datetime], uninstall_reported_at: Optional[datetime]):
+    """(CSS, label) — contact recency, never a claim the PC is logged in/online."""
+    if uninstall_reported_at is not None:
+        return "removed", "Odinstalowanie zgłoszone"
+    if last_seen_at is None:
+        return "unknown", "Brak potwierdzonego kontaktu"
+    try:
+        age_s = max(0, (datetime.now(timezone.utc) - last_seen_at).total_seconds())
+    except (TypeError, ValueError):
+        return "unknown", "Brak potwierdzonego kontaktu"
+    if age_s <= 24 * 3600:
+        return "recent", "Kontakt w ciągu 24 h"
+    if age_s <= 7 * 24 * 3600:
+        return "delayed", "Brak kontaktu 1–7 dni"
+    if age_s <= 30 * 24 * 3600:
+        return "stale", "Brak kontaktu 7–30 dni"
+    return "stale", "Brak kontaktu ponad 30 dni"
+
+
 @router.get("/panel/dashboard", response_class=HTMLResponse)
 def multi_guard_panel_dashboard(
     _: None = Depends(_panel_auth),
@@ -1205,6 +1292,9 @@ def multi_guard_panel_dashboard(
 
     rows_html = []
     for row in devices:
+        presence_style, presence_label = _presence_indicator(
+            row["last_seen_at"], row["uninstall_reported_at"]
+        )
         health = str(row["health_level"] or "GREEN").upper()
         health_class = {
             "RED": "critical",
@@ -1228,6 +1318,7 @@ def multi_guard_panel_dashboard(
               <td><span class="badge">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(row['lifecycle'])}</span></td>
               <td><span class="badge {health_class}">{_panel_h(health)}</span></td>
               <td>{_panel_h(row['app_version'] or '—')}</td>
+              <td><span class="presence-label"><span class="presence-dot presence-{presence_style}" aria-hidden="true"></span>{_panel_h(presence_label)}</span></td>
               <td><a class="strong-link" href="/multiguard/panel/device/{row['installation_id']}#service-history">{_panel_h(row['service_order_count'])} wpisów</a></td>
               <td>{_panel_dt(row['last_seen_at'])}</td>
               <td class="numbers">
@@ -1243,7 +1334,7 @@ def multi_guard_panel_dashboard(
 
     if not rows_html:
         rows_html.append(
-            '<tr><td colspan="9" class="muted">Brak zarejestrowanych instalacji Multi-Guard.</td></tr>'
+            '<tr><td colspan="10" class="muted">Brak zarejestrowanych instalacji Multi-Guard.</td></tr>'
         )
 
     pending_html = []
@@ -1326,7 +1417,7 @@ def multi_guard_panel_dashboard(
           <div class="section-head">
             <div>
               <h2>Urządzenia</h2>
-              <p>Liczniki zdarzeń dotyczą ostatnich 30 dni.</p>
+              <p>Zielona kropka oznacza kontakt w ciągu 24 godzin, nie aktywność użytkownika w tej chwili. Szary status „odinstalowanie zgłoszone” pojawia się tylko po otrzymaniu zdarzenia od instalatora Windows. Liczniki dotyczą 30 dni.</p>
             </div>
           </div>
           <div class="table-wrap">
@@ -1334,7 +1425,7 @@ def multi_guard_panel_dashboard(
               <thead>
                 <tr>
                   <th>ID</th><th>Komputer</th><th>Licencja</th><th>Stan</th>
-                  <th>Wersja</th><th>Historia serwisu</th><th>Ostatni kontakt</th><th>Zdarzenia 30 dni</th><th>Zgłoszenia</th>
+                  <th>Wersja</th><th>Łączność</th><th>Historia serwisu</th><th>Ostatni kontakt</th><th>Zdarzenia 30 dni</th><th>Zgłoszenia</th>
                 </tr>
               </thead>
               <tbody>{''.join(rows_html)}</tbody>
@@ -1366,10 +1457,12 @@ def multi_guard_panel_device(
                     gi.service_device_id,
                     gi.plan_code,gi.lifecycle,gi.valid_until,gi.last_seen_at,
                     gi.health_level,gi.app_version,gi.release_channel,
+                    au.reported_at AS uninstall_reported_at,
                     d.device_type,d.manufacturer,d.model,d.serial_number,d.hostname,
                     ll.reception_number
                 FROM guard.installations gi
                 LEFT JOIN core.devices d ON d.id=gi.service_device_id
+                LEFT JOIN guard.agent_uninstalls au ON au.installation_id=gi.id
                 LEFT JOIN guard.license_links ll
                   ON ll.installation_id=gi.installation_external_id
                 WHERE gi.id=:installation_id
@@ -1429,6 +1522,9 @@ def multi_guard_panel_device(
             {"installation_id": iid},
         ).mappings().all()
 
+    device_presence_style, device_presence_label = _presence_indicator(
+        row["last_seen_at"], row["uninstall_reported_at"]
+    )
     event_rows = []
     for event in events:
         payload = event["payload"] or {}
@@ -1515,6 +1611,7 @@ def multi_guard_panel_device(
             <div><b>Wersja Multi-Guard</b><span>{_panel_h(row['app_version'] or '—')}</span></div>
             <div><b>Kanał</b><span>{_panel_h(row['release_channel'] or 'STABLE')}</span></div>
             <div><b>Stan</b><span>{_panel_h(row['health_level'] or '—')}</span></div>
+            <div><b>Łączność</b><span class="presence-label"><span class="presence-dot presence-{device_presence_style}" aria-hidden="true"></span>{_panel_h(device_presence_label)}</span></div>
             <div><b>Ostatni kontakt</b><span>{_panel_dt(row['last_seen_at'])}</span></div>
             <div><b>Zlecenie</b><span>{_panel_h(row['reception_number'] or '—')}</span></div>
             <div><b>Numer seryjny</b><span>{_panel_h(row['serial_number'] or '—')}</span></div>
