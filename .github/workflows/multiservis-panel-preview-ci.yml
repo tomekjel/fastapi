@@ -37,5 +37,41 @@ jobs:
               if fragment=="multiguard_panel.py": continue
               assert fragment in install, fragment
           assert 'curl -fsSL "$RAW_BASE/app/routers/multiguard_service_panel.py"' in install
-          print("OWNER PANEL SOURCE AUDIT PASS")
+          runtime=(root/"app/routers/multiguard_runtime.py").read_text()
+          for fragment in [
+              'service_order_count',
+              'service.service_orders so',
+              'so.device_id=:service_device_id',
+              '/multiguard/panel/service/',
+              'id="service-history"',
+              'repair_visits',
+          ]:
+              assert fragment in runtime, fragment
+          for fragment in [
+              '@router.get("/multiguard/panel/versions"',
+              "WHERE channel IN ('PILOT','STABLE')",
+              'guard.release_versions',
+              '_changelog',
+          ]:
+              assert fragment in source, fragment
+          assert "HISTORIA WERSJI" in theme
+          # Exercise the release-note formatter without importing the production
+          # backend. User-authored release notes must be escaped.
+          import ast, html
+          parsed=ast.parse(source)
+          formatter=next(x for x in parsed.body if isinstance(x,ast.FunctionDef) and x.name=='_changelog')
+          safe_globals={'esc': lambda v: html.escape(str(v),quote=True),
+                        '_RELEASE_CATEGORIES':{
+                          'ADDED':('Dodano','mg-green'),'FIXED':('Naprawiono','mg-blue'),
+                          'CHANGED':('Zmieniono','mg-gold'),'REMOVED':('Usunięto','mg-red'),
+                          'SECURITY':('Bezpieczeństwo','mg-red')
+                        }}
+          exec(compile(ast.Module(body=[formatter],type_ignores=[]),'<changelog-test>','exec'),safe_globals)
+          make=safe_globals['_changelog']
+          assert 'Dodano' in make('ADDED: Sprzęt')
+          assert 'Usunięto' in make('REMOVED: Stara funkcja')
+          assert 'Naprawiono' in make('FIXED: Czujnik')
+          assert '&lt;script&gt;' in make('ADDED: <script>')
+          assert 'Brak' in make('')
+          print("OWNER PANEL ROUTES + CHANGELOG PARSER AUDIT PASS")
           PY
