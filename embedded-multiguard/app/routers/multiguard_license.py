@@ -931,6 +931,12 @@ tr:hover td{{background:#192c408a}}
 input,select{{background:#09192b;border-color:#496078;color:#f2f8fc}}
 button{{background:linear-gradient(115deg,#a96f3c,#b45b56);box-shadow:inset 0 1px #ffffff26}}
 button:hover{{filter:brightness(1.1)}}
+.presence-label{{display:inline-flex;align-items:center;gap:9px;font-weight:650;font-size:12px;white-space:normal;line-height:1.4;}}
+.presence-dot{{display:inline-block;flex:0 0 9px;width:9px;height:9px;border-radius:50%;background:#8190a2;border:1px solid #c0c9d14d;}}
+.presence-recent{{background:#42df95;box-shadow:0 0 4px #2be485e0,0 0 11px #20cb6e8c;}}
+.presence-delayed{{background:#e0b75d;box-shadow:0 0 8px #e0b75d77;}}
+.presence-stale,.presence-unknown{{background:#677b90;box-shadow:none;}}
+.presence-removed{{background:#8090a3;box-shadow:none;border:1px solid #41516c;opacity:.65;}}
 .release-timeline{{display:grid;gap:14px;margin-top:16px}}
 .release-card{{border:1px solid #7f684f8c;background:linear-gradient(125deg,#1b2d41,#102036 70%,#191f30);border-radius:15px;padding:20px;box-shadow:inset 0 1px #ffffff14}}
 .release-card .eyebrow{{color:#e6bf7f}}
