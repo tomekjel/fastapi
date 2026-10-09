@@ -424,7 +424,7 @@ def _signed_envelope(link: dict[str, Any]) -> dict[str, str]:
     payload_obj = {
         "schemaVersion": 1,
         "licenseId": link["keygate_license_id"],
-        "serviceDeviceId": str(link["service_device_id"]),
+        "serviceDeviceId": (str(link["service_device_id"]) if link.get("service_device_id") else None),
         "installationId": str(link["installation_id"] or ""),
         "deviceId": link.get("device_id") or "",
         "planCode": link["plan_code"],
@@ -454,10 +454,11 @@ CREATE SCHEMA IF NOT EXISTS guard;
 
 CREATE TABLE IF NOT EXISTS guard.license_links (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    reception_id UUID NOT NULL UNIQUE REFERENCES service.service_orders(id) ON DELETE CASCADE,
+    reception_id UUID UNIQUE REFERENCES service.service_orders(id) ON DELETE CASCADE,
     reception_number TEXT NOT NULL UNIQUE,
-    service_device_id UUID NOT NULL REFERENCES core.devices(id) ON DELETE RESTRICT,
+    service_device_id UUID REFERENCES core.devices(id) ON DELETE RESTRICT,
     keygate_license_id TEXT NOT NULL UNIQUE,
+    sale_kind TEXT NOT NULL DEFAULT 'SERVICE' CHECK (sale_kind IN ('SERVICE','DIRECT')),
     keygate_plan_id TEXT NOT NULL,
     license_key_hash TEXT NOT NULL UNIQUE,
     plan_code TEXT NOT NULL CHECK (plan_code IN ('multi_guard','multi_guard_pro')),
@@ -556,7 +557,7 @@ CREATE TABLE IF NOT EXISTS guard.workshop_reports (
 
 CREATE TABLE IF NOT EXISTS guard.installations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_device_id UUID NOT NULL REFERENCES core.devices(id) ON DELETE CASCADE,
+    service_device_id UUID REFERENCES core.devices(id) ON DELETE CASCADE,
     installation_external_id UUID NOT NULL UNIQUE,
     device_id_hash TEXT NOT NULL,
     credential_sha256 TEXT NOT NULL CHECK (length(credential_sha256)=64),
@@ -582,7 +583,7 @@ CREATE INDEX IF NOT EXISTS idx_guard_installations_device
 
 CREATE TABLE IF NOT EXISTS guard.activation_events (
     id BIGSERIAL PRIMARY KEY,
-    reception_id UUID NOT NULL REFERENCES service.service_orders(id) ON DELETE CASCADE,
+    reception_id UUID REFERENCES service.service_orders(id) ON DELETE CASCADE,
     reception_number TEXT NOT NULL,
     keygate_license_id TEXT NOT NULL UNIQUE,
     edition TEXT NOT NULL CHECK (edition IN ('STANDARD','PRO')),
@@ -593,6 +594,15 @@ CREATE TABLE IF NOT EXISTS guard.activation_events (
 CREATE INDEX IF NOT EXISTS idx_guard_activation_events_created
     ON guard.activation_events(id DESC);
 
+-- Allow direct customer sales without creating fictitious service orders.
+-- Preserve existing FKs and historic service rows; only remove NOT NULL.
+ALTER TABLE guard.license_links ALTER COLUMN reception_id DROP NOT NULL;
+ALTER TABLE guard.license_links ALTER COLUMN service_device_id DROP NOT NULL;
+ALTER TABLE guard.license_links
+    ADD COLUMN IF NOT EXISTS sale_kind TEXT NOT NULL DEFAULT 'SERVICE'
+        CHECK (sale_kind IN ('SERVICE','DIRECT'));
+ALTER TABLE guard.installations ALTER COLUMN service_device_id DROP NOT NULL;
+ALTER TABLE guard.activation_events ALTER COLUMN reception_id DROP NOT NULL;
 ALTER TABLE guard.license_links
     ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
 ALTER TABLE guard.installations
@@ -1187,7 +1197,7 @@ def _public_status(link: dict[str, Any] | None) -> dict[str, Any]:
         "configured": True,
         "installed": bool(link.get("installation_id")),
         "licenseId": link["keygate_license_id"],
-        "serviceDeviceId": str(link["service_device_id"]),
+        "serviceDeviceId": (str(link["service_device_id"]) if link.get("service_device_id") else None),
         "receptionNumber": link["reception_number"],
         "edition": "PRO" if link["plan_code"] == "multi_guard_pro" else "STANDARD",
         "planCode": link["plan_code"],
