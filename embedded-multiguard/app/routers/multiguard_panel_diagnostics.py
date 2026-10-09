@@ -10,7 +10,7 @@ import html
 import json
 import threading
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import RedirectResponse
@@ -44,7 +44,8 @@ def _schema():
                   edition TEXT NOT NULL CHECK(edition IN ('STANDARD','PRO')),
                   status TEXT NOT NULL DEFAULT 'PREPARED'
                       CHECK(status IN ('PREPARED','CANCELLED','ISSUED')),
-                  planned_until TIMESTAMPTZ NOT NULL,
+                  planned_duration_days INTEGER NOT NULL DEFAULT 14
+                    CHECK (planned_duration_days BETWEEN 1 AND 365),
                   owner_note TEXT NOT NULL DEFAULT '',
                   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -81,20 +82,20 @@ def owner_diagnostic_plan_panel(installation_id:uuid.UUID) -> str:
     _schema()
     with engine.connect() as db:
         row=db.execute(text("""
-            SELECT id,edition,planned_until,owner_note,created_at
+            SELECT id,edition,planned_duration_days,owner_note,created_at
             FROM guard.owner_diagnostic_plans
             WHERE installation_id=:iid AND status='PREPARED'
             ORDER BY created_at DESC LIMIT 1
         """),{"iid":installation_id}).mappings().first()
         historic=db.execute(text("""
-            SELECT id,edition,status,planned_until,created_at
+            SELECT id,edition,status,planned_duration_days,created_at
             FROM guard.owner_diagnostic_plans
             WHERE installation_id=:iid
             ORDER BY created_at DESC LIMIT 20
         """),{"iid":installation_id}).mappings().all()
     plan_text=(
         f'<div class="detail-facts"><div class="detail-fact"><b>Przygotowany plan</b>'
-        f'<span>Serwis {_h(row["edition"])} · do {_dt(row["planned_until"])}</span></div></div>'
+        f'<span>Serwis {_h(row["edition"])} · {_h(row["planned_duration_days"])} dni od przyszłej aktywacji</span></div></div>'
         if row else '<p class="muted">Nie przygotowano jeszcze planu diagnostyki.</p>'
     )
     action='extend' if row else 'prepare'
@@ -115,7 +116,7 @@ def owner_diagnostic_plan_panel(installation_id:uuid.UUID) -> str:
     history="".join(
         f'<tr><td>{_dt(item["created_at"])}</td>'
         f'<td>Serwis {_h(item["edition"])}</td><td>{_h(item["status"])}</td>'
-        f'<td>{_dt(item["planned_until"])}</td></tr>'
+        f'<td>{_h(item["planned_duration_days"])} dni</td></tr>'
         for item in historic
     ) or '<tr><td colspan="4">Nie było wcześniejszych planów.</td></tr>'
     return f"""
@@ -143,7 +144,7 @@ def owner_diagnostic_plan_panel(installation_id:uuid.UUID) -> str:
       {cancel_button}
       <h3>Historia przygotowań</h3>
       <div class="table-wrap"><table><thead><tr><th>Utworzono</th><th>Edycja</th>
-      <th>Stan</th><th>Do</th></tr></thead><tbody>{history}</tbody></table></div>
+      <th>Stan</th><th>Planowany okres</th></tr></thead><tbody>{history}</tbody></table></div>
     </section>
     """
 
@@ -170,7 +171,7 @@ def save_owner_diagnostic_plan(
         """),{"id":installation_id}).mappings().first()
         if installation is None: raise HTTPException(404,"Nie znaleziono komputera.")
         current=db.execute(text("""
-            SELECT id,edition,status,planned_until,owner_note
+            SELECT id,edition,status,planned_duration_days,owner_note
             FROM guard.owner_diagnostic_plans
             WHERE installation_id=:id AND status='PREPARED' FOR UPDATE
         """),{"id":installation_id}).mappings().first()
@@ -181,26 +182,27 @@ def save_owner_diagnostic_plan(
         )
         if action=="prepare":
             if current: raise HTTPException(409,"Plan już istnieje. Wybierz przedłużenie.")
-            # Future activation will start counting ONLY after client acceptance,
-            # not when preparing the plan.
-            planned_until=datetime.now(timezone.utc)+timedelta(days=days)
+            # Duration is a plan, NOT the beginning of a licence.
+            planned_duration_days=days
             row=db.execute(text("""
                 INSERT INTO guard.owner_diagnostic_plans(
-                    installation_id,service_device_id,edition,planned_until,owner_note)
-                VALUES(:iid,:did,:edition,:until,:note)
+                    installation_id,service_device_id,edition,planned_duration_days,owner_note)
+                VALUES(:iid,:did,:edition,:days,:note)
                 RETURNING id
             """),{"iid":installation_id,"did":installation["service_device_id"],
-                  "edition":edition,"until":planned_until,"note":owner_note.strip()}).mappings().one()
+                  "edition":edition,"days":planned_duration_days,"note":owner_note.strip()}).mappings().one()
             plan_id=row["id"]
         elif action=="extend":
             if current is None: raise HTTPException(409,"Brak planu do przedłużenia.")
-            planned_until=max(current["planned_until"],datetime.now(timezone.utc))+timedelta(days=days)
+            planned_duration_days=int(current["planned_duration_days"])+days
+            if planned_duration_days>365:
+                raise HTTPException(400,"Plan diagnostyki może obejmować najwyżej 365 dni.")
             plan_id=current["id"]
             db.execute(text("""
                 UPDATE guard.owner_diagnostic_plans
-                SET edition=:edition,planned_until=:until,owner_note=:note,updated_at=now()
+                SET edition=:edition,planned_duration_days=:days,owner_note=:note,updated_at=now()
                 WHERE id=:id
-            """),{"id":plan_id,"edition":edition,"until":planned_until,"note":owner_note.strip()})
+            """),{"id":plan_id,"edition":edition,"days":planned_duration_days,"note":owner_note.strip()})
         else:
             if current is None: raise HTTPException(409,"Nie ma aktywnego planu do anulowania.")
             plan_id=current["id"]
@@ -211,7 +213,7 @@ def save_owner_diagnostic_plan(
         after={
             "edition":edition if action!="cancel" else before["edition"],
             "status":"CANCELLED" if action=="cancel" else "PREPARED",
-            "planned_until":planned_until.isoformat() if action!="cancel" else before["planned_until"],
+            "planned_duration_days":planned_duration_days if action!="cancel" else before["planned_duration_days"],
             "owner_note":owner_note.strip() if action!="cancel" else before["owner_note"],
         }
         db.execute(text("""
