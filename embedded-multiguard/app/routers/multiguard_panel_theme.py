@@ -185,6 +185,39 @@ tbody tr:last-child td {border-bottom:0}
   transition:border-color .15s,transform .15s}
 a:hover .media-thumb {border-color:var(--gold);transform:scale(1.02)}
 
+
+/* Owner photo viewer: next / previous without opening new browser tabs */
+.photo-viewer {width:min(1200px,96vw);max-width:96vw;max-height:95vh;overflow:hidden;
+  padding:0;border-radius:15px;border:1px solid #527395;background:#091523;color:var(--text);
+  box-shadow:0 35px 100px rgba(0,0,0,.72)}
+.photo-viewer::backdrop {background:rgba(0,5,13,.9);backdrop-filter:blur(8px)}
+.photo-viewer[open] {display:flex;flex-direction:column}
+.viewer-top,.viewer-bottom {display:flex;align-items:center;gap:16px;padding:13px 19px;background:#102134}
+.viewer-top {justify-content:space-between;border-bottom:1px solid var(--line)}
+.viewer-top strong {font-weight:400;font-size:18px}
+.viewer-top button,.viewer-bottom button {min-height:37px;padding:8px 13px}
+.viewer-body {display:grid;grid-template-columns:55px minmax(0,1fr) 55px;
+  align-items:stretch;min-height:260px;max-height:72vh;background:#050c15}
+.viewer-arrow {background:#102134;border:none;border-radius:0;font-size:28px;color:#e8bc65;padding:0;min-width:0}
+.viewer-viewport {display:flex;align-items:center;justify-content:center;overflow:auto;min-height:260px;
+  max-height:72vh;overscroll-behavior:contain;touch-action:pan-y pan-x}
+.viewer-image {display:block;width:100%;max-width:none;max-height:68vh;height:auto;
+  object-fit:contain;flex-shrink:0;user-select:none}
+.viewer-bottom {flex-wrap:wrap;justify-content:space-between;border-top:1px solid var(--line)}
+.viewer-count {font-size:16px;color:var(--gold);white-space:nowrap}
+.viewer-caption {flex:1 1 170px;color:#d5e1ed;overflow-wrap:anywhere}
+.viewer-zoom {display:flex;align-items:center;gap:8px;flex-shrink:0}
+.viewer-zoom-label {min-width:58px;text-align:center;font-size:15px}
+.viewer-hint {font-size:13px;margin:0;padding:9px 19px 12px;background:#102134;color:#a1b7c9}
+@media(max-width:600px) {
+  .photo-viewer {width:100vw;max-width:100vw;max-height:100dvh;border-radius:0}
+  .viewer-body {grid-template-columns:37px minmax(0,1fr) 37px;max-height:70dvh}
+  .viewer-viewport {max-height:70dvh}
+  .viewer-arrow {font-size:22px}
+  .viewer-top,.viewer-bottom {padding:10px 12px;gap:9px}
+  .viewer-hint {padding:7px 12px;font-size:12px}
+}
+
 .problem-title {font-size:16px;color:#e9eff6}
 .badge {display:inline-block;max-width:100%;vertical-align:middle;
   color:#bddcee;background:rgba(82,140,172,.11);
