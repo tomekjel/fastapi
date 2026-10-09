@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 2,
-  "target_sha": "d4a665f501ad769bbb89bb21da9cc73011da21f7",
-  "summary": "Owner-approved WEB deploy after fixing strict allowlist for exact owner-v12-deploy.trigger and router 0644 permissions; isolated CI 37989958713 PASS."
+  "sequence": 3,
+  "target_sha": "81651ad1393bac41c28aa9acf93684a3b64b8bc2",
+  "summary": "OWNER-approved Multi-Guard licensing upgrade: workshop Standard/Pro, direct sale without order, owner handover, computer aliases and idempotent renewals. GitHub Actions owner real PostgreSQL/Chromium PASS run 37998278514. Backend-only rollout; Windows client test 0.3.38 separate."
 }
