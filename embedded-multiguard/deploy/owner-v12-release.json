@@ -2,6 +2,6 @@
   "schema_version": 1,
   "scope": "owner-web-only",
   "sequence": 2,
-  "target_sha": "65d59959d873def48eedc93a5dc0e3e63b3e24e1",
-  "summary": "Retry after verified chmod fix for UMask 0077 and PermissionError: approved WEB (licences and statistics), with preflight and rollback; CI run 37989259442 PASS."
+  "target_sha": "d4a665f501ad769bbb89bb21da9cc73011da21f7",
+  "summary": "Owner-approved WEB deploy after fixing strict allowlist for exact owner-v12-deploy.trigger and router 0644 permissions; isolated CI 37989958713 PASS."
 }
