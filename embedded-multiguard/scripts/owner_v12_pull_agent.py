@@ -88,7 +88,18 @@ def fetch_json(url: str, limit: int=MAX_BYTES) -> dict:
 
 
 def release_request(fetch=fetch_json) -> dict:
-    raw=fetch(CONTROLLER)
+    # Resolve the branch to an immutable commit via GitHub REST first.
+    # raw.githubusercontent.com may otherwise serve an obsolete branch-
+    # addressed manifest from its CDN despite Cache-Control: no-cache.
+    branch_response=fetch(f"{API}/branches/{BRANCH}")
+    head=(branch_response.get("commit") or {}).get("sha")
+    if not isinstance(head,str) or SHA.fullmatch(head) is None:
+        raise Blocked("Invalid GitHub branch HEAD for release manifest")
+    immutable_url=(
+        f"https://raw.githubusercontent.com/{REPO}/{head}/"
+        "embedded-multiguard/deploy/owner-v12-release.json"
+    )
+    raw=fetch(immutable_url)
     expected_keys={"schema_version","scope","sequence","target_sha","summary"}
     if raw.keys()!=expected_keys:
         raise Blocked("Owner release manifest has unexpected fields")
