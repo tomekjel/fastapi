@@ -292,5 +292,18 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     ensure(get(f"/multiguard/panel/service/{order_a}/media/{media_a}").status_code,
            404,"Deleted private attachment")
 
+    # Gate future deployment on read-only compatibility with the historical
+    # Multi-Servis schema. It must neither mutate nor fetch customer records.
+    spec=importlib.util.spec_from_file_location(
+        "owner_preflight",
+        str(ROOT/"scripts"/"preflight_owner_panel.py"),
+    )
+    preflight=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(preflight)
+    contract=preflight.contract_check(engine,media_root)
+    assert contract["result"]=="PASS",contract
+    assert contract["database_mutated"] is False
+    assert contract["production_data_accessed"] is False
+    print("PASS: read-only owner-panel schema and media-root preflight.")
     print("PASS: PostgreSQL + actual FastAPI owner routes, private media, device links,")
     print("      CSRF forms, configurable status, audited inactive diagnostic renewals.")
