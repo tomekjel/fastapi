@@ -33,7 +33,7 @@ jobs:
           bash -n embedded-multiguard/deploy-owner-web-v12.sh
           grep -q 'MULTISERVIS_OWNER_WEB_REF' embedded-multiguard/deploy-owner-web-v12.sh
           grep -q 'ROLLBACK owner V12 panel files' embedded-multiguard/deploy-owner-web-v12.sh
-          grep -q 'PASS: existing non-panel API endpoints' embedded-multiguard/deploy-owner-web-v12.sh
+          grep -q 'PASS: existing non-panel API endpoint bodies' embedded-multiguard/deploy-owner-web-v12.sh
           if grep -q 'sync_multiguard_releases.py' embedded-multiguard/deploy-owner-web-v12.sh; then
             echo 'BLOCKED: OWNER panel-only deployment would touch release synchronization'
             exit 1
