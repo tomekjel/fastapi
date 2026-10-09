@@ -153,3 +153,37 @@ jobs:
               assert fragment in (runtime+theme), fragment
           print("OWNER PANEL ROUTES + CHANGELOG + INSTALLATION PRESENCE AUDIT PASS")
           PY
+      - name: Build seven real V12 panel template previews (sample data clearly labelled)
+        run: |
+          python embedded-multiguard/scripts/preview_owner_panel.py owner-preview
+          test "$(find owner-preview -maxdepth 1 -name '*.html' | wc -l)" -eq 7
+          grep -q 'workspace-sidebar' owner-preview/01-pulpit.html
+          grep -q 'Dane przykładowe' owner-preview/01-pulpit.html
+      - name: Render V12 screenshots in Chromium
+        run: |
+          python -m pip install --quiet 'playwright==1.56.0'
+          python -m playwright install --with-deps chromium
+          python - <<'PY'
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+          folder=Path("owner-preview").resolve()
+          with sync_playwright() as p:
+              browser=p.chromium.launch(headless=True)
+              for width, height, suffix in [(1440,900,"desktop"),(390,844,"mobile")]:
+                  page=browser.new_page(viewport={"width":width,"height":height},device_scale_factor=1)
+                  for source in sorted(folder.glob("*.html")):
+                      page.goto(source.as_uri(),wait_until="load")
+                      assert page.locator(".workspace-shell").count()==1
+                      assert page.locator("main#content").count()==1
+                      assert page.locator("body").evaluate("(el)=>getComputedStyle(el).fontWeight")=="400"
+                      assert page.locator("h1").count()>=1
+                      page.screenshot(path=str(source.with_name(f"{source.stem}-{suffix}.png")),full_page=True)
+                  page.close()
+              browser.close()
+          PY
+      - name: Upload browser-rendered owner panel previews
+        uses: actions/upload-artifact@v4
+        with:
+          name: multi-servis-v12-owner-panel-preview
+          path: owner-preview/
+          retention-days: 7
