@@ -82,17 +82,14 @@ jobs:
               'guard.owner_diagnostic_plans_audit',
               "status='PREPARED'",
               'planned_duration_days',
-              'max(current["planned_duration_days"]',
           ]:
-              if fragment.startswith('max('):
-                  continue
               assert fragment in diag, fragment
           assert 'multiguard_panel_diagnostics.router' in install
           assert 'DIAGNOSTICS_PANEL_FILE' in install
           assert 'owner_diagnostic_plan_panel' in runtime
           assert '/multiguard/panel/device/{installation_id}/diagnostic-plan' in install
           assert 'KeyGate' in diag and 'never signs client entitlements' in diag
-                    assert 'multiguard_panel_triage.router' in install
+          assert 'multiguard_panel_triage.router' in install
           assert 'TRIAGE_FILE' in install
           triage=(root/"app/routers/multiguard_panel_triage.py").read_text()
           for fragment in [
