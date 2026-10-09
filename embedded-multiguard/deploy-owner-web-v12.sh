@@ -164,6 +164,7 @@ import json,sys
 j=json.load(open(sys.argv[1],encoding="utf-8-sig"));paths=j.get("paths",{})
 must_have=[
 "/multiguard/panel/dashboard",
+"/multiguard/panel/computers",
 "/multiguard/panel/service",
 "/multiguard/panel/service/{order_id}",
 "/multiguard/panel/service/{order_id}/media/{media_id}",
