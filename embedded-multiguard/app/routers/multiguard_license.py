@@ -926,6 +926,104 @@ def _assign_pending_to_reception(
     return link
 
 
+
+def _assign_direct_customer_license(
+    installation_id: uuid.UUID, edition: str, months: int, channel: str
+) -> dict[str, Any]:
+    """Assign paid client rights without creating a repair order."""
+    edition = edition.strip().upper()
+    channel = channel.strip().upper()
+    if edition not in {"STANDARD", "PRO"} or months not in {3, 6, 12}:
+        raise HTTPException(400, "Wybierz Standard/Pro i okres 3, 6 lub 12 miesięcy.")
+    if channel not in {"STABLE", "PILOT"}:
+        raise HTTPException(400, "Kanał musi być Stabilna albo Beta.")
+    _ensure_schema()
+    with engine.begin() as con:
+        pending = con.execute(text("""
+            SELECT * FROM guard.pending_installations
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id": installation_id}).mappings().first()
+        if pending is None:
+            raise HTTPException(404, "Komputer nie został zarejestrowany.")
+        if pending["status"] != "WAITING" or pending["assigned_license_id"]:
+            raise HTTPException(409, "Komputer ma już przypisaną licencję.")
+        existing = con.execute(text("""
+            SELECT id FROM guard.license_links
+            WHERE installation_id=:id LIMIT 1
+        """), {"id": installation_id}).first()
+        if existing:
+            raise HTTPException(409, "Istnieje już powiązanie tej instalacji.")
+        # A KeyGate workspace reference identifies the installation, not
+        # an imaginary repair order. No service.order record is created.
+        reference = "MG-DIRECT-" + installation_id.hex
+        created = _keygate_create_license(
+            reception_number=reference, edition=edition, months=months,
+        )
+        lic = con.execute(text("""
+            INSERT INTO guard.license_links(
+                reception_id,reception_number,service_device_id,
+                sale_kind,installation_id,
+                keygate_license_id,keygate_plan_id,license_key_hash,
+                plan_code,duration_months,release_channel,lifecycle
+            ) VALUES (
+                NULL,:reference,NULL,'DIRECT',:installation_id,
+                :license_id,:plan_id,:key_hash,:plan,:months,:channel,'UNASSIGNED'
+            ) RETURNING *
+        """), {
+            "reference":reference, "installation_id":installation_id,
+            "license_id":str(created["id"]), "plan_id":created["_plan_id"],
+            "key_hash":_hash(created["_license_key"]),
+            "plan":"multi_guard_pro" if edition=="PRO" else "multi_guard",
+            "months":months,"channel":channel,
+        }).mappings().one()
+        con.execute(text("""
+            UPDATE guard.pending_installations SET
+                status='ASSIGNED',assigned_reception_id=NULL,
+                assigned_license_id=:license_id,
+                assigned_at=now(),updated_at=now()
+            WHERE installation_id=:id
+        """), {"license_id":lic["keygate_license_id"],"id":installation_id})
+        con.execute(text("""
+            UPDATE guard.workshop_grants SET enabled=FALSE,updated_at=now()
+            WHERE installation_id=:id AND enabled=TRUE
+        """), {"id":installation_id})
+    return _normalize_link(dict(lic))
+
+
+def _handover_direct_customer(installation_id: uuid.UUID) -> dict[str, Any]:
+    """Require customer document acceptance before starting paid time."""
+    _ensure_schema()
+    with engine.begin() as con:
+        pending = con.execute(text("""
+            SELECT assigned_license_id FROM guard.pending_installations
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id":installation_id}).mappings().first()
+        if not pending or not pending["assigned_license_id"]:
+            raise HTTPException(404, "Nie znaleziono przypisanej licencji.")
+        link = con.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE keygate_license_id=:license_id AND sale_kind='DIRECT'
+                  AND installation_id=:installation_id
+            FOR UPDATE
+        """), {"license_id":pending["assigned_license_id"],
+                "installation_id":installation_id}).mappings().first()
+        if not link:
+            raise HTTPException(404, "Brak bezpośredniej licencji klienta.")
+        if link["lifecycle"] in {"REVOKED", "EXPIRED"}:
+            raise HTTPException(409, "Licencja została cofnięta lub wygasła.")
+        if link["lifecycle"] in {"ACTIVE", "PENDING_ACCEPTANCE"}:
+            return _normalize_link(dict(link))
+        updated = con.execute(text("""
+            UPDATE guard.license_links
+            SET lifecycle='PENDING_ACCEPTANCE',
+                approved_at=COALESCE(approved_at,now()),updated_at=now()
+            WHERE id=:id RETURNING *
+        """), {"id":link["id"]}).mappings().one()
+        result = _normalize_link(dict(updated))
+        _update_installation_mirror(con,result)
+        return result
+
+
 def _reception(reception_id: uuid.UUID) -> dict[str, Any]:
     with engine.connect() as connection:
         row = connection.execute(
