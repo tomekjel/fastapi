@@ -1253,6 +1253,7 @@ def multi_guard_panel_dashboard(
     if presence not in {"all", "silent", "removed"}:
         raise HTTPException(400, "Nieprawidłowy filtr kontaktu Multi-Guard.")
     _ensure_schema()
+    config = owner_panel_config()
     with engine.connect() as connection:
         counts = connection.execute(
             text(
