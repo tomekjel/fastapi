@@ -39,7 +39,7 @@ jobs:
           bash -n embedded-multiguard/deploy-owner-web-v12.sh
           grep -q 'MULTISERVIS_OWNER_WEB_REF' embedded-multiguard/deploy-owner-web-v12.sh
           grep -q 'ROLLBACK owner V12 panel files' embedded-multiguard/deploy-owner-web-v12.sh
-          grep -q 'PASS: existing non-panel API endpoint bodies' embedded-multiguard/deploy-owner-web-v12.sh
+          grep -q 'AUTHORIZED_LICENSE_EVOLUTION' embedded-multiguard/deploy-owner-web-v12.sh
           # Regress the real deployment outage: systemd pull service has
           # UMask=0077, so cp -p of curl stage files made modules root-only 0600.
           grep -Fq 'install -m 0644 "$STAGE/$name" "$ROUTERS/$name"' embedded-multiguard/deploy-owner-web-v12.sh
@@ -51,6 +51,8 @@ jobs:
             echo 'BLOCKED: OWNER panel-only deployment would touch release synchronization'
             exit 1
           fi
+      - name: Verify new guarded deployment accepts only the two reviewed licence endpoint bodies
+        run: python embedded-multiguard/tests/test_owner_deploy_contract.py
       - name: Unit-test owner photo access boundaries and safe diagnostic licence drafts
         run: python embedded-multiguard/tests/test_owner_panel_security.py
       - name: Verify outbound-only owner V12 pull agent and bootstrap
