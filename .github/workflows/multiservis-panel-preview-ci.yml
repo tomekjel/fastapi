@@ -167,6 +167,9 @@ jobs:
               assert fragment in (runtime+theme), fragment
           print("OWNER PANEL ROUTES + CHANGELOG + INSTALLATION PRESENCE AUDIT PASS")
           PY
+      - name: Inspect bundled server storage interfaces for owner-photo streaming
+        run: |
+          python embedded-multiguard/scripts/audit_backend_storage.py
       - name: Build seven real V12 panel template previews (sample data clearly labelled)
         run: |
           python embedded-multiguard/scripts/preview_owner_panel.py owner-preview
