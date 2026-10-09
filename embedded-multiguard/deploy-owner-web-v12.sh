@@ -74,7 +74,7 @@ curl --fail --show-error --silent --location --retry 3 --max-time 25 \
 
 # Strictly READ-ONLY DB schema and media mount preflight; no mutation.
 cd "$ROOT"
-"$PY" "$STAGE/preflight.py"
+PYTHONPATH="$ROOT" "$PY" "$STAGE/preflight.py"
 "$PY" -m py_compile "$STAGE"/*.py
 
 # Verify existing client/Android router contracts are not lost by replacement.
