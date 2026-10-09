@@ -21,6 +21,7 @@ SETTINGS_PANEL_FILE="$ROUTER_DIR/multiguard_panel_settings.py"
 OWNER_DEVICE_FILE="$ROUTER_DIR/multiguard_panel_devices.py"
 THEME_FILE="$ROUTER_DIR/multiguard_panel_theme.py"
 TRIAGE_FILE="$ROUTER_DIR/multiguard_panel_triage.py"
+DIAGNOSTICS_PANEL_FILE="$ROUTER_DIR/multiguard_panel_diagnostics.py"
 SCRIPT_DIR="$APP_ROOT/scripts"
 SYNC_SCRIPT_FILE="$SCRIPT_DIR/sync_multiguard_releases.py"
 RELEASE_ROOT="$APP_ROOT/releases/multiguard"
@@ -39,6 +40,7 @@ HAD_SETTINGS_PANEL=0
 HAD_OWNER_DEVICE_FILE=0
 HAD_THEME_FILE=0
 HAD_TRIAGE_FILE=0
+HAD_DIAGNOSTICS_PANEL=0
 
 cleanup() {
   rm -f "$OPENAPI_TMP"
@@ -100,6 +102,11 @@ rollback() {
       cp -a "$BACKUP_DIR/multiguard_panel_triage.py" "$TRIAGE_FILE"
     else
       rm -f "$TRIAGE_FILE"
+    fi
+    if [ "$HAD_DIAGNOSTICS_PANEL" -eq 1 ]; then
+      cp -a "$BACKUP_DIR/multiguard_panel_diagnostics.py" "$DIAGNOSTICS_PANEL_FILE"
+    else
+      rm -f "$DIAGNOSTICS_PANEL_FILE"
     fi
     systemctl disable --now multiservis-multiguard-release-sync.timer >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/multiservis-multiguard-release-sync.service
@@ -167,6 +174,10 @@ if [ -f "$TRIAGE_FILE" ]; then
   HAD_TRIAGE_FILE=1
   cp -a "$TRIAGE_FILE" "$BACKUP_DIR/multiguard_panel_triage.py"
 fi
+if [ -f "$DIAGNOSTICS_PANEL_FILE" ]; then
+  HAD_DIAGNOSTICS_PANEL=1
+  cp -a "$DIAGNOSTICS_PANEL_FILE" "$BACKUP_DIR/multiguard_panel_diagnostics.py"
+fi
 
 DEPLOY_STARTED=1
 
@@ -180,8 +191,9 @@ curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_settings.py" -o "$SETTINGS_PA
 curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_devices.py" -o "$OWNER_DEVICE_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_theme.py" -o "$THEME_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_triage.py" -o "$TRIAGE_FILE"
+curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_diagnostics.py" -o "$DIAGNOSTICS_PANEL_FILE"
 curl -fsSL "$RAW_BASE/scripts/sync_multiguard_releases.py" -o "$SYNC_SCRIPT_FILE"
-chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE" "$THEME_FILE" "$TRIAGE_FILE"
+chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE" "$THEME_FILE" "$TRIAGE_FILE" "$DIAGNOSTICS_PANEL_FILE"
 chmod 0755 "$SYNC_SCRIPT_FILE"
 
 PYTHON="$APP_ROOT/.venv/bin/python"
@@ -213,6 +225,7 @@ import_lines = [
     "from app.routers import multiguard_panel_settings",
     "from app.routers import multiguard_panel_devices",
     "from app.routers import multiguard_panel_triage",
+    "from app.routers import multiguard_panel_diagnostics",
 ]
 include_lines = [
     "app.include_router(multiguard_license.router)",
@@ -223,6 +236,7 @@ include_lines = [
     "app.include_router(multiguard_panel_settings.router)",
     "app.include_router(multiguard_panel_devices.router)",
     "app.include_router(multiguard_panel_triage.router)",
+    "app.include_router(multiguard_panel_diagnostics.router)",
 ]
 
 for import_line in import_lines:
@@ -246,7 +260,7 @@ for include_line in include_lines:
 path.write_text(source, encoding="utf-8")
 PY
 
-"$PYTHON" -m py_compile "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE" "$THEME_FILE" "$TRIAGE_FILE" "$SYNC_SCRIPT_FILE" "$MAIN_FILE"
+"$PYTHON" -m py_compile "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE" "$THEME_FILE" "$TRIAGE_FILE" "$DIAGNOSTICS_PANEL_FILE" "$SYNC_SCRIPT_FILE" "$MAIN_FILE"
 
 cat > /etc/systemd/system/multiservis-multiguard-release-sync.service <<EOF
 [Unit]
@@ -332,6 +346,7 @@ required = [
     "/multiguard/panel/settings",
     "/multiguard/panel/device/{installation_id}/note",
     "/multiguard/panel/incident/{event_id}",
+    "/multiguard/panel/device/{installation_id}/diagnostic-plan",
     "/multiguard/agent/remote/poll",
     "/multiguard/agent/remote/decision",
     "/multiguard/agent/remote/end",
