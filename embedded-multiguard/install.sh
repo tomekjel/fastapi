@@ -19,6 +19,7 @@ UPDATES_ROUTER_FILE="$ROUTER_DIR/multiguard_updates.py"
 SERVICE_PANEL_FILE="$ROUTER_DIR/multiguard_service_panel.py"
 SETTINGS_PANEL_FILE="$ROUTER_DIR/multiguard_panel_settings.py"
 OWNER_DEVICE_FILE="$ROUTER_DIR/multiguard_panel_devices.py"
+THEME_FILE="$ROUTER_DIR/multiguard_panel_theme.py"
 SCRIPT_DIR="$APP_ROOT/scripts"
 SYNC_SCRIPT_FILE="$SCRIPT_DIR/sync_multiguard_releases.py"
 RELEASE_ROOT="$APP_ROOT/releases/multiguard"
@@ -35,6 +36,7 @@ HAD_UPDATES=0
 HAD_SERVICE_PANEL=0
 HAD_SETTINGS_PANEL=0
 HAD_OWNER_DEVICE_FILE=0
+HAD_THEME_FILE=0
 
 cleanup() {
   rm -f "$OPENAPI_TMP"
@@ -86,6 +88,11 @@ rollback() {
       cp -a "$BACKUP_DIR/multiguard_panel_devices.py" "$OWNER_DEVICE_FILE"
     else
       rm -f "$OWNER_DEVICE_FILE"
+    fi
+    if [ "$HAD_THEME_FILE" -eq 1 ]; then
+      cp -a "$BACKUP_DIR/multiguard_panel_theme.py" "$THEME_FILE"
+    else
+      rm -f "$THEME_FILE"
     fi
     systemctl disable --now multiservis-multiguard-release-sync.timer >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/multiservis-multiguard-release-sync.service
@@ -145,6 +152,10 @@ if [ -f "$OWNER_DEVICE_FILE" ]; then
   HAD_OWNER_DEVICE_FILE=1
   cp -a "$OWNER_DEVICE_FILE" "$BACKUP_DIR/multiguard_panel_devices.py"
 fi
+if [ -f "$THEME_FILE" ]; then
+  HAD_THEME_FILE=1
+  cp -a "$THEME_FILE" "$BACKUP_DIR/multiguard_panel_theme.py"
+fi
 
 DEPLOY_STARTED=1
 
@@ -156,8 +167,9 @@ curl -fsSL "$RAW_BASE/app/routers/multiguard_updates.py" -o "$UPDATES_ROUTER_FIL
 curl -fsSL "$RAW_BASE/app/routers/multiguard_service_panel.py" -o "$SERVICE_PANEL_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_settings.py" -o "$SETTINGS_PANEL_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_devices.py" -o "$OWNER_DEVICE_FILE"
+curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_theme.py" -o "$THEME_FILE"
 curl -fsSL "$RAW_BASE/scripts/sync_multiguard_releases.py" -o "$SYNC_SCRIPT_FILE"
-chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE"
+chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE" "$THEME_FILE"
 chmod 0755 "$SYNC_SCRIPT_FILE"
 
 PYTHON="$APP_ROOT/.venv/bin/python"
@@ -220,7 +232,7 @@ for include_line in include_lines:
 path.write_text(source, encoding="utf-8")
 PY
 
-"$PYTHON" -m py_compile "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE" "$SYNC_SCRIPT_FILE" "$MAIN_FILE"
+"$PYTHON" -m py_compile "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE" "$THEME_FILE" "$SYNC_SCRIPT_FILE" "$MAIN_FILE"
 
 cat > /etc/systemd/system/multiservis-multiguard-release-sync.service <<EOF
 [Unit]
