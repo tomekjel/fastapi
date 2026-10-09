@@ -186,7 +186,10 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     ensure(get("/multiguard/panel/dashboard").status_code,200,"Owner dashboard")
     ensure(get("/multiguard/panel/service").status_code,200,"Owner service")
     ensure(get(f"/multiguard/panel/service/{order_a}").status_code,200,"Service detail")
-    ensure(get(f"/multiguard/panel/device/{install_a}").status_code,200,"Device detail")
+    device_a_response=get(f"/multiguard/panel/device/{install_a}")
+    ensure(device_a_response.status_code,200,"Device detail")
+    assert f"CI-{str(order_a)[:8]}" in device_a_response.text
+    assert f"CI-{str(order_b)[:8]}" not in device_a_response.text, "Cross-device repair leakage"
     ensure(get("/multiguard/panel/versions").status_code,200,"Release list")
 
     res=get(f"/multiguard/panel/service/{order_a}/media/{media_a}")
@@ -259,5 +262,35 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         old_event=db.execute(text("SELECT event_type FROM guard.events WHERE event_id=:id"),
                              {"id":event_a}).scalar_one()
     assert state=="REVIEWING" and old_event=="WHEA_LOG"
+
+    # Presence and lifetime: the 'removed' list requires a confirmed signal;
+    # the inactive/no-contact view must not invent device failure.
+    with engine.begin() as db:
+        db.execute(text("""
+            INSERT INTO guard.agent_uninstalls(installation_id,event_id)
+            VALUES(:iid,:eid)
+        """),{"iid":install_b,"eid":uuid.uuid4()})
+        db.execute(text("""
+            UPDATE guard.installations
+            SET last_seen_at=now()-interval '9 days'
+            WHERE id=:iid
+        """),{"iid":install_a})
+    found=get("/multiguard/panel/dashboard?presence=removed")
+    ensure(found.status_code,200,"Reported uninstall filtered view")
+    assert f"{str(install_b)[:8]}" in found.text
+    assert f"{str(install_a)[:8]}" not in found.text
+    silent=get("/multiguard/panel/dashboard?presence=silent")
+    ensure(silent.status_code,200,"Silent devices filtered view")
+    assert f"{str(install_a)[:8]}" in silent.text
+    assert f"{str(install_b)[:8]}" not in silent.text
+
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE core.storage_objects SET deleted_at=now()
+            WHERE id=:id
+        """),{"id":image_storage})
+    ensure(get(f"/multiguard/panel/service/{order_a}/media/{media_a}").status_code,
+           404,"Deleted private attachment")
+
     print("PASS: PostgreSQL + actual FastAPI owner routes, private media, device links,")
     print("      CSRF forms, configurable status, audited inactive diagnostic renewals.")
