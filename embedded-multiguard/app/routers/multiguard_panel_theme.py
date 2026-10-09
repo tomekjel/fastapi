@@ -130,6 +130,22 @@ main {width:min(1580px,100%);margin:0 auto;padding:30px clamp(20px,3vw,42px) 64p
 .dashboard-hero {display:grid;gap:7px}
 .dashboard-hero .metrics {grid-template-columns:repeat(auto-fit,minmax(156px,1fr))}
 .dashboard-hero .metric {background:rgba(10,24,39,.45)}
+
+/* OWNER landing hub and separate inventory: purposeful, non-repeated layouts */
+.hub-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin-top:20px}
+.hub-tile {display:grid;align-content:start;gap:7px;min-height:170px;padding:22px;
+  background:#102337;border:1px solid rgba(112,154,194,.28);border-radius:14px;
+  color:var(--text);text-decoration:none;transition:background .18s,border-color .18s,transform .18s}
+.hub-tile:hover {background:#172e46;border-color:rgba(237,64,86,.55);color:var(--text);transform:translateY(-2px)}
+.hub-tile strong {font-size:21px;font-weight:400;color:#f4f7fb}
+.hub-tile>span:not(.hub-symbol) {color:var(--muted);font-size:15px}
+.hub-tile small {color:var(--gold);font-size:14px;margin-top:8px}
+.hub-symbol {font-size:27px;color:var(--crimson);line-height:1.1}
+.summary-footnote .section-head {margin-bottom:5px}
+.computers-hero {border-left:3px solid #598ab8!important}
+.inventory-headline {display:flex;gap:13px;align-items:center;flex-wrap:wrap;margin-top:18px}
+.inventory-headline .muted {font-size:14px}
+
 /* Service: records-first, operational data needs its own rhythm */
 .service-hero {background:linear-gradient(125deg,#203044,#14263c 62%,#152130)}
 .service-hero .owner-kpis {grid-template-columns:repeat(auto-fit,minmax(184px,1fr))}
@@ -262,6 +278,8 @@ footer {font-size:14px;color:#8fa3b5}
   .section-head {align-items:flex-start}
   .telemetry-status {align-items:flex-start}
   .filter-bar {display:grid;grid-template-columns:1fr}
+  .hub-grid {grid-template-columns:1fr}
+  .hub-tile {min-height:140px}
   .grid {grid-template-columns:1fr}
   .detail-grid,.detail-facts,.notes-grid {grid-template-columns:1fr}
   .pagination {justify-content:space-between}
