@@ -71,9 +71,9 @@ Ustalenia właściciela: 9 października 2026. Status: **gałąź testowa; produ
    GitHub CI sprawdza źródła, lecz **nie jest jeszcze testem live DB**.
 
 ## Stan niewykonany, nie udawać że działa
-- Wyświetlanie pełnych prywatnych zdjęć ze zleceń w WWW: obecnie tylko
-  lista plików. Potrzebny endpoint z kontrolą OWNER, odczyt magazynu,
-  test dostępu i retencji.
+- Kod podglądu zdjęć WWW jest już przygotowany na gałęzi preview,
+  ale **nie był testowany z rzeczywistym serwerowym dyskiem danych i bazą**;
+  konieczne testy OWNER, w tym próby obcego zlecenia, retencji i dużych plików.
 - Wystawienie zwykłej licencji dla komputera bez zlecenia serwisowego:
   stary `guard.license_links.reception_id` wymaga zlecenia; bezpieczna
   migracja musi poprzedzić funkcję.
@@ -85,8 +85,9 @@ Ustalenia właściciela: 9 października 2026. Status: **gałąź testowa; produ
   zdarzenia od razu. Aktualnie agent używa heartbeat 15 min.
 - Konfiguracja harmonogramów monitoringu z panelu dopiero, kiedy
   rzeczywisty agent potrafi bezpiecznie odbierać/walidować profile.
-- Historia decyzji o incydentach (triage), etykiety przyczyn, korelacja
-  z commitami BETA i liczby dotkniętych komputerów do dodania.
+- Indywidualna ocena zdarzenia i notatki już działają w kodzie preview;
+  do zbudowania pozostaje **zbiorcze** grupowanie podobnych problemów,
+  przypisywanie ich do poprawek BETA i analiza wielu komputerów.
 - Wizualny odczyt pełnej telemetrycznej osi czasu 7/14 dni w zleceniach
   nie jest ukończony.
 - Automatyczny rollback BETA, 7-dniowe wygaszanie ikony tray oraz
@@ -159,3 +160,27 @@ z zachowaniem bezpiecznych archiwów do odzyskiwania.
   kontrolę OWNER oraz token CSRF, oddzielną historię audytową.
 - Wymaga jeszcze testu rzeczywistej bazy, kontroli uprawnień i
   wykonania migracji przez kontrolowaną procedurę wdrożeniową.
+
+## Kontynuacja Transzy 1: zdjęcia WWW i przygotowanie diagnostyki
+
+- W nowym kodzie panelu WWW są miniatury JPEG/PNG/WebP/GIF i prywatne
+  pobieranie dokumentów z konkretnego zlecenia Multi-Servis.
+  Backend odczytuje fizyczne pliki spod `settings.media_root`, jak
+  istniejące Android API. Ścieżka jest ograniczona do tego katalogu,
+  wymagane jest uwierzytelnienie OWNER, powiązanie `order_id + media_id`,
+  brak publicznych URL obiektów i brak cache przeglądarki.
+  Zgodność przeanalizowano z archiwum źródeł
+  `MultiServisServer_FINAL.zip`; nie uruchomiono tego na produkcji.
+- W `multiguard_panel_diagnostics.py` OWNER może przygotować i
+  przedłużyć lub anulować **PLAN** przyszłej licencji SERWISOWEJ
+  DIAGNOSTYCZNEJ Standard/Pro przy już przypisanym komputerze.
+  Zapisany plan zawiera liczbę dni liczonych dopiero od przyszłego
+  zatwierdzenia licencji przez klienta. Plan jest **NIEAKTYWNY**,
+  nie generuje podpisu, nie zmienia KeyGate ani obecnej licencji.
+- To NIE jest jeszcze pełna możliwość wydania licencji diagnostycznej:
+  niezarejestrowane/pending komputery, samodzielne przypisanie urządzenia,
+  podpisana aktywacja, zgoda klienta i profil intensywnego wysyłania
+  wymagają osobnych zmian backendu i Multi-Guard BETA. Należy je
+  testować razem, bez fałszywego pokazywania planów jako aktywnych.
+- CI przygotowuje kod i przeprowadza testy ograniczenia dostępu do plików
+  oraz braku faktycznej aktywacji z samego formularza planu.
