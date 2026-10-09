@@ -1649,12 +1649,13 @@ def multi_guard_panel_device(
               <td><span class="badge">{_panel_h(event['severity'])}</span></td>
               <td class="mono">{_panel_h(event['event_type'])}</td>
               <td>{_panel_h(summary)}</td>
+              <td><a class="button-link compact" href="/multiguard/panel/incident/{event['event_id']}">OCENA / NOTATKA</a></td>
             </tr>
             """
         )
     if not event_rows:
         event_rows.append(
-            '<tr><td colspan="4" class="muted">Brak zapisanych zdarzeń.</td></tr>'
+            '<tr><td colspan="5" class="muted">Brak zapisanych zdarzeń.</td></tr>'
         )
 
     support_rows = []
@@ -1749,7 +1750,7 @@ def multi_guard_panel_device(
           <h2>Zdarzenia — ostatnie 200</h2>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Data</th><th>Poziom</th><th>Typ</th><th>Opis</th></tr></thead>
+              <thead><tr><th>Data</th><th>Poziom</th><th>Typ</th><th>Opis</th><th>Ocena właściciela</th></tr></thead>
               <tbody>{''.join(event_rows)}</tbody>
             </table>
           </div>
