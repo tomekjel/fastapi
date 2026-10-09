@@ -27,6 +27,8 @@ jobs:
             embedded-multiguard/app/routers/multiguard_panel_theme.py \
             embedded-multiguard/app/routers/multiguard_panel_triage.py \
             embedded-multiguard/app/routers/multiguard_panel_diagnostics.py
+      - name: Validate reversible backend installer syntax
+        run: bash -n embedded-multiguard/install.sh
       - name: Unit-test owner photo access boundaries and safe diagnostic licence drafts
         run: python embedded-multiguard/tests/test_owner_panel_security.py
       - name: Verify HTML routes and safe owner controls
