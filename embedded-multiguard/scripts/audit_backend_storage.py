@@ -51,3 +51,17 @@ with ZipFile(ARCHIVE) as z:
                 print(f" {j+1}: {txt}")
             limit+=1
     print("CANDIDATE_SOURCE_FILES",found)
+
+    media_router=next((n for n in names if n.endswith("/app/routers/receptions.py")),None)
+    if media_router:
+        print("FOCUSED_MEDIA_READ_IMPLEMENTATION")
+        lines=z.read(media_router).decode("utf-8","replace").splitlines()
+        for k in range(650,min(701,len(lines))):
+            line=lines[k].strip()
+            if re.search(r"password|secret|token|PRIVATE.KEY|credentials",line,re.I):
+                continue
+            print(f"{k+1}: {line[:210]}")
+        print("FOCUSED_STORAGE_ROOT_IMPORTS")
+        for k,line in enumerate(lines[:38]):
+            if "settings" in line or "FileResponse" in line or "Path" in line:
+                print(f"{k+1}: {line.strip()[:210]}")
