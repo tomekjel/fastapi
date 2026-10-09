@@ -1,7 +1,11 @@
 name: Multi-Servis Multi-Guard owner panel preview — syntax & integration
 on:
+  # Owner code changes do not burn hosted CI time on each push.
+  # Full browser + PostgreSQL regression tests execute only for deliberate release-gate triggers.
   push:
     branches: [multiservis-panel-multiguard-gold-crimson-v1]
+    paths:
+      - 'embedded-multiguard/deploy/owner-v12-livecheck.trigger'
   workflow_dispatch:
 
 jobs:
