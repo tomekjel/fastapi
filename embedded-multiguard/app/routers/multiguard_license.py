@@ -931,6 +931,11 @@ tr:hover td{{background:#192c408a}}
 input,select{{background:#09192b;border-color:#496078;color:#f2f8fc}}
 button{{background:linear-gradient(115deg,#a96f3c,#b45b56);box-shadow:inset 0 1px #ffffff26}}
 button:hover{{filter:brightness(1.1)}}
+.release-timeline{{display:grid;gap:14px;margin-top:16px}}
+.release-card{{border:1px solid #7f684f8c;background:linear-gradient(125deg,#1b2d41,#102036 70%,#191f30);border-radius:15px;padding:20px;box-shadow:inset 0 1px #ffffff14}}
+.release-card .eyebrow{{color:#e6bf7f}}
+.release-changes{{padding-left:23px;margin:12px 0 0;line-height:1.9;color:#e1e9f3;overflow-wrap:anywhere}}
+.release-changes .badge{{margin-right:8px;min-width:94px;text-align:center}}
 @media(max-width:840px){{nav{{position:relative;top:0}}main{{width:96vw}}.card{{padding:17px}}.card.panel-hero{{padding:20px}}.metric{{min-height:74px}}}}
 
 </style>
@@ -943,6 +948,7 @@ button:hover{{filter:brightness(1.1)}}
   <a href="/multiguard/panel/telemetry">TELEMETRIA / ROZWÓJ</a>
   <a href="/multiguard/panel/licenses">LICENCJE</a>
   <a href="/multiguard/panel">NOWA LICENCJA</a>
+  <a href="/multiguard/panel/versions">HISTORIA WERSJI</a>
   <a class="service-nav" href="/multiguard/panel/service">SERWIS / ZLECENIA</a>
 </nav>
 {body}
