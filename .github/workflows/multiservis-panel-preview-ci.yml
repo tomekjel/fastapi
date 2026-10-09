@@ -45,6 +45,8 @@ jobs:
               '/multiguard/panel/service/',
               'id="service-history"',
               'repair_visits',
+              'HISTORIA I ALERTY',
+              'internal_installation_id',
           ]:
               assert fragment in runtime, fragment
           for fragment in [
