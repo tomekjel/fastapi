@@ -894,7 +894,8 @@ def _fetch_device_rows(limit: int = 250):
                     COALESCE(ev.critical_30d,0) AS critical_30d,
                     COALESCE(ev.error_30d,0) AS error_30d,
                     COALESCE(sr.open_support,0) AS open_support,
-                    COALESCE(nn.unread_notifications,0) AS unread_notifications
+                    COALESCE(nn.unread_notifications,0) AS unread_notifications,
+                    COALESCE(visits.service_order_count,0) AS service_order_count
                 FROM guard.installations gi
                 LEFT JOIN core.devices d
                     ON d.id=gi.service_device_id
@@ -944,6 +945,11 @@ def _fetch_device_rows(limit: int = 250):
                       AND n.resolved_at IS NULL
                       AND n.seen_at IS NULL
                 ) nn ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT count(*) AS service_order_count
+                    FROM service.service_orders so
+                    WHERE so.device_id=gi.service_device_id
+                ) visits ON TRUE
                 WHERE gi.is_current=TRUE
                 ORDER BY
                     CASE gi.health_level
@@ -1222,6 +1228,7 @@ def multi_guard_panel_dashboard(
               <td><span class="badge">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(row['lifecycle'])}</span></td>
               <td><span class="badge {health_class}">{_panel_h(health)}</span></td>
               <td>{_panel_h(row['app_version'] or '—')}</td>
+              <td><a class="strong-link" href="/multiguard/panel/device/{row['installation_id']}#service-history">{_panel_h(row['service_order_count'])} wpisów</a></td>
               <td>{_panel_dt(row['last_seen_at'])}</td>
               <td class="numbers">
                 ⚠ {_panel_h(row['warning_30d'])}
@@ -1236,7 +1243,7 @@ def multi_guard_panel_dashboard(
 
     if not rows_html:
         rows_html.append(
-            '<tr><td colspan="8" class="muted">Brak zarejestrowanych instalacji Multi-Guard.</td></tr>'
+            '<tr><td colspan="9" class="muted">Brak zarejestrowanych instalacji Multi-Guard.</td></tr>'
         )
 
     pending_html = []
@@ -1327,7 +1334,7 @@ def multi_guard_panel_dashboard(
               <thead>
                 <tr>
                   <th>ID</th><th>Komputer</th><th>Licencja</th><th>Stan</th>
-                  <th>Wersja</th><th>Ostatni kontakt</th><th>Zdarzenia 30 dni</th><th>Zgłoszenia</th>
+                  <th>Wersja</th><th>Historia serwisu</th><th>Ostatni kontakt</th><th>Zdarzenia 30 dni</th><th>Zgłoszenia</th>
                 </tr>
               </thead>
               <tbody>{''.join(rows_html)}</tbody>
@@ -1388,6 +1395,27 @@ def multi_guard_panel_device(
             {"installation_id": iid},
         ).mappings().all()
 
+        # Repair/service visits belong to the physical core.devices record, not
+        # to the licence or its reception number. Never guess identity from a
+        # hostname or serial number: those can be duplicated or mistyped.
+        repair_visits = connection.execute(
+            text(
+                """
+                SELECT so.id,so.reception_number,so.status,
+                       so.received_at,so.completed_at,
+                       so.fault_description,so.intake_description,
+                       (SELECT count(*) FROM service.service_order_media media
+                        WHERE media.service_order_id=so.id
+                          AND media.deleted_at IS NULL) AS media_count
+                FROM service.service_orders so
+                WHERE so.device_id=:service_device_id
+                ORDER BY so.received_at DESC
+                LIMIT 100
+                """
+            ),
+            {"service_device_id": row["service_device_id"]},
+        ).mappings().all()
+
         support = connection.execute(
             text(
                 """
@@ -1444,6 +1472,39 @@ def multi_guard_panel_device(
             '<tr><td colspan="4" class="muted">Brak zgłoszeń dla tego komputera.</td></tr>'
         )
 
+    service_rows = []
+    service_state_labels = {
+        "IN_SERVICE": "W naprawie",
+        "READY_FOR_PICKUP": "Do odbioru",
+        "COMPLETED": "Wydane",
+        "CANCELLED": "Anulowane",
+    }
+    for order in repair_visits:
+        # A licence-related visit is not proof that we physically repaired
+        # the PC: use neutral "wpis w serwisie", not "wykonana naprawa".
+        status = str(order["status"] or "")
+        description = str(
+            order["fault_description"] or order["intake_description"] or ""
+        ).strip()
+        if len(description) > 240:
+            description = description[:237] + "..."
+        service_rows.append(
+            f"""
+            <tr>
+              <td><a class="strong-link" href="/multiguard/panel/service/{order['id']}">{_panel_h(order['reception_number'])}</a></td>
+              <td>{_panel_dt(order['received_at'])}</td>
+              <td>{_panel_h(service_state_labels.get(status,status))}</td>
+              <td>{_panel_h(description or 'Wpis w serwisie — brak opisu naprawy')}</td>
+              <td>{_panel_h(order['media_count'])}</td>
+              <td><a class="button-link compact" href="/multiguard/panel/service/{order['id']}">ZLECENIE / PLIKI</a></td>
+            </tr>
+            """
+        )
+    if not service_rows:
+        service_rows.append(
+            '<tr><td colspan="6" class="muted">Brak powiązanych wizyt lub napraw w Multi-Servis. Samo zainstalowanie Multi-Guard nie oznacza wykonania naprawy.</td></tr>'
+        )
+
     return _panel_html(
         f"""
         <section class="card">
@@ -1458,6 +1519,23 @@ def multi_guard_panel_device(
             <div><b>Zlecenie</b><span>{_panel_h(row['reception_number'] or '—')}</span></div>
             <div><b>Numer seryjny</b><span>{_panel_h(row['serial_number'] or '—')}</span></div>
             <div><b>Ważność</b><span>{_panel_dt(row['valid_until'])}</span></div>
+          </div>
+        </section>
+
+        <section class="card" id="service-history">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">MULTI-SERVIS / HISTORIA FIZYCZNEGO URZĄDZENIA</div>
+              <h2>Wizyty, zlecenia i dokumentacja serwisowa</h2>
+              <p>Wyłącznie zlecenia powiązane z tą kartą sprzętu. Kliknij zlecenie, aby zobaczyć opis, historię statusów, finanse oraz wykaz zdjęć i dokumentów. Podgląd samych zdjęć WWW wymaga osobnej zabezpieczonej integracji.</p>
+            </div>
+            <a class="button-link compact" href="/multiguard/panel/service">WSZYSTKIE ZLECENIA</a>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Zlecenie</th><th>Przyjęto</th><th>Status</th><th>Opis</th><th>Plików</th><th></th></tr></thead>
+              <tbody>{''.join(service_rows)}</tbody>
+            </table>
           </div>
         </section>
 
