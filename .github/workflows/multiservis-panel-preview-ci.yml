@@ -236,6 +236,58 @@ jobs:
                       assert page.locator("h1").count()>=1
                       page.screenshot(path=str(source.with_name(f"{source.stem}-{suffix}.png")),full_page=True)
                   page.close()
+              # Gallery behaviour in a REAL browser: click, 4 images,
+              # next/previous, zoom, keyboard and close. Synthetic image only.
+              import ast
+              panel_source=Path("embedded-multiguard/app/routers/multiguard_service_panel.py").read_text()
+              module=ast.parse(panel_source)
+              widget_expr=next(node.value for node in module.body if isinstance(node,ast.Assign)
+                  and any(isinstance(t,ast.Name) and t.id=="GALLERY_WIDGET_HTML" for t in node.targets))
+              widget=ast.literal_eval(widget_expr)
+              from html import escape
+              tiny="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+              thumbs="".join(
+                f'<a class="gallery-open gallery-thumb-link" href="{tiny}" data-gallery-index="{i}" data-gallery-title="Zdjęcie {i+1}">Zdjęcie {i+1}</a>'
+                for i in range(4)
+              )
+              gallery=browser.new_page(viewport={"width":1100,"height":820})
+              gallery.set_content('<html lang="pl"><body>'+thumbs+widget+'</body></html>')
+              gallery.locator(".gallery-thumb-link").first.click()
+              assert gallery.locator(".photo-viewer").evaluate("(el)=>el.open")
+              assert gallery.locator(".viewer-count").inner_text()=="1 / 4"
+              gallery.locator(".viewer-next").click()
+              assert gallery.locator(".viewer-count").inner_text()=="2 / 4"
+              gallery.keyboard.press("ArrowLeft")
+              assert gallery.locator(".viewer-count").inner_text()=="1 / 4"
+              gallery.locator(".viewer-prev").click()
+              assert gallery.locator(".viewer-count").inner_text()=="4 / 4"
+              gallery.locator(".viewer-zoom-in").click()
+              assert gallery.locator(".viewer-zoom-label").inner_text()=="125%"
+              gallery.locator(".viewer-zoom-reset").click()
+              assert gallery.locator(".viewer-zoom-label").inner_text()=="100%"
+              gallery.keyboard.press("Escape")
+              assert not gallery.locator(".photo-viewer").evaluate("(el)=>el.open")
+              gallery.close()
+              print("PASS: 4-photo gallery: next, previous, wrap, zoom/reset, Escape")
+
+              # Sidebar routing must NEVER highlight Dashboard and Computers
+              # together when Computer inventory or a physical device is shown.
+              computers_html=(folder/"01-pulpit.html").read_text()
+              menu=browser.new_page()
+              menu.route("https://panel.multi-servis.test/**",
+                  lambda route: route.fulfill(status=200, content_type="text/html",body=computers_html))
+              menu.goto("https://panel.multi-servis.test/multiguard/panel/computers")
+              nav=menu.locator('.workspace-sidebar nav a[aria-current="page"]')
+              assert nav.count()==1, "Duplicate selected navigation items"
+              assert nav.first.inner_text().strip().endswith("Komputery")
+              menu.goto("https://panel.multi-servis.test/multiguard/panel/dashboard")
+              nav=menu.locator('.workspace-sidebar nav a[aria-current="page"]')
+              assert nav.count()==1 and nav.first.inner_text().strip().endswith("Pulpit")
+              menu.goto("https://panel.multi-servis.test/multiguard/panel/device/1234")
+              nav=menu.locator('.workspace-sidebar nav a[aria-current="page"]')
+              assert nav.count()==1 and nav.first.inner_text().strip().endswith("Komputery")
+              menu.close()
+              print("PASS: dashboard, computers and device show exactly one selected sidebar item")
               browser.close()
           PY
       - name: Upload browser-rendered owner panel previews
