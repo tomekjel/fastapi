@@ -48,6 +48,100 @@ def page(content: str) -> HTMLResponse:
 _WEB_IMAGE_TYPES=frozenset({"image/jpeg","image/png","image/webp","image/gif"})
 _MAX_INLINE_BYTES=16*1024*1024
 
+GALLERY_WIDGET_HTML = r"""
+<dialog class="photo-viewer" id="service-photo-viewer" aria-label="Przeglądarka zdjęć naprawy">
+  <div class="viewer-top">
+    <strong>Zdjęcia zlecenia</strong>
+    <button type="button" class="viewer-close" aria-label="Zamknij zdjęcia">ZAMKNIJ ✕</button>
+  </div>
+  <div class="viewer-body">
+    <button type="button" class="viewer-arrow viewer-prev" aria-label="Poprzednie zdjęcie">❮</button>
+    <div class="viewer-viewport"><img class="viewer-image" alt="" draggable="false"></div>
+    <button type="button" class="viewer-arrow viewer-next" aria-label="Następne zdjęcie">❯</button>
+  </div>
+  <div class="viewer-bottom">
+    <span class="viewer-count" aria-live="polite"></span>
+    <span class="viewer-caption"></span>
+    <div class="viewer-zoom">
+      <button type="button" class="viewer-zoom-out" aria-label="Oddal">−</button>
+      <span class="viewer-zoom-label">100%</span>
+      <button type="button" class="viewer-zoom-in" aria-label="Przybliż">＋</button>
+      <button type="button" class="viewer-zoom-reset" aria-label="Resetuj powiększenie">1:1</button>
+    </div>
+  </div>
+  <p class="viewer-hint">← / → — poprzednie i następne · + / − — powiększenie · Esc — zamknij · na telefonie przesuń palcem</p>
+</dialog>
+<script>
+(() => {
+  const modal = document.getElementById('service-photo-viewer');
+  if (!modal || typeof modal.showModal !== 'function') return;
+  const thumbnails = [...document.querySelectorAll('.gallery-thumb-link')];
+  const photos = thumbnails.map(a => ({url:a.href, caption:a.dataset.galleryTitle||'Zdjęcie urządzenia'}));
+  if (!photos.length) return;
+  const image = modal.querySelector('.viewer-image');
+  const caption = modal.querySelector('.viewer-caption');
+  const counter = modal.querySelector('.viewer-count');
+  const viewport = modal.querySelector('.viewer-viewport');
+  const zoomLabel = modal.querySelector('.viewer-zoom-label');
+  let index = 0;
+  let zoom = 1;
+  function applyZoom() {
+    image.style.width = Math.round(zoom * 100) + '%';
+    image.style.maxHeight = zoom === 1 ? '68vh' : 'none';
+    zoomLabel.textContent = Math.round(zoom * 100) + '%';
+  }
+  function changeZoom(amount) {
+    zoom = Math.max(1,Math.min(4,Math.round((zoom + amount) * 4)/4));
+    applyZoom();
+  }
+  function show(n) {
+    index = (n + photos.length) % photos.length;
+    zoom = 1;
+    image.src = photos[index].url;
+    image.alt = photos[index].caption;
+    caption.textContent = photos[index].caption;
+    counter.textContent = (index+1) + ' / ' + photos.length;
+    applyZoom();
+    viewport.scrollTo(0,0);
+  }
+  for (const link of document.querySelectorAll('.gallery-open')) {
+    link.addEventListener('click',event => {
+      const pos = Number(link.dataset.galleryIndex);
+      if (!Number.isInteger(pos) || pos < 0 || pos >= photos.length) return;
+      event.preventDefault();
+      show(pos);
+      modal.showModal();
+    });
+  }
+  modal.querySelector('.viewer-close').addEventListener('click',()=>modal.close());
+  modal.querySelector('.viewer-prev').addEventListener('click',()=>show(index-1));
+  modal.querySelector('.viewer-next').addEventListener('click',()=>show(index+1));
+  modal.querySelector('.viewer-zoom-in').addEventListener('click',()=>changeZoom(.25));
+  modal.querySelector('.viewer-zoom-out').addEventListener('click',()=>changeZoom(-.25));
+  modal.querySelector('.viewer-zoom-reset').addEventListener('click',()=>{zoom=1;applyZoom()});
+  modal.addEventListener('keydown',event=>{
+    if (event.key === 'ArrowLeft') {event.preventDefault();show(index-1)}
+    if (event.key === 'ArrowRight') {event.preventDefault();show(index+1)}
+    if (event.key === '+' || event.key === '=') {event.preventDefault();changeZoom(.25)}
+    if (event.key === '-') {event.preventDefault();changeZoom(-.25)}
+    if (event.key === '0') {event.preventDefault();zoom=1;applyZoom()}
+  });
+  let sx=0,sy=0;
+  viewport.addEventListener('touchstart',e=>{
+    if(e.touches.length!==1)return;
+    sx=e.touches[0].clientX;sy=e.touches[0].clientY;
+  },{passive:true});
+  viewport.addEventListener('touchend',e=>{
+    if(e.changedTouches.length!==1)return;
+    const dx=e.changedTouches[0].clientX-sx;
+    const dy=e.changedTouches[0].clientY-sy;
+    if(Math.abs(dx)>55 && Math.abs(dx)>Math.abs(dy)*1.2) show(index+(dx<0?1:-1));
+  },{passive:true});
+})();
+</script>
+"""
+
+
 
 def _media_file_path(object_key: str) -> Path:
     """Prevent path escape or symlink traversal outside Multi-Servis media_root."""
@@ -306,20 +400,30 @@ def service_order_detail(
         note("Akcesoria",row["accessories_received"]),
     ])
     hist="".join(f'<tr><td>{dt(x["changed_at"])}</td><td>{status_badge(x["old_status"])}</td><td>→</td><td>{status_badge(x["new_status"])}</td></tr>' for x in history)
+    photo_positions = {}
+    for candidate in media:
+        candidate_mime = str(candidate["mime_type"] or "").split(";",1)[0].strip().lower()
+        if candidate_mime in _WEB_IMAGE_TYPES and 0 < int(candidate["size_bytes"] or 0) <= _MAX_INLINE_BYTES:
+            photo_positions[str(candidate["id"])] = len(photo_positions)
+
     def media_row(x: object) -> str:
-        mime=str(x["mime_type"] or "").split(";",1)[0].lower().strip()
         url=f"/multiguard/panel/service/{order_id}/media/{x['id']}"
-        eligible=mime in _WEB_IMAGE_TYPES and 0 < int(x["size_bytes"] or 0) <= _MAX_INLINE_BYTES
+        photo_index=photo_positions.get(str(x["id"]))
+        eligible=photo_index is not None
+        title=esc(x["caption"] or x["original_filename"] or "Zdjęcie urządzenia")
         preview=(
-            f'<a href="{url}" target="_blank" rel="noreferrer" aria-label="Powiększ zdjęcie">'
-            f'<img class="media-thumb" src="{url}" loading="lazy" alt="{esc(x["caption"] or x["original_filename"])}"></a>'
+            f'<a class="gallery-open gallery-thumb-link" href="{url}" data-gallery-index="{photo_index}" '
+            f'data-gallery-title="{title}" aria-label="Otwórz galerię: {title}">'
+            f'<img class="media-thumb" src="{url}" loading="lazy" alt="{title}"></a>'
             if eligible else '<span class="muted">DOKUMENT</span>'
         )
-        action=("OTWÓRZ ZDJĘCIE" if eligible else "POBIERZ PLIK")
+        action=("OTWÓRZ W GALERII" if eligible else "POBIERZ PLIK")
+        controls=(f' class="button-link compact gallery-open" data-gallery-index="{photo_index}"'
+                  if eligible else ' class="button-link compact"')
         return (f'<tr><td>{preview}</td><td>{esc(x["media_kind"])}</td>'
                 f'<td>{esc(x["original_filename"])}</td><td>{esc(x["caption"])}</td>'
                 f'<td>{dt(x["created_at"])}</td>'
-                f'<td><a class="button-link compact" href="{url}" target="_blank" rel="noreferrer">'
+                f'<td><a{controls} href="{url}">'
                 f'{action}</a></td></tr>')
     media_rows="".join(media_row(x) for x in media)
     fin=[("Kwota usługi",row["service_amount"]),("Koszt materiałów",row["material_cost"]),("Wartość dawcy",row["donor_material_value"]),("Wynik",row["actual_profit"])]
@@ -336,6 +440,7 @@ def service_order_detail(
     <section class="card"><h2>Finanse zlecenia</h2><div class="metrics">{fin_cards}</div><p>Przychód i wynik pojawiają się w statystykach zrealizowanych usług dopiero po statusie „Wydany”.</p></section>
     <section class="card"><h2>Historia statusów</h2><div class="table-wrap"><table><thead><tr><th>Data</th><th>Poprzedni</th><th></th><th>Nowy</th></tr></thead><tbody>{hist or '<tr><td colspan="4">Brak historii.</td></tr>'}</tbody></table></div></section>
     <section class="card"><h2>Zdjęcia i dokumenty ({len(media)})</h2><p>Chroniony podgląd właściciela: miniatury obrazów i pobieranie pozostałych plików. Materiały są odczytywane wyłącznie ze zlecenia, nie zapisujemy ich w publicznym katalogu WWW.</p><div class="table-wrap"><table><thead><tr><th>Podgląd</th><th>Rodzaj</th><th>Plik</th><th>Opis</th><th>Data</th><th>Otwórz</th></tr></thead><tbody>{media_rows or '<tr><td colspan="6">Brak plików.</td></tr>'}</tbody></table></div></section>
+    {GALLERY_WIDGET_HTML if photo_positions else ""}
     """)
 
 
