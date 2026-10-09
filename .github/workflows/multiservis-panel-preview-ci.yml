@@ -70,10 +70,16 @@ jobs:
                         }}
           exec(compile(ast.Module(body=[formatter],type_ignores=[]),'<changelog-test>','exec'),safe_globals)
           make=safe_globals['_changelog']
-          assert 'Dodano' in make('ADDED: Sprzęt')
-          assert 'Usunięto' in make('REMOVED: Stara funkcja')
-          assert 'Naprawiono' in make('FIXED: Czujnik')
-          assert '&lt;script&gt;' in make('ADDED: <script>')
-          assert 'Brak' in make('')
+          tests=[
+            ('ADDED: Sprzęt','Dodano'),
+            ('REMOVED: Stara funkcja','Usunięto'),
+            ('FIXED: Czujnik','Naprawiono'),
+            ('ADDED: <script>','&lt;script&gt;'),
+            ('','Brak'),
+          ]
+          for inp,expected in tests:
+              rendered=make(inp)
+              print('changelog test',repr(inp),'->',repr(rendered))
+              assert expected in rendered, f'{inp}: expected {expected!r}; got {rendered!r}'
           print("OWNER PANEL ROUTES + CHANGELOG PARSER AUDIT PASS")
           PY
