@@ -1269,10 +1269,14 @@ def provision(req: ProvisionRequest):
 
     credential = secrets.token_urlsafe(48)
     credential_hash = _hash(credential)
+    # A late installation on equipment already marked as issued must never
+    # regain unrestricted service-mode access. The signed response instead
+    # immediately requires the customer's three document approvals.
+    issued = str(_reception(link["reception_id"])["status"]).upper() == "COMPLETED"
     lifecycle = (
         link["lifecycle"]
         if link.get("rebind_pending") and link["lifecycle"] != "UNASSIGNED"
-        else "SERVICE_TEST"
+        else ("PENDING_ACCEPTANCE" if issued else "SERVICE_TEST")
     )
 
     with engine.begin() as connection:
@@ -1328,7 +1332,9 @@ def provision(req: ProvisionRequest):
         "requestId": req.request_id,
         "signedLicense": _signed_envelope(link),
         "installationCredential": credential,
-        "requiredDocuments": [],
+        "requiredDocuments": (
+            _required_documents() if link["lifecycle"] == "PENDING_ACCEPTANCE" else []
+        ),
     }
 
 
@@ -1890,6 +1896,23 @@ def multiguard_panel(
             </div>
           </form>
         </section>
+        <section class="card">
+          <h2>Wydano sprzęt — zakończ tryb serwisowy</h2>
+          <p>Wyłącznie dla zlecenia GOTOWY DO ODBIORU z przypisaną licencją
+             Multi-Guard. Status zmieni się na WYDANO. Licencja pozostanie
+             zablokowana do akceptacji trzech dokumentów przez klienta.
+             Czas ważności nadal nie będzie naliczany.</p>
+          <form method="post" action="/multiguard/panel/receptions/issue"
+                onsubmit="return confirm('Czy sprzęt został faktycznie wydany klientowi?');">
+            <label>Numer wydanego zlecenia
+              <input name="reception_number" placeholder="np. MS-2026-00123" required>
+            </label>
+            <label>Potwierdzenie — wpisz WYDANO
+              <input name="confirmation" placeholder="WYDANO" required>
+            </label>
+            <button type="submit">WYDANO SPRZĘT</button>
+          </form>
+        </section>
         """
     )
 
@@ -1951,6 +1974,140 @@ def generate_reception_license(
     }
 
 
+def _issue_equipment_with_license(
+    reception_id: uuid.UUID,
+) -> dict[str, Any]:
+    """One business handover: COMPLETED + license gate, without starting paid time.
+
+    Uses the existing service order lifecycle and audit triggers. The purchased
+    3/6/12-month period still begins ONLY in /v1/multi-guard/acceptance.
+    """
+    _ensure_schema()
+    with engine.begin() as connection:
+        order = connection.execute(
+            text(
+                """
+                SELECT id, status, reception_number
+                FROM service.service_orders
+                WHERE id=:reception_id
+                FOR UPDATE
+                """
+            ),
+            {"reception_id": reception_id},
+        ).mappings().first()
+        if not order:
+            raise HTTPException(404, "Nie znaleziono zlecenia.")
+        status = str(order["status"]).upper()
+        if status not in {"READY_FOR_PICKUP", "COMPLETED"}:
+            raise HTTPException(
+                409, "Przed wydaniem sprzętu ustaw status GOTOWY DO ODBIORU."
+            )
+        license_row = connection.execute(
+            text(
+                """
+                SELECT * FROM guard.license_links
+                WHERE reception_id=:reception_id
+                FOR UPDATE
+                """
+            ),
+            {"reception_id": reception_id},
+        ).mappings().first()
+        if not license_row:
+            raise HTTPException(409, "Brak przypisanej licencji Multi-Guard.")
+
+        license_link = _normalize_link(dict(license_row))
+        if license_link["lifecycle"] in {"REVOKED", "EXPIRED"}:
+            raise HTTPException(
+                409, "Nie można wydać licencji cofniętej lub wygasłej."
+            )
+
+        if status == "READY_FOR_PICKUP":
+            connection.execute(
+                text(
+                    """
+                    UPDATE service.service_orders
+                    SET status='COMPLETED'
+                    WHERE id=:reception_id AND status='READY_FOR_PICKUP'
+                    """
+                ),
+                {"reception_id": reception_id},
+            )
+            # Existing DB triggers set completed_at/released_at and audit history.
+
+        if (
+            license_link["lifecycle"] == "SERVICE_TEST"
+            and license_link.get("installation_id")
+        ):
+            updated = connection.execute(
+                text(
+                    """
+                    UPDATE guard.license_links
+                    SET lifecycle='PENDING_ACCEPTANCE',
+                        approved_at=COALESCE(approved_at, now()),
+                        updated_at=now()
+                    WHERE id=:id AND lifecycle='SERVICE_TEST'
+                    RETURNING *
+                    """
+                ),
+                {"id": license_link["id"]},
+            ).mappings().first()
+            if updated:
+                license_link = _normalize_link(dict(updated))
+                _update_installation_mirror(connection, license_link)
+
+        return {
+            "receptionId": str(reception_id),
+            "receptionNumber": str(order["reception_number"]),
+            "receptionStatus": "COMPLETED",
+            "licenseLifecycle": license_link["lifecycle"],
+            # No validFrom/validUntil until customer accepts their documents.
+            "license": _public_status(license_link),
+        }
+
+
+@router.post("/multiguard/licenses/receptions/{reception_id}/issue")
+def issue_reception_with_guard(
+    reception_id: str,
+    user: CurrentUser = Depends(require_staff),
+):
+    try:
+        rid = uuid.UUID(reception_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowe ID zlecenia.") from exc
+    return _issue_equipment_with_license(rid)
+
+
+@router.post("/multiguard/panel/receptions/issue", response_class=HTMLResponse)
+def web_issue_reception_with_guard(
+    reception_number: str = Form(...),
+    confirmation: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    if confirmation.strip().upper() != "WYDANO":
+        raise HTTPException(400, "Potwierdź wydanie słowem WYDANO.")
+    reception = _reception_by_number(reception_number)
+    result = _issue_equipment_with_license(reception["id"])
+    state = result["licenseLifecycle"]
+    message = (
+        "TRYB SERWISOWY ZAKOŃCZONY — klient musi zaakceptować trzy dokumenty."
+        if state == "PENDING_ACCEPTANCE"
+        else (
+            "Licencja jest już aktywna."
+            if state == "ACTIVE"
+            else "Sprzęt wydany. Licencja zostanie zablokowana do akceptacji "
+                 "po zainstalowaniu Multi-Guard i powiązaniu tego zlecenia."
+        )
+    )
+    return _panel_html(
+        '<section class="card"><h1>Sprzęt wydany</h1>'
+        f'<p class="ok">{_panel_escape(result["receptionNumber"])}</p>'
+        f'<p>{_panel_escape(message)}</p>'
+        '<p>Płatny okres licencji rozpocznie się dopiero po akceptacji klienta.</p>'
+        '<a class="button-link" href="/multiguard/panel/dashboard">'
+        'WRÓĆ DO PULPITU</a></section>'
+    )
+
+
 @router.post("/multiguard/licenses/receptions/{reception_id}/approve")
 def approve_reception_license(
     reception_id: str,
@@ -1975,6 +2132,8 @@ def approve_reception_license(
         raise HTTPException(409, "Multi-Guard nie został jeszcze zainstalowany.")
     if link["lifecycle"] == "ACTIVE":
         return {"status": "already_active", **_public_status(link)}
+    if link["lifecycle"] == "PENDING_ACCEPTANCE":
+        return {"status": "PENDING_ACCEPTANCE", **_public_status(link)}
     if link["lifecycle"] in {"EXPIRED", "REVOKED"}:
         raise HTTPException(409, f"Licencja ma stan {link['lifecycle']}.")
 
