@@ -81,5 +81,31 @@ jobs:
               rendered=make(inp)
               print('changelog test',repr(inp),'->',repr(rendered))
               assert expected in rendered, f'{inp}: expected {expected!r}; got {rendered!r}'
-          print("OWNER PANEL ROUTES + CHANGELOG PARSER AUDIT PASS")
+          # Presence status is not a claim of a live user session.
+          # A missing ping is not a confirmed uninstall.
+          from datetime import datetime,timezone,timedelta
+          from typing import Optional
+          runtime_ast=ast.parse(runtime)
+          func=next(x for x in runtime_ast.body if isinstance(x,ast.FunctionDef)
+                    and x.name=='_presence_indicator')
+          namespace={'Optional':Optional,'datetime':datetime,'timezone':timezone}
+          exec(compile(ast.Module(body=[func],type_ignores=[]),'<presence-test>','exec'),namespace)
+          presence=namespace['_presence_indicator']
+          now=datetime.now(timezone.utc)
+          assert presence(now-timedelta(hours=3),None)[0]=='recent'
+          assert presence(now-timedelta(days=3),None)[0]=='delayed'
+          assert presence(now-timedelta(days=12),None)[0]=='stale'
+          assert presence(None,None)[0]=='unknown'
+          assert presence(now-timedelta(minutes=1),now)[0]=='removed'
+          for fragment in [
+              'CREATE TABLE IF NOT EXISTS guard.agent_uninstalls',
+              'if body.eventType == "CLIENT_UNINSTALLED"',
+              'source") == "windows_uninstaller"',
+              "ON CONFLICT(installation_id) DO UPDATE",
+              "DELETE FROM guard.agent_uninstalls",
+              'CASE WHEN au.installation_id IS NOT NULL THEN 1 ELSE 0 END',
+              'presence-dot',
+          ]:
+              assert fragment in (runtime+theme), fragment
+          print("OWNER PANEL ROUTES + CHANGELOG + INSTALLATION PRESENCE AUDIT PASS")
           PY
