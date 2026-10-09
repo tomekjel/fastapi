@@ -23,7 +23,8 @@ jobs:
             embedded-multiguard/app/routers/multiguard_updates.py \
             embedded-multiguard/app/routers/multiguard_service_panel.py \
             embedded-multiguard/app/routers/multiguard_panel_settings.py \
-            embedded-multiguard/app/routers/multiguard_panel_devices.py
+            embedded-multiguard/app/routers/multiguard_panel_devices.py \
+            embedded-multiguard/app/routers/multiguard_panel_theme.py
       - name: Verify HTML routes and safe owner controls
         run: |
           python - <<'PY'
@@ -34,7 +35,24 @@ jobs:
           theme=(root/"app/routers/multiguard_license.py").read_text()
           for fragment in ['Depends(_panel_auth)', '/multiguard/panel/service', 'service.v_service_order_summary','owner_finances','media_kind']:
               assert fragment in source, fragment
-          assert "Multi-Guard V12 web owner theme" in theme
+          css=(root/"app/routers/multiguard_panel_theme.py").read_text()
+          assert "PANEL_CSS" in theme
+          assert 'multiguard_panel_theme import PANEL_CSS' in theme
+          assert 'THEME_FILE' in install
+          assert 'multiguard_panel_theme.py' in install
+          assert '<div class="workspace-shell">' in theme
+          assert 'class="workspace-sidebar"' in theme
+          assert 'class="workspace-topbar"' in theme
+          assert '.dashboard-hero' in css
+          assert '.service-hero' in css
+          assert '.telemetry-hero' in css
+          assert '.device-hero' in css
+          assert '.license-hero' in css
+          assert '.release-timeline' in css
+          assert 'font-weight:700' not in css and 'font-weight:800' not in css
+          assert '--gold:' in css and '--crimson:' in css
+          assert 'font: 400 16px' in css
+          assert 'Przegląd wystawionych licencji' in theme or 'PANEL_CSS' in theme
           for fragment in ['SERVICE_PANEL_FILE','multiguard_service_panel.router','multiguard_panel.py','/multiguard/panel/service']:
               if fragment=="multiguard_panel.py": continue
               assert fragment in install, fragment
@@ -60,7 +78,7 @@ jobs:
           assert 'device_search_form' in runtime
           assert 'device_paging' in runtime
           assert ':search_like' in runtime and ':silence_days' in runtime
-          assert 'USTAWIENIA PANELU' in theme
+          assert '>Ustawienia</a>' in theme
           assert '/multiguard/panel/settings' in install
           for fragment in [
               'service_order_count',
@@ -80,7 +98,7 @@ jobs:
               '_changelog',
           ]:
               assert fragment in source, fragment
-          assert "HISTORIA WERSJI" in theme
+          assert "Historia wersji" in theme
           # Exercise the release-note formatter without importing the production
           # backend. User-authored release notes must be escaped.
           import ast, html
