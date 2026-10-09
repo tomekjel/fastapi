@@ -280,7 +280,7 @@ def _changelog(notes: object) -> str:
         line = line.strip().lstrip("•*- ").strip()
         if not line:
             continue
-        match = re.match(r"^(ADDED|FIXED|CHANGED|REMOVED|SECURITY|DODANO|NAPRAWIONO|ZMIENIONO|USUNIĘTO)\\s*[:\\-]\\s*(.+)$", line, re.I)
+        match = re.match(r"^(ADDED|FIXED|CHANGED|REMOVED|SECURITY|DODANO|NAPRAWIONO|ZMIENIONO|USUNIĘTO)\s*[:-]\s*(.+)$", line, re.I)
         if match:
             label, css = _RELEASE_CATEGORIES[match.group(1).upper()]
             lines.append(f'<li><span class="badge {css}">{label}</span> {esc(match.group(2))}</li>')
