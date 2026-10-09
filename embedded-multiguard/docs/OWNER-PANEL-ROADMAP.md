@@ -184,3 +184,39 @@ z zachowaniem bezpiecznych archiwów do odzyskiwania.
   testować razem, bez fałszywego pokazywania planów jako aktywnych.
 - CI przygotowuje kod i przeprowadza testy ograniczenia dostępu do plików
   oraz braku faktycznej aktywacji z samego formularza planu.
+
+## Kontrolowana weryfikacja przeglądarkowego panelu — 9.10.2026
+
+- W CI przygotowano **oddzielny PostgreSQL 16** uruchamiany jako
+  kontener usługi tylko podczas testu, bez produkcyjnych danych,
+  poświadczeń, dysku czy kontaktu z serwerem użytkownika.
+- Testy `test_owner_panel_postgres_integration.py` uruchamiają
+  **rzeczywiste routery FastAPI** panelu i rzeczywiste zapytania SQL
+  przeciwko syntetycznej bazie z dwiema kartami komputerów o
+  identycznym modelu i serialu, powiązanymi z osobnymi zleceniami.
+- Potwierdzają HTTP Basic 401 bez poświadczeń; pulpit, urządzenia,
+  listę i kartę zlecenia; podgląd zdjęcia z właściwego zlecenia;
+  odmowę dostępu 404 dla innego zlecenia/usuniętej fotografii;
+  widok historii wersji; historię urządzeń niezależną od nazwy i serialu.
+- Formularze OWNER: zapis ustawień, CSRF, prywatna notatka oraz
+  audytowane przygotowanie i przedłużenie planu licencji
+  serwisowo-diagnostycznej — **bez wydania aktywnej licencji**.
+  Badane są także zgłoszone deinstalacje i milczące instalacje,
+  indywidualne notatki zdarzeń, brak zmiany źródłowego raportu.
+- Test ujawnił rzeczywisty błąd HTTP 500 w pulpicie:
+  użycie `config["inventory_page_size"]` przed zainicjowaniem
+  `config = owner_panel_config()`; usunięto go przed dalszymi
+  testami i potwierdzono zachowanie w działającym FastAPI.
+- Przegląd kodu i render Chromium desktop/mobile testowany osobnym
+  zadaniem w tym samym workflow; walidacja skryptu instalatora
+  przez `bash -n` i próby zabezpieczenia ścieżek plików.
+- **Granica testu:** schemat danych `core/service` jest zgodnym
+  z kodem syntetycznym kontraktem, nie kopią aktualnej produkcyjnej
+  bazy. Przed rzeczywistym wdrożeniem nadal wymagane są: snapshot
+  aktualnego serwera, test na odizolowanej kopii danych, kontrola
+  zgodności nieprzebudowywanego Android API, weryfikacja plików
+  fizycznego dysku i przywrócenie po awarii.
+- Android Multi-Servis (OWNER i STAFF), Multi-Guard Windows
+  TEST/BETA/STABLE oraz backend produkcyjny **pozostały nietknięte**.
+  Ten test nie potwierdza działania licencji diagnostycznej
+  na komputerze klienta.
