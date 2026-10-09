@@ -1937,12 +1937,16 @@ def multi_guard_panel_licenses(
                     ll.app_version,
                     ll.valid_until,
                     ll.installation_id,
+                    gi.id AS internal_installation_id,
                     d.manufacturer,
                     d.model,
                     d.serial_number
                 FROM guard.license_links ll
                 LEFT JOIN core.devices d
                   ON d.id=ll.service_device_id
+                LEFT JOIN guard.installations gi
+                  ON gi.installation_external_id=ll.installation_id
+                 AND gi.is_current=TRUE
                 ORDER BY ll.updated_at DESC
                 LIMIT 500
                 """
@@ -1958,6 +1962,10 @@ def multi_guard_panel_licenses(
                 str(row["model"] or "").strip(),
             ] if part
         ) or "—"
+        device_history_link = (
+            f'<a class="strong-link" href="/multiguard/panel/device/{row["internal_installation_id"]}#service-history">HISTORIA I ALERTY →</a>'
+            if row["internal_installation_id"] else ""
+        )
         table_rows.append(
             f"""
             <tr>
@@ -1966,7 +1974,7 @@ def multi_guard_panel_licenses(
               <td>{_panel_h(row['duration_months'])} mies.</td>
               <td>{_panel_h(row['release_channel'] or 'STABLE')}</td>
               <td>{_panel_h(row['lifecycle'])}</td>
-              <td>{_panel_h(device)}</td>
+              <td>{_panel_h(device)}<br>{device_history_link}</td>
               <td class="mono">{_panel_h(_short_installation_id(row['installation_id']) if row['installation_id'] else '—')}</td>
               <td>{_panel_h(row['app_version'] or '—')}</td>
               <td>{_panel_dt(row['valid_until'])}</td>
