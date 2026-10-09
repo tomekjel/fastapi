@@ -17,7 +17,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import APIRouter, Depends, Form, HTTPException
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
@@ -2100,10 +2100,17 @@ def issue_reception_with_guard(
 
 @router.post("/multiguard/panel/receptions/issue", response_class=HTMLResponse)
 def web_issue_reception_with_guard(
+    request: Request,
     reception_number: str = Form(...),
     confirmation: str = Form(...),
     _: None = Depends(_panel_auth),
 ):
+    # Browser panel uses HTTP Basic, so reject cross-site form submissions.
+    source = request.headers.get("origin") or request.headers.get("referer")
+    parsed = urllib.parse.urlsplit(source or "")
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if parsed.scheme != "https" or parsed.hostname != host:
+        raise HTTPException(403, "Potwierdzenie wydania wymaga otwartego panelu Multi-Servis.")
     if confirmation.strip().upper() != "WYDANO":
         raise HTTPException(400, "Potwierdź wydanie słowem WYDANO.")
     reception = _reception_by_number(reception_number)
