@@ -1243,6 +1243,98 @@ def _presence_indicator(
 
 @router.get("/panel/dashboard", response_class=HTMLResponse)
 def multi_guard_panel_dashboard(
+    _: None = Depends(_panel_auth),
+):
+    """Owner start screen: operational summary, not a second inventory page."""
+    _ensure_schema()
+    with engine.connect() as connection:
+        counts = connection.execute(text("""
+            SELECT
+              count(*) FILTER (WHERE lifecycle='ACTIVE') AS active,
+              count(*) FILTER (WHERE lifecycle='ACTIVE' AND plan_code='STANDARD') AS standard,
+              count(*) FILTER (WHERE lifecycle='ACTIVE' AND plan_code='PRO') AS pro,
+              count(*) FILTER (WHERE health_level IN ('ORANGE','RED')) AS attention,
+              count(*) FILTER (WHERE health_level='RED') AS critical,
+              count(*) FILTER (WHERE lifecycle='ACTIVE' AND last_seen_at < now()-interval '7 days') AS silent
+            FROM guard.installations
+            WHERE is_current=TRUE
+        """)).mappings().one()
+        pending_count = connection.execute(text("""
+            SELECT count(*) FROM guard.pending_installations WHERE status='WAITING'
+        """)).scalar_one()
+        alerts_count = connection.execute(text("""
+            SELECT count(*) FROM guard.notifications
+            WHERE resolved_at IS NULL AND seen_at IS NULL
+        """)).scalar_one()
+        support_count = connection.execute(text("""
+            SELECT count(*) FROM guard.support_requests
+            WHERE status NOT IN ('RESOLVED','CANCELLED')
+        """)).scalar_one()
+    kpis = [
+        ("Aktywne komputery", counts["active"], "blue"),
+        ("Wymagają uwagi", counts["attention"], "red"),
+        ("Krytyczne", counts["critical"], "red"),
+        ("Oczekujące instalacje", pending_count, "gold"),
+        ("Nieodczytane powiadomienia", alerts_count, "blue"),
+        ("Otwarte zgłoszenia", support_count, "green"),
+    ]
+    metrics_html = "".join(
+        f'<div class="metric accent-{tone}"><b>{_panel_h(label)}</b>'
+        f'<strong>{int(value or 0)}</strong></div>'
+        for label, value, tone in kpis
+    )
+    return _panel_html(f"""
+      <section class="card panel-hero dashboard-hero">
+        <div class="eyebrow">MULTI-SERVIS / CENTRUM WŁAŚCICIELA</div>
+        <h1>Pulpit</h1>
+        <p>Krótki przegląd sytuacji. Szczegóły otwieraj w osobnych obszarach, bez przewijania pulpitu do kolejnej kopii rejestru.</p>
+        <div class="metrics">{metrics_html}</div>
+      </section>
+      <section class="card">
+        <div class="section-head">
+          <div><div class="eyebrow">PRZEJDŹ DO MODUŁU</div>
+          <h2>Twoje obszary pracy</h2>
+          <p>Każdy moduł ma własną stronę i odpowiada za inne zadanie.</p></div>
+        </div>
+        <div class="hub-grid">
+          <a class="hub-tile" href="/multiguard/panel/computers">
+            <span class="hub-symbol" aria-hidden="true">▤</span>
+            <strong>Komputery</strong><span>Lista instalacji, zdarzenia i historia napraw</span>
+            <small>{int(counts["standard"] or 0)} Standard · {int(counts["pro"] or 0)} Pro →</small>
+          </a>
+          <a class="hub-tile" href="/multiguard/panel/service">
+            <span class="hub-symbol" aria-hidden="true">◇</span>
+            <strong>Zlecenia serwisowe</strong><span>Statusy napraw, zdjęcia, dokumentacja, kwoty</span>
+            <small>Otwórz rejestr zleceń →</small>
+          </a>
+          <a class="hub-tile" href="/multiguard/panel/telemetry">
+            <span class="hub-symbol" aria-hidden="true">⌁</span>
+            <strong>Telemetria</strong><span>Analiza zgłaszanych usterek i anomalii</span>
+            <small>Otwórz zdarzenia →</small>
+          </a>
+          <a class="hub-tile" href="/multiguard/panel/licenses">
+            <span class="hub-symbol" aria-hidden="true">▣</span>
+            <strong>Licencje</strong><span>Standard, Pro i przypisanie instalacji</span>
+            <small>Otwórz licencje →</small>
+          </a>
+        </div>
+      </section>
+      <section class="card summary-footnote">
+        <div class="section-head">
+          <div><h2>Stan komunikacji</h2>
+          <p>Brak raportu nie oznacza potwierdzonego odinstalowania.</p></div>
+          <a class="button-link compact" href="/multiguard/panel/computers?presence=silent">SPRAWDŹ KOMPUTERY →</a>
+        </div>
+        <div class="detail-facts">
+          <div class="detail-fact"><b>Brak kontaktu ponad 7 dni</b><span>{int(counts["silent"] or 0)}</span></div>
+          <div class="detail-fact"><b>Instalacje oczekujące</b><span>{int(pending_count or 0)}</span></div>
+        </div>
+      </section>
+    """)
+
+
+@router.get("/panel/computers", response_class=HTMLResponse)
+def multi_guard_panel_computers(
     presence: str = "all",
     q: str = "",
     page_number: int = 1,
@@ -1254,79 +1346,7 @@ def multi_guard_panel_dashboard(
         raise HTTPException(400, "Nieprawidłowy filtr kontaktu Multi-Guard.")
     _ensure_schema()
     config = owner_panel_config()
-    with engine.connect() as connection:
-        counts = connection.execute(
-            text(
-                """
-                SELECT
-                    count(*) FILTER (WHERE lifecycle='ACTIVE') active,
-                    count(*) FILTER (
-                        WHERE lifecycle='ACTIVE' AND plan_code='STANDARD'
-                    ) standard,
-                    count(*) FILTER (
-                        WHERE lifecycle='ACTIVE' AND plan_code='PRO'
-                    ) pro,
-                    count(*) FILTER (
-                        WHERE health_level IN ('ORANGE','RED')
-                    ) needs_attention,
-                    count(*) FILTER (WHERE health_level='RED') critical,
-                    count(*) FILTER (
-                        WHERE lifecycle='ACTIVE'
-                          AND valid_until BETWEEN now() AND now()+interval '30 days'
-                    ) expiring_30d,
-                    count(*) FILTER (
-                        WHERE last_seen_at < now()-interval '30 days'
-                    ) no_contact_30d
-                FROM guard.installations
-                WHERE is_current=TRUE
-                """
-            )
-        ).mappings().one()
-
-        unread = connection.execute(
-            text(
-                """
-                SELECT count(*)
-                FROM guard.notifications
-                WHERE resolved_at IS NULL AND seen_at IS NULL
-                """
-            )
-        ).scalar_one()
-
-        open_support = connection.execute(
-            text(
-                """
-                SELECT count(*)
-                FROM guard.support_requests
-                WHERE status NOT IN ('RESOLVED','CANCELLED')
-                """
-            )
-        ).scalar_one()
-
-        pending_count = connection.execute(
-            text(
-                """
-                SELECT count(*)
-                FROM guard.pending_installations
-                WHERE status='WAITING'
-                """
-            )
-        ).scalar_one()
-
-        pending_rows = connection.execute(
-            text(
-                """
-                SELECT *
-                FROM guard.pending_installations
-                WHERE status IN ('WAITING','ASSIGNED')
-                ORDER BY
-                    CASE status WHEN 'WAITING' THEN 0 ELSE 1 END,
-                    last_seen_at DESC
-                LIMIT 100
-                """
-            )
-        ).mappings().all()
-
+    config = owner_panel_config()
     page_size = config["inventory_page_size"]
     device_results = _fetch_device_rows(
         page_size + 1,
@@ -1339,12 +1359,12 @@ def multi_guard_panel_dashboard(
     devices = device_results[:page_size]
 
     def device_page_url(page: int) -> str:
-        return "/multiguard/panel/dashboard?" + urllib.parse.urlencode({
+        return "/multiguard/panel/computers?" + urllib.parse.urlencode({
             "presence": presence, "q": q, "page_number": page,
         }) + "#devices"
 
     device_search_form = f"""
-        <form class="service-search" method="get" action="/multiguard/panel/dashboard">
+        <form class="service-search" method="get" action="/multiguard/panel/computers">
           <input type="hidden" name="presence" value="{_panel_h(presence)}">
           <label>Wyszukaj model, producenta, numer seryjny, hostname lub zlecenie
             <input name="q" maxlength="120" value="{_panel_h(q)}"
@@ -1361,23 +1381,6 @@ def multi_guard_panel_dashboard(
         if has_more_devices else ""
     )
 
-
-    metrics = [
-        ("Aktywne", counts["active"]),
-        ("Standard", counts["standard"]),
-        ("Pro", counts["pro"]),
-        ("Wymagają uwagi", counts["needs_attention"]),
-        ("Krytyczne", counts["critical"]),
-        ("Wygasają ≤30 dni", counts["expiring_30d"]),
-        ("Brak kontaktu 30 dni", counts["no_contact_30d"]),
-        ("Nieodczytane", int(unread or 0)),
-        ("Otwarte zgłoszenia", int(open_support or 0)),
-        ("Nowe instalacje", int(pending_count or 0)),
-    ]
-    metrics_html = "".join(
-        f'<div class="metric"><b>{_panel_h(label)}</b><strong>{int(value or 0)}</strong></div>'
-        for label, value in metrics
-    )
 
     rows_html = []
     for row in devices:
@@ -1434,83 +1437,17 @@ def multi_guard_panel_dashboard(
             '<tr><td colspan="10" class="muted">Brak zarejestrowanych instalacji Multi-Guard.</td></tr>'
         )
 
-    pending_html = []
-    for pending in pending_rows:
-        installation_external = pending["installation_id"]
-        short_id = _short_installation_id(installation_external)
-        last_seen = pending["last_seen_at"]
-        online = False
-        if last_seen:
-            try:
-                online = (
-                    datetime.now(timezone.utc) - last_seen
-                ).total_seconds() <= 300
-            except Exception:
-                online = False
-        device_label = " ".join(
-            part for part in [
-                str(pending["manufacturer"] or "").strip(),
-                str(pending["model"] or "").strip(),
-            ] if part
-        ) or str(pending["hostname"] or "Nieznany komputer")
-        state_label = (
-            "OCZEKUJE NA PRZYPISANIE"
-            if pending["status"] == "WAITING"
-            else "LICENCJA PRZYPISANA — CZEKA NA ODBIÓR"
-        )
-        action = (
-            f'<a class="button-link" href="/multiguard/panel/pending/{installation_external}">PRZYPISZ</a>'
-            if pending["status"] == "WAITING"
-            else '<span class="badge good">AUTO-PROVISION</span>'
-        )
-        pending_html.append(
-            f"""
-            <tr>
-              <td class="mono">{_panel_h(short_id)}</td>
-              <td><b>{_panel_h(device_label)}</b><br><span class="muted">{_panel_h(pending["serial_number"] or pending["hostname"] or "")}</span></td>
-              <td>{_panel_h(pending["app_version"] or "—")}</td>
-              <td><span class="badge {"good" if online else "muted"}">{"KONTAKT ≤5 MIN" if online else "BRAK ŚWIEŻEGO KONTAKTU"}</span></td>
-              <td>{_panel_h(state_label)}</td>
-              <td>{_panel_dt(last_seen)}</td>
-              <td>{action}</td>
-            </tr>
-            """
-        )
-
-    if not pending_html:
-        pending_html.append(
-            '<tr><td colspan="7" class="muted">Brak nowych, nieprzypisanych instalacji Multi-Guard.</td></tr>'
-        )
-
     return _panel_html(
         f"""
-        <section class="card panel-hero dashboard-hero">
-          <div class="eyebrow">MULTI-SERVIS / CENTRUM OPERACYJNE</div>
-          <h1>Centrum właściciela</h1>
-          <p>Komputery klientów, bezpieczeństwo, naprawy i zdarzenia Multi-Guard w jednym miejscu.</p>
-          <div class="metrics">{metrics_html}</div>
-        </section>
-
-        <section class="card">
-          <div class="section-head">
-            <div>
-              <h2>Nowe / nieprzypisane instalacje</h2>
-              <p>Multi-Guard wykryty po instalacji, ale jeszcze bez przypisanej licencji.</p>
-            </div>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th><th>Komputer</th><th>Wersja</th><th>Połączenie</th>
-                  <th>Status</th><th>Ostatnio widziany</th><th>Akcja</th>
-                </tr>
-              </thead>
-              <tbody>{''.join(pending_html)}</tbody>
-            </table>
+        <section class="card panel-hero computers-hero">
+          <div class="eyebrow">MULTI-SERVIS / KOMPUTERY KLIENTÓW</div>
+          <h1>Komputery</h1>
+          <p>Samodzielny rejestr instalacji Multi-Guard, ich ostatniego kontaktu, stanu technicznego i historii serwisu.</p>
+          <div class="inventory-headline">
+            <span class="badge mg-blue">Lista i historia urządzeń</span>
+            <span class="muted">Stan łączności pochodzi z ostatniego raportu agenta.</span>
           </div>
         </section>
-
         <section class="card" id="devices">
           <div class="section-head">
             <div>
@@ -1519,9 +1456,9 @@ def multi_guard_panel_dashboard(
             </div>
           </div>
           <div class="filter-tabs">
-            <a class="filter-tab {'selected' if presence=='all' else ''}" href="/multiguard/panel/dashboard?presence=all#devices">WSZYSTKIE</a>
-            <a class="filter-tab {'selected' if presence=='silent' else ''}" href="/multiguard/panel/dashboard?presence=silent#devices">BRAK KONTAKTU PONAD {config['no_contact_filter_days']} DNI</a>
-            <a class="filter-tab {'selected' if presence=='removed' else ''}" href="/multiguard/panel/dashboard?presence=removed#devices">ZGŁOSZONE ODINSTALOWANIE</a>
+            <a class="filter-tab {'selected' if presence=='all' else ''}" href="/multiguard/panel/computers?presence=all#devices">WSZYSTKIE</a>
+            <a class="filter-tab {'selected' if presence=='silent' else ''}" href="/multiguard/panel/computers?presence=silent#devices">BRAK KONTAKTU PONAD {config['no_contact_filter_days']} DNI</a>
+            <a class="filter-tab {'selected' if presence=='removed' else ''}" href="/multiguard/panel/computers?presence=removed#devices">ZGŁOSZONE ODINSTALOWANIE</a>
           </div>
           {device_search_form}
           <div class="table-wrap">
