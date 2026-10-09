@@ -183,7 +183,19 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     ensure(get("/multiguard/panel/versions",False).status_code,401,"Private versions")
     ensure(get(f"/multiguard/panel/service/{order_a}/media/{media_a}",False).status_code,401,"Private media")
     ensure(get(f"/multiguard/panel/device/{install_a}",False).status_code,401,"Private device")
-    ensure(get("/multiguard/panel/dashboard").status_code,200,"Owner dashboard")
+    owner_dashboard=get("/multiguard/panel/dashboard")
+    ensure(owner_dashboard.status_code,200,"Owner dashboard")
+    assert "Twoje obszary pracy" in owner_dashboard.text
+    assert 'href="/multiguard/panel/computers"' in owner_dashboard.text
+    assert 'id="devices"' not in owner_dashboard.text, "Dashboard must not duplicate computers table"
+    ensure(get("/multiguard/panel/computers",False).status_code,401,"Private inventory")
+    inventory_page=get("/multiguard/panel/computers")
+    ensure(inventory_page.status_code,200,"Dedicated owner computers")
+    assert '<h1>Komputery</h1>' in inventory_page.text
+    assert 'id="devices"' in inventory_page.text
+    assert "RODZINA MULTI-GUARD V12" not in inventory_page.text
+    assert 'class="brand-multi">Multi</span>' in inventory_page.text
+    assert 'class="brand-servis">-Servis</span>' in inventory_page.text
     ensure(get("/multiguard/panel/service").status_code,200,"Owner service")
     ensure(get(f"/multiguard/panel/service/{order_a}").status_code,200,"Service detail")
     device_a_response=get(f"/multiguard/panel/device/{install_a}")
@@ -191,6 +203,13 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert f"CI-{str(order_a)[:8]}" in device_a_response.text
     assert f"CI-{str(order_b)[:8]}" not in device_a_response.text, "Cross-device repair leakage"
     ensure(get("/multiguard/panel/versions").status_code,200,"Release list")
+
+    detail=get(f"/multiguard/panel/service/{order_a}").text
+    assert '<dialog class="photo-viewer"' in detail
+    assert 'class="gallery-open gallery-thumb-link"' in detail
+    assert 'data-gallery-index="0"' in detail
+    assert 'viewer-next' in detail and 'viewer-prev' in detail
+    assert "ArrowRight" in detail and "touchend" in detail and "viewer-zoom-in" in detail
 
     res=get(f"/multiguard/panel/service/{order_a}/media/{media_a}")
     ensure(res.status_code,200,"Authenticated photo")
@@ -202,10 +221,10 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     # The original filename and object key are not leaked into public URLs.
     assert "repairs/device.jpg" not in get(f"/multiguard/panel/service/{order_a}").text
 
-    r=get("/multiguard/panel/dashboard?presence=all&q=Lenovo")
+    r=get("/multiguard/panel/computers?presence=all&q=Lenovo")
     ensure(r.status_code,200,"Owner device search")
     assert "SAME-SERIAL" in r.text
-    ensure(get("/multiguard/panel/dashboard?presence=removed").status_code,200,"Removed filter")
+    ensure(get("/multiguard/panel/computers?presence=removed").status_code,200,"Removed filter")
 
     # OWNER-only settings mutation and anti-CSRF, actually persisted in PostgreSQL.
     settings_page=get("/multiguard/panel/settings")
@@ -275,11 +294,11 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             SET last_seen_at=now()-interval '9 days'
             WHERE id=:iid
         """),{"iid":install_a})
-    found=get("/multiguard/panel/dashboard?presence=removed")
+    found=get("/multiguard/panel/computers?presence=removed")
     ensure(found.status_code,200,"Reported uninstall filtered view")
     assert f'href="/multiguard/panel/device/{install_b}"' in found.text
     assert f'href="/multiguard/panel/device/{install_a}"' not in found.text
-    silent=get("/multiguard/panel/dashboard?presence=silent")
+    silent=get("/multiguard/panel/computers?presence=silent")
     ensure(silent.status_code,200,"Silent devices filtered view")
     assert f'href="/multiguard/panel/device/{install_a}"' in silent.text
     assert f'href="/multiguard/panel/device/{install_b}"' not in silent.text
