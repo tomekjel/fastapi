@@ -965,10 +965,11 @@ def _fetch_device_rows(
                     gi.app_version,
                     gi.release_channel,
                     d.device_type,
-                    d.manufacturer,
-                    d.model,
-                    d.serial_number,
-                    d.hostname,
+                    COALESCE(d.manufacturer,p.manufacturer) AS manufacturer,
+                    COALESCE(d.model,p.model) AS model,
+                    COALESCE(d.serial_number,p.serial_number) AS serial_number,
+                    COALESCE(d.hostname,p.hostname) AS hostname,
+                    owner_alias.friendly_name,
                     ll.reception_id,
                     ll.reception_number,
                     COALESCE(ev.warning_30d,0) AS warning_30d,
@@ -981,6 +982,10 @@ def _fetch_device_rows(
                 FROM guard.installations gi
                 LEFT JOIN core.devices d
                     ON d.id=gi.service_device_id
+                LEFT JOIN guard.pending_installations p
+                    ON p.installation_id=gi.installation_external_id
+                LEFT JOIN guard.owner_installation_labels owner_alias
+                    ON owner_alias.installation_external_id=gi.installation_external_id
                 LEFT JOIN guard.agent_uninstalls au
                     ON au.installation_id=gi.id
                 LEFT JOIN guard.owner_device_notes owner_notes
@@ -1047,10 +1052,11 @@ def _fetch_device_rows(
                   )
                   AND (
                       :search_is_empty OR
-                      COALESCE(d.model,'') ILIKE :search_like OR
-                      COALESCE(d.manufacturer,'') ILIKE :search_like OR
-                      COALESCE(d.hostname,'') ILIKE :search_like OR
-                      COALESCE(d.serial_number,'') ILIKE :search_like OR
+                      COALESCE(d.model,p.model,'') ILIKE :search_like OR
+                      COALESCE(d.manufacturer,p.manufacturer,'') ILIKE :search_like OR
+                      COALESCE(d.hostname,p.hostname,'') ILIKE :search_like OR
+                      COALESCE(d.serial_number,p.serial_number,'') ILIKE :search_like OR
+                      COALESCE(owner_alias.friendly_name,'') ILIKE :search_like OR
                       COALESCE(ll.reception_number,'') ILIKE :search_like
                   )
                 ORDER BY
@@ -1450,7 +1456,7 @@ def multi_guard_panel_computers(
                 </a>
               </td>
               <td>
-                <b>{_panel_h(_device_label(row))}</b><br>
+                <b>{_panel_h(row['friendly_name'] or _device_label(row))}</b><br>
                 <span class="muted">{_panel_h(row['serial_number'] or row['hostname'] or '')}</span>{owner_attention}
               </td>
               <td><span class="badge {'mg-gold' if plan=='PRO' else 'mg-red'}">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(row['lifecycle'])}</span></td>
@@ -1539,10 +1545,15 @@ def multi_guard_panel_device(
                     gi.plan_code,gi.lifecycle,gi.valid_until,gi.last_seen_at,
                     gi.health_level,gi.app_version,gi.release_channel,
                     au.reported_at AS uninstall_reported_at,
-                    d.device_type,d.manufacturer,d.model,d.serial_number,d.hostname,
+                    d.device_type,
+                    COALESCE(d.manufacturer,p.manufacturer) AS manufacturer,
+                    COALESCE(d.model,p.model) AS model,
+                    COALESCE(d.serial_number,p.serial_number) AS serial_number,
+                    COALESCE(d.hostname,p.hostname) AS hostname,
                     ll.reception_number,ll.reception_id
                 FROM guard.installations gi
                 LEFT JOIN core.devices d ON d.id=gi.service_device_id
+                LEFT JOIN guard.pending_installations p ON p.installation_id=gi.installation_external_id
                 LEFT JOIN guard.agent_uninstalls au ON au.installation_id=gi.id
                 LEFT JOIN guard.license_links ll
                   ON ll.installation_id=gi.installation_external_id
