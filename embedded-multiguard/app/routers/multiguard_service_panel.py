@@ -243,7 +243,7 @@ def service_order_detail(
     fin=[("Kwota usługi",row["service_amount"]),("Koszt materiałów",row["material_cost"]),("Wartość dawcy",row["donor_material_value"]),("Wynik",row["actual_profit"])]
     fin_cards="".join(f'<div class="metric"><b>{esc(k)}</b><strong class="money">{money(v)}</strong></div>' for k,v in fin)
     return page(f"""
-    <section class="card panel-hero">
+    <section class="card panel-hero device-hero">
       <a class="button-link compact" href="/multiguard/panel/service">← WRÓĆ DO ZLECEŃ</a>
       <div class="eyebrow" style="margin-top:14px">KARTA SERWISOWA</div>
       <h1>{esc(row["reception_number"])} {status_badge(row["status"])}</h1>
@@ -335,7 +335,7 @@ def multiguard_release_history(
     else:
         notice = "".join(entries)
     return page(f"""
-    <section class="card panel-hero">
+    <section class="card panel-hero license-hero">
       <div class="eyebrow">MULTI-GUARD / HISTORIA ROZWOJU</div>
       <h1>Historia wersji BETA i STABLE</h1>
       <p>Co dodano, poprawiono, zmieniono lub usunięto w kolejnych wydaniach. Informacje pochodzą z katalogu aktualizacji na serwerze — bez wymyślania opisów zmian.</p>
