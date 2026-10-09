@@ -1880,7 +1880,7 @@ def multiguard_panel_pending_assign(
           </p>
           <p>
             Multi-Guard na tym komputerze może teraz automatycznie odebrać
-            przypisanie i przejść do SERVICE_TEST bez ręcznego przepisywania klucza.
+            przypisanie i przejść do TRYBU SERWISOWEGO bez ręcznego przepisywania klucza.
           </p>
           <a class="button-link" href="/multiguard/panel/dashboard">WRÓĆ DO PULPITU</a>
         </section>
@@ -1973,7 +1973,7 @@ def multiguard_panel_generate(
           <p class="ok">{product} • {link["duration_months"]} mies. • {"BETA" if link.get("release_channel") == "PILOT" else "STABILNA"} • {link["reception_number"]}</p>
           <code class="key" id="license-key">{license_key}</code>
           <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('license-key').innerText)">KOPIUJ KLUCZ</button>
-          <p class="warn">Po wpisaniu klucza w Multi-Guard uruchomi się SERVICE_TEST. Czas licencji jeszcze nie biegnie.</p>
+          <p class="warn">Po powiązaniu instalacji uruchomi się TRYB SERWISOWY. Czas licencji jeszcze nie biegnie.</p>
           <a href="/multiguard/panel">← Wróć do generatora</a>
         </section>
         """
