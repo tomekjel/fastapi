@@ -1366,7 +1366,12 @@ def refresh(req: RefreshRequest):
             text(
                 """
                 UPDATE guard.license_links
-                SET lifecycle=:lifecycle,
+                SET lifecycle=CASE
+                        WHEN lifecycle IN ('ACTIVE','EXPIRED','REVOKED')
+                             AND :lifecycle='PENDING_ACCEPTANCE'
+                        THEN lifecycle
+                        ELSE :lifecycle
+                    END,
                     approved_at=COALESCE(
                         approved_at,
                         CASE WHEN :lifecycle='PENDING_ACCEPTANCE'
@@ -2161,16 +2166,25 @@ def approve_reception_license(
                 SET lifecycle='PENDING_ACCEPTANCE',
                     approved_at=now(),
                     updated_at=now()
-                WHERE id=:id
+                WHERE id=:id AND lifecycle='SERVICE_TEST'
                 RETURNING *
                 """
             ),
             {"id": link["id"]},
-        ).mappings().one()
-        link = _normalize_link(dict(row))
-        _update_installation_mirror(connection, link)
+        ).mappings().first()
+        if row:
+            link = _normalize_link(dict(row))
+            _update_installation_mirror(connection, link)
+        else:
+            # Another acceptance/issue request has already progressed the
+            # lifecycle: never roll ACTIVE back to PENDING_ACCEPTANCE.
+            current = connection.execute(
+                text("SELECT * FROM guard.license_links WHERE id=:id"),
+                {"id": link["id"]},
+            ).mappings().one()
+            link = _normalize_link(dict(current))
 
-    return {"status": "PENDING_ACCEPTANCE", **_public_status(link)}
+    return {"status": link["lifecycle"], **_public_status(link)}
 
 
 @router.post("/multiguard/licenses/receptions/{reception_id}/release-channel")
