@@ -58,6 +58,19 @@ jobs:
               if fragment=="multiguard_panel.py": continue
               assert fragment in install, fragment
           assert 'curl -fsSL "$RAW_BASE/app/routers/multiguard_service_panel.py"' in install
+          for fragment in [
+            '@router.get("/multiguard/panel/service/{order_id}/media/{media_id}")',
+            'AND m.service_order_id=:order_id',
+            'AND m.deleted_at IS NULL AND o.deleted_at IS NULL',
+            'settings.media_root',
+            'Content-Security-Policy',
+            'X-Content-Type-Options',
+            'private, no-store',
+            'content_disposition_type="inline" if can_inline else "attachment"',
+            'class="media-thumb"',
+          ]:
+            assert fragment in source,fragment
+          print("OWNER PHOTO SECURITY SOURCE AUDIT PASS")
           runtime=(root/"app/routers/multiguard_runtime.py").read_text()
           config=(root/"app/routers/multiguard_panel_settings.py").read_text()
           assert 'multiguard_panel_triage.router' in install
