@@ -119,6 +119,13 @@ class GenerateLicenseRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class DirectLicenseRequest(BaseModel):
+    edition: str
+    months: int
+    release_channel: str = Field(default="STABLE", alias="releaseChannel")
+    model_config = {"populate_by_name": True}
+
+
 class ExtendLicenseRequest(BaseModel):
     operation_id: uuid.UUID = Field(alias="operationId")
     months: int
