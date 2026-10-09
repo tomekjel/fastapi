@@ -75,7 +75,7 @@ jobs:
             ('REMOVED: Stara funkcja','Usunięto'),
             ('FIXED: Czujnik','Naprawiono'),
             ('ADDED: <script>','&lt;script&gt;'),
-            ('','Brak'),
+            ('','Dla tego wydania nie zapisano'),
           ]
           for inp,expected in tests:
               rendered=make(inp)
