@@ -2186,6 +2186,53 @@ def multiguard_panel_pending(
     alias = owner_friendly_name(iid)
     alias_form = owner_name_form(iid, alias, return_to="pending")
     grant = _workshop_grant(iid)
+    direct = None
+    if pending.get("assigned_license_id"):
+        with engine.connect() as direct_con:
+            direct = direct_con.execute(text("""
+                SELECT * FROM guard.license_links
+                WHERE sale_kind='DIRECT' AND installation_id=:iid
+                  AND keygate_license_id=:license_id
+            """), {"iid":iid,"license_id":pending["assigned_license_id"]}).mappings().first()
+    if direct:
+        direct_info = (
+            "<p class='ok'>Licencja klienta: "
+            + _panel_escape("Pro" if direct["plan_code"]=="multi_guard_pro" else "Standard")
+            + " · " + str(direct["duration_months"])
+            + " miesięcy · " + _panel_escape(direct["lifecycle"])
+            + "</p>"
+        )
+        direct_buttons = (
+            f'<form method="post" action="/multiguard/panel/pending/{installation_id}/handover">'
+            f'<input type="hidden" name="csrf_token" value="{_workshop_csrf()}">'
+            '<button type="submit">PRZEKAŻ KLIENTOWI / POPROŚ O AKCEPTACJĘ</button></form>'
+            if direct["lifecycle"] in {"UNASSIGNED","SERVICE_TEST"} else
+            '<p class="muted">Przekazanie zarejestrowane; komputer pobierze status po synchronizacji.</p>'
+        )
+    elif pending["status"] == "WAITING":
+        direct_info = '<p>Sprzedaż bez przyjęcia sprzętu do warsztatu i bez numeru zlecenia.</p>'
+        direct_buttons = f"""
+            <form method="post" action="/multiguard/panel/pending/{installation_id}/direct">
+              <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+              <label>Edycja<select name="edition">
+                <option value="STANDARD">Standard</option>
+                <option value="PRO">Pro</option>
+              </select></label>
+              <label>Okres<select name="months">
+                <option value="3">3 miesiące</option>
+                <option value="6">6 miesięcy</option>
+                <option value="12" selected>12 miesięcy</option>
+              </select></label>
+              <label>Kanał<select name="release_channel">
+                <option value="STABLE">Stabilna</option>
+                <option value="PILOT">Beta</option>
+              </select></label>
+              <button type="submit">PRZYPISZ LICENCJĘ KLIENTA</button>
+            </form>
+        """
+    else:
+        direct_info = '<p>Ta instalacja ma już powiązanie ze zleceniem serwisowym.</p>'
+        direct_buttons = ''
     with engine.connect() as report_db:
         workshop_report_row = report_db.execute(text("""
             SELECT summary,reported_at FROM guard.workshop_reports
@@ -2233,6 +2280,12 @@ def multiguard_panel_pending(
             • host: {_panel_escape(public['hostname'] or '—')}
           </p>
           {alias_form}
+          <section class="card" id="client-license">
+            <div class="eyebrow">LICENCJA KOMERCYJNA</div>
+            <h2>Licencja klienta bez zlecenia</h2>
+            {direct_info}
+            {direct_buttons}
+          </section>
           <section class="card" id="workshop-mode">
             {workshop_state_html}
             {report_html}
