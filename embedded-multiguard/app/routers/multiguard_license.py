@@ -876,6 +876,63 @@ a{{color:#67c8ff}}.ok{{color:#48d99a}}
 .telemetry-table td{{vertical-align:middle}}
 @media(max-width:720px){{.telemetry-status{{align-items:flex-start}}.filter-bar{{display:grid;grid-template-columns:1fr}}}}
 @media(max-width:720px){{main{{width:96vw;margin-top:14px}}.grid{{grid-template-columns:1fr}}.card{{padding:15px}}}}
+
+/* Multi-Guard V12 web owner theme — navy base, metallic gold + crimson */
+:root{{--mg-gold:#e6bf7f;--mg-red:#fa6979;--mg-cyan:#6ed8ff;--mg-muted:#a1b7d0;color:#eef4fb;background:#060d1a;font-family:'Segoe UI Variable',Segoe UI,Arial,sans-serif}}
+body{{background:radial-gradient(ellipse 70% 40% at 97% 3%,rgba(185,86,68,.16),transparent 80%),radial-gradient(ellipse 60% 40% at 2% 35%,rgba(178,122,62,.10),transparent 76%),linear-gradient(140deg,#050c18,#0b1627 60%,#060e1b);background-attachment:fixed}}
+main{{width:min(1580px,96vw);margin:18px auto 70px}}
+nav{{position:sticky;top:9px;z-index:20;padding:12px;background:linear-gradient(115deg,rgba(16,31,49,.96),rgba(9,17,32,.96));border:1px solid #73584477;border-radius:18px;box-shadow:0 12px 35px #0008;backdrop-filter:blur(14px)}}
+nav a,.button-link{{background:linear-gradient(135deg,#132638,#0d1a2d);border:1px solid #42516a;color:#e1e6f2;border-radius:10px;letter-spacing:.045em;box-shadow:inset 0 1px #ffffff11;text-decoration:none}}
+nav a:hover,.button-link:hover{{background:linear-gradient(120deg,#49332f,#312538);border-color:#e6bf7f9a;color:#fff3d9;box-shadow:0 0 18px #df876024}}
+nav a.service-nav{{color:var(--mg-gold);border-color:#b185626e}}
+.card{{position:relative;overflow:hidden;padding:24px;border-radius:21px;border:1px solid #495b72b0;background:linear-gradient(152deg,#1a293edb,#0d1b2df4 65%,#091526);box-shadow:0 18px 45px #0005,inset 0 1px #ffffff13}}
+.card:before{{content:'';position:absolute;pointer-events:none;inset:0 17px auto;height:1px;background:linear-gradient(90deg,transparent,#d9af7b75,#e2687470,transparent)}}
+.card.panel-hero{{padding:30px;border-color:#a27e5b88;background:radial-gradient(ellipse at 90% 0%,#a94f5329,transparent 65%),radial-gradient(ellipse at 0% 100%,#bb894324,transparent 72%),linear-gradient(120deg,#172b42,#0b192c)}}
+h1{{font-size:clamp(26px,3vw,38px);line-height:1.16;letter-spacing:-.028em;color:#f6f8ff}}
+h2{{color:#f3f3f6;letter-spacing:-.01em}}
+p{{color:var(--mg-muted)}}
+.eyebrow{{color:var(--mg-gold);font-size:11px;letter-spacing:.18em;font-weight:800}}
+.metrics{{gap:12px;margin-top:18px}}
+.metric{{position:relative;min-height:93px;padding:17px;border-radius:14px;border:1px solid #53698180;background:linear-gradient(130deg,#26384b88,#0c1b2fc9);box-shadow:inset 0 1px #ffffff10,0 10px 24px #0004}}
+.metric b{{color:#b5c5d7}}
+.metric strong{{font-size:clamp(22px,2.5vw,31px);letter-spacing:-.04em;color:#f9fbff}}
+.metric .money{{font-size:clamp(17px,2vw,27px);white-space:normal}}
+.metric small{{display:block;margin-top:5px;font-size:11px;color:#8fa5ba}}
+.metric-link{{display:block;text-decoration:none;color:inherit;transition:transform .2s,border-color .2s}}
+.metric-link:hover{{transform:translateY(-2px);border-color:#b38961b8}}
+.accent-blue{{border-left:3px solid #70bce0}}.accent-gold{{border-left:3px solid #e4bc74}}.accent-green{{border-left:3px solid #65d9a0}}.accent-red{{border-left:3px solid #f06c76}}
+.section-head{{align-items:center}}
+.table-wrap{{border-color:#41566d;border-radius:14px;background:#0714258a}}
+table{{border-collapse:separate;border-spacing:0}}
+th{{background:#17293d;color:#d6bc95;border-bottom:1px solid #8c695664}}
+td{{color:#dce6f2;border-bottom-color:#294056;line-height:1.45}}
+tr:hover td{{background:#192c408a}}
+.badge{{border-radius:7px;color:#a7d8f4;border-color:#557a99;background:#14324b8a}}
+.badge.mg-blue{{color:#85d7ff;border-color:#417e9f}}
+.badge.mg-gold{{color:#f7d58e;border-color:#a37b39}}
+.badge.mg-green{{color:#86eabb;border-color:#41785f}}
+.badge.mg-red{{color:#ffa1a7;border-color:#a64c60}}
+.filter-tabs{{display:flex;flex-wrap:wrap;gap:8px;margin:19px 0}}
+.filter-tab{{border:1px solid #425d78;border-radius:10px;padding:9px 12px;background:#112339;color:#c2d5e6;text-decoration:none;font-size:12px}}
+.filter-tab.selected{{background:linear-gradient(115deg,#5e4331,#3d2739);border-color:#e1b577;color:#ffe8b7}}
+.service-search{{display:flex;align-items:end;flex-wrap:wrap;margin-bottom:16px}}
+.service-search label{{flex:1 1 340px}}
+.service-search button{{max-height:45px}}
+.strong-link{{color:#f1c589;font-weight:700;text-decoration:none}}
+.row-sub{{display:block;font-size:11px;color:#8ea5b9;margin-top:4px}}
+.pagination{{display:flex;align-items:center;gap:12px;justify-content:flex-end;padding:15px 0 0;color:#aec2d6}}
+.detail-facts{{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:10px;margin-top:20px}}
+.detail-fact,.detail-note{{border:1px solid #405b72;border-radius:13px;padding:14px;background:#0a1b2db5;min-width:0;overflow-wrap:anywhere}}
+.detail-fact b{{display:block;color:#96abc0;font-size:11px;margin-bottom:6px}}
+.detail-fact span{{font-size:14px;color:#f4f7fe}}
+.notes-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:11px;margin-top:18px}}
+.detail-note strong{{color:#dfbd8c}}
+.detail-note p{{white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:0}}
+input,select{{background:#09192b;border-color:#496078;color:#f2f8fc}}
+button{{background:linear-gradient(115deg,#a96f3c,#b45b56);box-shadow:inset 0 1px #ffffff26}}
+button:hover{{filter:brightness(1.1)}}
+@media(max-width:840px){{nav{{position:relative;top:0}}main{{width:96vw}}.card{{padding:17px}}.card.panel-hero{{padding:20px}}.metric{{min-height:74px}}}}
+
 </style>
 </head>
 <body>
@@ -886,6 +943,7 @@ a{{color:#67c8ff}}.ok{{color:#48d99a}}
   <a href="/multiguard/panel/telemetry">TELEMETRIA / ROZWÓJ</a>
   <a href="/multiguard/panel/licenses">LICENCJE</a>
   <a href="/multiguard/panel">NOWA LICENCJA</a>
+  <a class="service-nav" href="/multiguard/panel/service">SERWIS / ZLECENIA</a>
 </nav>
 {body}
 </main>
