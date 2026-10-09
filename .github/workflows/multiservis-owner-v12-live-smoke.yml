@@ -22,6 +22,7 @@ jobs:
               paths=json.load(f).get('paths',{})
           expected=[
             '/multiguard/panel/dashboard',
+            '/multiguard/panel/computers',
             '/multiguard/panel/service',
             '/multiguard/panel/service/{order_id}',
             '/multiguard/panel/service/{order_id}/media/{media_id}',
