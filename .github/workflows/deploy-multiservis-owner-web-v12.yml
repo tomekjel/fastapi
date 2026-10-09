@@ -1,0 +1,76 @@
+name: Deploy Multi-Servis OWNER V12 web panel (controlled only)
+on:
+  push:
+    branches: [multiservis-panel-multiguard-gold-crimson-v1]
+    paths:
+      - embedded-multiguard/deploy/owner-v12-deploy.trigger
+permissions:
+  contents: read
+concurrency:
+  group: multiservis-backend-production
+  cancel-in-progress: false
+jobs:
+  owner-v12:
+    name: Backup + preflight + web-only code deployment + rollback
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate script and isolated security checks
+        run: |
+          set -euo pipefail
+          bash -n embedded-multiguard/deploy-owner-web-v12.sh
+          python3 embedded-multiguard/tests/test_owner_panel_security.py
+          python3 -m py_compile embedded-multiguard/scripts/preflight_owner_panel.py
+      - name: Configure SSH connection (never print secrets)
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+          SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?No Multi-Servis host configured}"
+          : "${SSH_USER:?No Multi-Servis SSH user configured}"
+          : "${SSH_KEY:?No Multi-Servis SSH key configured}"
+          SSH_PORT="${SSH_PORT:-22}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/multiservis_backend
+          chmod 600 ~/.ssh/multiservis_backend
+          ssh-keyscan -T 10 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Deploy web-owner panel from pinned commit, with rollback on failed checks
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SSH_PORT:-22}"
+          ssh -i ~/.ssh/multiservis_backend -p "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "if [ \$(id -u) -eq 0 ]; then env MULTISERVIS_OWNER_WEB_REF='$GITHUB_SHA' bash -s; else sudo -n env MULTISERVIS_OWNER_WEB_REF='$GITHUB_SHA' bash -s; fi" \
+            < embedded-multiguard/deploy-owner-web-v12.sh
+      - name: Verify public production routes without credentials
+        run: |
+          curl -fsS --retry 4 --retry-delay 4 --max-time 20 \
+            https://api.multi-servis.pl/health >/dev/null
+          curl -fsS --retry 4 --retry-delay 4 --max-time 20 \
+            https://api.multi-servis.pl/openapi.json -o openapi-owner-v12.json
+          python3 - <<'PY'
+          import json
+          routes=json.load(open("openapi-owner-v12.json"))["paths"]
+          for path in (
+            "/multiguard/panel/dashboard",
+            "/multiguard/panel/service",
+            "/multiguard/panel/service/{order_id}/media/{media_id}",
+            "/multiguard/panel/device/{installation_id}/diagnostic-plan",
+            "/multiguard/agent/heartbeat",
+            "/multiguard/agent/event",
+          ):
+            assert path in routes,path
+          print("PASS: owner V12 and existing agent paths present.")
+          PY
