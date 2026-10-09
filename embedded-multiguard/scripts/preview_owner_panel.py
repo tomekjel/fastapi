@@ -65,6 +65,27 @@ dashboard = f"""
 {section("Szybki dostęp","Przegląd pozostałych obszarów bez przeładowywania tej samej siatki kafli.",
  '<div class="detail-facts"><div class="detail-fact"><b>Zlecenia</b><span>Naprawy, zdjęcia i statusy</span></div><div class="detail-fact"><b>Telemetria</b><span>Wzorce problemów</span></div><div class="detail-fact"><b>Licencje</b><span>Standard · Pro · Serwis</span></div></div>')}
 """
+inventory=f"""
+<section class="card panel-hero computers-hero">
+ <div class="eyebrow">MULTI-SERVIS / KOMPUTERY KLIENTÓW</div>
+ <h1>Komputery</h1>
+ <p>Samodzielny rejestr instalacji Multi-Guard, ich ostatniego kontaktu, stanu technicznego i historii serwisu.</p>
+ {notice}
+ <div class="inventory-headline"><span class="badge mg-blue">Lista i historia urządzeń</span>
+ <span class="muted">Stan łączności pochodzi z ostatniego raportu agenta.</span></div>
+</section>
+<section class="card" id="devices">
+ <h2>Rejestr komputerów</h2>
+ <p>Filtrowanie i wyszukiwanie nie przenoszą do pulpitu. Na ekranie są wyłącznie urządzenia i ich historia.</p>
+ <div class="filter-tabs"><a class="filter-tab selected" href="#">WSZYSTKIE</a>
+ <a class="filter-tab" href="#">BRAK KONTAKTU</a>
+ <a class="filter-tab" href="#">ZGŁOSZONE ODINSTALOWANIE</a></div>
+ <div class="service-search"><label>Wyszukaj komputer<input value="" placeholder="Model, numer seryjny, hostname lub numer zlecenia"></label>
+ <button type="button">SZUKAJ</button></div>
+ {table(["ID","Komputer","Uprawnienie","Wersja","Łączność","Zdarzenia","Stan"],
+ [(f'<a href="#">{i}</a>',name,lic,vers,last,issue,status) for i,name,lic,vers,last,issue,status in devices])}
+</section>
+"""
 device = f"""
 <section class="card panel-hero device-hero">
  <div class="eyebrow">MULTI-SERVIS / KARTA FIZYCZNEGO URZĄDZENIA</div>
@@ -160,7 +181,7 @@ settings=f"""
 </section>
 """
 for name,body in [
-  ("01-pulpit",dashboard),("02-karta-komputera",device),
+  ("01-pulpit",dashboard),("02-karta-komputera",device),("08-komputery",inventory),
   ("03-telemetria",telemetry),("04-serwis",service),
   ("05-licencje",licenses),("06-historia-wersji",versions),
   ("07-ustawienia",settings)
