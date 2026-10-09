@@ -159,6 +159,11 @@ class DiscoveryAssignmentRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class WorkshopReportRequest(DiscoveryAssignmentRequest):
+    """Explicit minimal workshop diagnostics, authenticated with discovery credential."""
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
 class AssignPendingInstallationRequest(BaseModel):
     reception_id: str = Field(alias="receptionId")
     edition: str
@@ -540,6 +545,13 @@ CREATE TABLE IF NOT EXISTS guard.workshop_grant_audit (
     before_state JSONB NOT NULL,
     after_state JSONB NOT NULL,
     changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS guard.workshop_reports (
+    installation_id UUID PRIMARY KEY
+        REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+    summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS guard.installations (
@@ -1369,6 +1381,40 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
     }
 
 
+@router.post("/v1/multi-guard/workshop/report")
+def workshop_report(req: WorkshopReportRequest):
+    """Store a bounded current workshop diagnostic summary, no core.devices required."""
+    pending = _authenticate_pending(
+        req.installation_id, req.device_id, req.discovery_credential,
+    )
+    if len(json.dumps(req.summary, ensure_ascii=False)) > 16_384:
+        raise HTTPException(413, "Raport diagnostyczny jest zbyt duży.")
+    allowed = {
+        "defenderAvailable", "realtimeProtection", "activeThreatCount",
+        "firewallProtected", "whea24h", "kernelPower7d",
+        "diskProblemCount", "browserInstalledCount", "browserActiveCount",
+        "browserNeedsAttentionCount", "capturedAt", "appVersion",
+    }
+    if not set(req.summary).issubset(allowed):
+        raise HTTPException(400, "Raport zawiera nieobsługiwane pola.")
+    _ensure_schema()
+    with engine.begin() as con:
+        enabled = con.execute(text("""
+            SELECT enabled FROM guard.workshop_grants
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id":pending["installation_id"]}).scalar_one_or_none()
+        if enabled is not True:
+            raise HTTPException(403, "Tryb warsztatowy nie jest aktywny.")
+        con.execute(text("""
+            INSERT INTO guard.workshop_reports(installation_id,summary,reported_at)
+            VALUES (:id,CAST(:data AS jsonb),now())
+            ON CONFLICT(installation_id) DO UPDATE
+              SET summary=EXCLUDED.summary,reported_at=now()
+        """), {"id":pending["installation_id"],
+                 "data":json.dumps(req.summary,ensure_ascii=False)})
+    return {"saved":True,"serverTime":_iso(_utcnow())}
+
+
 @router.get("/v1/multi-guard/license/pubkey")
 def license_pubkey():
     return {
@@ -1936,6 +1982,31 @@ def multiguard_panel_pending(
     from app.routers.multiguard_panel_devices import owner_friendly_name, owner_name_form
     alias = owner_friendly_name(iid)
     alias_form = owner_name_form(iid, alias, return_to="pending")
+    grant = _workshop_grant(iid)
+    with engine.connect() as report_db:
+        workshop_report_row = report_db.execute(text("""
+            SELECT summary,reported_at FROM guard.workshop_reports
+            WHERE installation_id=:id
+        """), {"id":iid}).mappings().first()
+    if grant and grant["enabled"]:
+        workshop_state_html = (
+            '<p class="ok">TRYB WARSZTATOWY AKTYWNY — '
+            + _panel_escape(grant["edition"]) + ' / '
+            + _panel_escape(grant["release_channel"]) + '</p>'
+        )
+    else:
+        workshop_state_html = '<p>Tryb warsztatowy nie jest aktywny.</p>'
+    report_html = (
+        '<div class="detail-facts">'
+        + "".join(
+            '<div class="detail-fact"><b>'+_panel_escape(key)+'</b><span>'
+            +_panel_escape(value)+'</span></div>'
+            for key,value in (workshop_report_row["summary"] or {}).items()
+        ) + '</div>'
+        + '<p class="muted">Ostatni raport: '
+        + _panel_escape(workshop_report_row["reported_at"]) + '</p>'
+        if workshop_report_row else '<p class="muted">Komputer nie wysłał jeszcze raportu warsztatowego.</p>'
+    )
     device = " ".join(
         part for part in [
             public["manufacturer"].strip(),
@@ -1960,6 +2031,8 @@ def multiguard_panel_pending(
           </p>
           {alias_form}
           <section class="card" id="workshop-mode">
+            {workshop_state_html}
+            {report_html}
             <div class="eyebrow">BEZ LICENCJI CZASOWEJ</div>
             <h2>Tryb warsztatowy</h2>
             <p>Może działać na komputerze warsztatowym albo u klienta.
