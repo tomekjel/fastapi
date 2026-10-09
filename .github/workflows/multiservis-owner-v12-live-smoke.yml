@@ -24,7 +24,9 @@ jobs:
             '/multiguard/panel/dashboard',
             '/multiguard/panel/computers',
             '/multiguard/panel/service',
+            '/multiguard/panel/statistics',
             '/multiguard/panel/service/{order_id}',
+            '/multiguard/panel/service/{order_id}/issue',
             '/multiguard/panel/service/{order_id}/media/{media_id}',
             '/multiguard/panel/settings',
             '/multiguard/panel/device/{installation_id}/note',
@@ -41,7 +43,7 @@ jobs:
       - name: Ensure owner browser pages require login (no credentials used)
         run: |
           set -euo pipefail
-          for path in /multiguard/panel/dashboard /multiguard/panel/service /multiguard/panel/versions /multiguard/panel/settings; do
+          for path in /multiguard/panel/dashboard /multiguard/panel/service /multiguard/panel/statistics /multiguard/panel/versions /multiguard/panel/settings; do
             status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://api.multi-servis.pl$path")"
             printf 'Owner route %s => HTTP %s\n' "$path" "$status"
             test "$status" = 401 || { echo 'FAIL: Expected HTTP 401 from private panel route'; exit 1; }
