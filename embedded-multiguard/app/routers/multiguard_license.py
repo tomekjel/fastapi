@@ -849,13 +849,13 @@ def _panel_html(body: str) -> str:
           <circle cx="13" cy="4" r="2"/><circle cx="7" cy="20" r="2"/><circle cx="19" cy="20" r="2"/>
         </svg>
       </span>
-      <span><span class="brand-name">Multi<em>-Servis</em></span>
+      <span><span class="brand-name"><span class="brand-multi">Multi</span><span class="brand-servis">-Servis</span></span>
       <span class="brand-caption">CENTRUM ZARZĄDZANIA</span></span>
     </a>
     <p class="nav-group-label">Panel właściciela</p>
     <nav aria-label="Sekcje panelu">
       <a href="/multiguard/panel/dashboard"><span class="nav-icon" aria-hidden="true">⌂</span>Pulpit</a>
-      <a href="/multiguard/panel/dashboard#devices"><span class="nav-icon" aria-hidden="true">▤</span>Komputery</a>
+      <a href="/multiguard/panel/computers"><span class="nav-icon" aria-hidden="true">▤</span>Komputery</a>
       <a href="/multiguard/panel/service"><span class="nav-icon" aria-hidden="true">◇</span>Zlecenia serwisowe</a>
       <a href="/multiguard/panel/telemetry"><span class="nav-icon" aria-hidden="true">⌁</span>Telemetria i błędy</a>
       <a href="/multiguard/panel/licenses"><span class="nav-icon" aria-hidden="true">▣</span>Licencje</a>
@@ -866,10 +866,6 @@ def _panel_html(body: str) -> str:
     <nav aria-label="Działania">
       <a href="/multiguard/panel"><span class="nav-icon" aria-hidden="true">＋</span>Nowa licencja</a>
     </nav>
-    <div class="rail-bottom">
-      <div class="rail-editions">RODZINA MULTI-GUARD V12</div>
-      <p>Jeden panel Multi-Servis. Standard i Pro są edycjami programu klienckiego.</p>
-    </div>
   </aside>
   <div class="workspace-content">
     <header class="workspace-topbar">
@@ -889,9 +885,10 @@ def _panel_html(body: str) -> str:
   for (const link of links) {{
     const target = new URL(link.href, window.location.origin);
     const chosen = target.pathname === path ||
-      (target.hash === '#devices' && path.startsWith('/multiguard/panel/device/')) ||
+      (target.pathname === '/multiguard/panel/computers' && path.startsWith('/multiguard/panel/device/')) ||
       (target.pathname === '/multiguard/panel/service' && path.startsWith('/multiguard/panel/service/')) ||
       (target.pathname === '/multiguard/panel/telemetry' && path.startsWith('/multiguard/panel/telemetry/'));
+    // Distinct sections, exactly one active navigation item.
     if (chosen) link.setAttribute('aria-current', 'page');
   }}
 }})();
