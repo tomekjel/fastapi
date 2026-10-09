@@ -1352,12 +1352,28 @@ def refresh(req: RefreshRequest):
     elif link.get("valid_until") and _utcnow() >= link["valid_until"]:
         lifecycle = "EXPIRED"
 
+    # The canonical order status is authoritative. Even if an Android or web
+    # handover callback was interrupted, a delivered computer MUST NOT remain
+    # in unrestricted service mode after its next online signed refresh.
+    if (
+        lifecycle == "SERVICE_TEST"
+        and str(_reception(link["reception_id"])["status"]).upper() == "COMPLETED"
+    ):
+        lifecycle = "PENDING_ACCEPTANCE"
+
     with engine.begin() as connection:
         row = connection.execute(
             text(
                 """
                 UPDATE guard.license_links
-                SET lifecycle=:lifecycle, app_version=:app_version, updated_at=now()
+                SET lifecycle=:lifecycle,
+                    approved_at=COALESCE(
+                        approved_at,
+                        CASE WHEN :lifecycle='PENDING_ACCEPTANCE'
+                             THEN now() ELSE NULL END
+                    ),
+                    app_version=:app_version,
+                    updated_at=now()
                 WHERE id=:id
                 RETURNING *
                 """
