@@ -594,8 +594,6 @@ CREATE TABLE IF NOT EXISTS guard.activation_events (
 CREATE INDEX IF NOT EXISTS idx_guard_activation_events_created
     ON guard.activation_events(id DESC);
 
--- Allow direct customer sales without creating fictitious service orders.
--- Preserve existing FKs and historic service rows; only remove NOT NULL.
 ALTER TABLE guard.license_links ALTER COLUMN reception_id DROP NOT NULL;
 ALTER TABLE guard.license_links ALTER COLUMN service_device_id DROP NOT NULL;
 ALTER TABLE guard.license_links
