@@ -112,7 +112,7 @@ def service_orders(
             FROM service.service_orders s
             JOIN service.owner_finances f ON f.service_order_id=s.id
             WHERE s.status='COMPLETED'
-              AND s.completed_at >= date_trunc('month', now() AT TIME ZONE 'Europe/Warsaw')
+              AND s.completed_at >= (date_trunc('month', now() AT TIME ZONE 'Europe/Warsaw') AT TIME ZONE 'Europe/Warsaw')
         """)).mappings().one()
         rows = con.execute(text(sql), {**params, "offset": (page_number-1)*40}).mappings().all()
     has_more = len(rows) > 40
@@ -212,8 +212,11 @@ def service_order_detail(
             WHERE service_order_id=:id ORDER BY changed_at DESC LIMIT 25
         """),{"id":order_id}).mappings().all()
         media=con.execute(text("""
-            SELECT media_kind,original_filename,caption,created_at FROM service.service_order_media
-            WHERE service_order_id=:id AND deleted_at IS NULL ORDER BY sort_order,created_at DESC LIMIT 50
+            SELECT m.media_kind,o.original_filename,m.caption,m.created_at FROM service.service_order_media m
+            JOIN core.storage_objects o ON o.id=m.storage_object_id
+            WHERE m.service_order_id=:id AND m.deleted_at IS NULL
+              AND o.deleted_at IS NULL
+            ORDER BY m.sort_order,m.created_at DESC LIMIT 50
         """),{"id":order_id}).mappings().all()
     def fact(label: str, value: object) -> str:
         return f'<div class="detail-fact"><b>{esc(label)}</b><span>{esc(value or "—")}</span></div>'
