@@ -8,12 +8,14 @@ from __future__ import annotations
 import html
 import uuid
 from decimal import Decimal
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from sqlalchemy import text
 from app.database import engine
+from app.config import settings
 from app.routers.multiguard_license import _panel_auth, _panel_html
 
 router = APIRouter(tags=["multiservis-owner-web"])
@@ -40,6 +42,71 @@ def page(content: str) -> HTMLResponse:
         content=_panel_html(content),
         headers={"Cache-Control": "private, no-store", "X-Frame-Options": "DENY"},
     )
+
+# Only raster formats may be displayed inside a browser. All other file
+# types are offered for download, never rendered as active HTML/SVG.
+_WEB_IMAGE_TYPES=frozenset({"image/jpeg","image/png","image/webp","image/gif"})
+_MAX_INLINE_BYTES=16*1024*1024
+
+
+def _media_file_path(object_key: str) -> Path:
+    """Prevent path escape or symlink traversal outside Multi-Servis media_root."""
+    if not isinstance(object_key,str) or not object_key:
+        raise HTTPException(404,"Nie znaleziono pliku.")
+    # Keys written by Multi-Servis are normalized, relative UNIX-style paths.
+    raw=PurePosixPath(object_key)
+    if raw.is_absolute() or ".." in raw.parts or "\\" in object_key:
+        raise HTTPException(404,"Nie znaleziono pliku.")
+    try:
+        root=Path(settings.media_root).resolve(strict=True)
+        candidate=(root/Path(*raw.parts)).resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise HTTPException(404,"Plik jest niedostępny.") from None
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        raise HTTPException(404,"Plik jest niedostępny.")
+    return candidate
+
+
+@router.get("/multiguard/panel/service/{order_id}/media/{media_id}")
+def owner_order_media(
+    order_id: uuid.UUID,
+    media_id: uuid.UUID,
+    _: None = Depends(_panel_auth),
+):
+    # The order ID is required in the SQL join. Cross-order ID guessing must
+    # never yield private media from another customer's repair.
+    with engine.connect() as con:
+        row=con.execute(text("""
+            SELECT o.object_key,o.original_filename,o.mime_type,o.size_bytes
+            FROM service.service_order_media m
+            JOIN core.storage_objects o ON o.id=m.storage_object_id
+            WHERE m.id=:media_id AND m.service_order_id=:order_id
+              AND m.deleted_at IS NULL AND o.deleted_at IS NULL
+            LIMIT 1
+        """),{"media_id":media_id,"order_id":order_id}).mappings().first()
+    if not row:
+        raise HTTPException(404,"Nie znaleziono pliku tego zlecenia.")
+    mime=str(row["mime_type"] or "").split(";",1)[0].lower().strip()
+    can_inline=mime in _WEB_IMAGE_TYPES and 0 < int(row["size_bytes"] or 0) <= _MAX_INLINE_BYTES
+    path=_media_file_path(row["object_key"])
+    # Never trust original_filename as HTTP header content, even if it arrived
+    # from a trusted Android client. Starlette FileResponse quotes it.
+    filename=Path(str(row["original_filename"] or "dokument")).name
+    return FileResponse(
+        path,
+        media_type=mime if can_inline else "application/octet-stream",
+        filename=filename,
+        content_disposition_type="inline" if can_inline else "attachment",
+        headers={
+            "Cache-Control":"private, no-store, max-age=0",
+            "Pragma":"no-cache",
+            "X-Content-Type-Options":"nosniff",
+            "X-Frame-Options":"DENY",
+            "Referrer-Policy":"no-referrer",
+            "Content-Security-Policy":"default-src 'none'; sandbox",
+        },
+    )
+
 
 _STATUS = {
     "all": ("Wszystkie zlecenia", ""),
@@ -212,7 +279,7 @@ def service_order_detail(
             WHERE service_order_id=:id ORDER BY changed_at DESC LIMIT 25
         """),{"id":order_id}).mappings().all()
         media=con.execute(text("""
-            SELECT m.media_kind,o.original_filename,m.caption,m.created_at FROM service.service_order_media m
+            SELECT m.id,m.media_kind,o.original_filename,o.mime_type,o.size_bytes,m.caption,m.created_at FROM service.service_order_media m
             JOIN core.storage_objects o ON o.id=m.storage_object_id
             WHERE m.service_order_id=:id AND m.deleted_at IS NULL
               AND o.deleted_at IS NULL
@@ -239,7 +306,22 @@ def service_order_detail(
         note("Akcesoria",row["accessories_received"]),
     ])
     hist="".join(f'<tr><td>{dt(x["changed_at"])}</td><td>{status_badge(x["old_status"])}</td><td>→</td><td>{status_badge(x["new_status"])}</td></tr>' for x in history)
-    media_rows="".join(f'<tr><td>{esc(x["media_kind"])}</td><td>{esc(x["original_filename"])}</td><td>{esc(x["caption"])}</td><td>{dt(x["created_at"])}</td></tr>' for x in media)
+    def media_row(x: object) -> str:
+        mime=str(x["mime_type"] or "").split(";",1)[0].lower().strip()
+        url=f"/multiguard/panel/service/{order_id}/media/{x['id']}"
+        eligible=mime in _WEB_IMAGE_TYPES and 0 < int(x["size_bytes"] or 0) <= _MAX_INLINE_BYTES
+        preview=(
+            f'<a href="{url}" target="_blank" rel="noreferrer" aria-label="Powiększ zdjęcie">'
+            f'<img class="media-thumb" src="{url}" loading="lazy" alt="{esc(x["caption"] or x["original_filename"])}"></a>'
+            if eligible else '<span class="muted">DOKUMENT</span>'
+        )
+        action=("OTWÓRZ ZDJĘCIE" if eligible else "POBIERZ PLIK")
+        return (f'<tr><td>{preview}</td><td>{esc(x["media_kind"])}</td>'
+                f'<td>{esc(x["original_filename"])}</td><td>{esc(x["caption"])}</td>'
+                f'<td>{dt(x["created_at"])}</td>'
+                f'<td><a class="button-link compact" href="{url}" target="_blank" rel="noreferrer">'
+                f'{action}</a></td></tr>')
+    media_rows="".join(media_row(x) for x in media)
     fin=[("Kwota usługi",row["service_amount"]),("Koszt materiałów",row["material_cost"]),("Wartość dawcy",row["donor_material_value"]),("Wynik",row["actual_profit"])]
     fin_cards="".join(f'<div class="metric"><b>{esc(k)}</b><strong class="money">{money(v)}</strong></div>' for k,v in fin)
     return page(f"""
@@ -253,7 +335,7 @@ def service_order_detail(
     <section class="card"><h2>Opis i notatki</h2><div class="notes-grid">{notes}</div></section>
     <section class="card"><h2>Finanse zlecenia</h2><div class="metrics">{fin_cards}</div><p>Przychód i wynik pojawiają się w statystykach zrealizowanych usług dopiero po statusie „Wydany”.</p></section>
     <section class="card"><h2>Historia statusów</h2><div class="table-wrap"><table><thead><tr><th>Data</th><th>Poprzedni</th><th></th><th>Nowy</th></tr></thead><tbody>{hist or '<tr><td colspan="4">Brak historii.</td></tr>'}</tbody></table></div></section>
-    <section class="card"><h2>Dokumentacja multimedialna ({len(media)})</h2><p>Wykaz zdjęć i dokumentów — bez pobierania ich do przeglądarki. Podgląd pełnych obrazów pozostaje w aplikacji mobilnej do czasu przygotowania bezpiecznego dostępu WWW.</p><div class="table-wrap"><table><thead><tr><th>Typ</th><th>Plik</th><th>Opis</th><th>Data</th></tr></thead><tbody>{media_rows or '<tr><td colspan="4">Brak plików.</td></tr>'}</tbody></table></div></section>
+    <section class="card"><h2>Zdjęcia i dokumenty ({len(media)})</h2><p>Chroniony podgląd właściciela: miniatury obrazów i pobieranie pozostałych plików. Materiały są odczytywane wyłącznie ze zlecenia, nie zapisujemy ich w publicznym katalogu WWW.</p><div class="table-wrap"><table><thead><tr><th>Podgląd</th><th>Rodzaj</th><th>Plik</th><th>Opis</th><th>Data</th><th>Otwórz</th></tr></thead><tbody>{media_rows or '<tr><td colspan="6">Brak plików.</td></tr>'}</tbody></table></div></section>
     """)
 
 
