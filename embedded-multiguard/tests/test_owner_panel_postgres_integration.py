@@ -168,6 +168,32 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             VALUES(:eid,:iid,'WHEA_LOG','WARNING',now(),CAST(:payload AS jsonb))
         """),{"eid":event_a,"iid":install_a,"payload":'{"message":"WHEA test"}'})
 
+    # Four distinct photos belonging to a single repair: verify indexed
+    # carousel navigation, not only the initial thumbnail.
+    with engine.begin() as db:
+        for slot in range(1, 4):
+            extra_store = uuid.uuid4()
+            extra_id = uuid.uuid4()
+            extra_name = f"device-{slot}.jpg"
+            extra_photo = folder / extra_name
+            extra_photo.write_bytes(b"\\xff\\xd8\\xff\\xe0" + bytes([slot]) * 16)
+            db.execute(text("""
+                INSERT INTO core.storage_objects(id,object_key,original_filename,
+                                                 mime_type,size_bytes)
+                VALUES(:id,:key,:name,'image/jpeg',:size)
+            """), {
+                "id":extra_store,"key":f"repairs/{extra_name}",
+                "name":extra_name,"size":extra_photo.stat().st_size
+            })
+            db.execute(text("""
+                INSERT INTO service.service_order_media(
+                    id,service_order_id,storage_object_id,media_kind,caption,sort_order)
+                VALUES(:id,:order_id,:sid,'DEVICE_PHOTO',:caption,:order_num)
+            """),{
+                "id":extra_id,"order_id":order_a,"sid":extra_store,
+                "caption":f"Zdjęcie {slot+1}", "order_num":slot
+            })
+
     app=FastAPI()
     for mod in (license,runtime,service,settings,devices,triage,diagnostic):
         app.include_router(mod.router)
@@ -208,6 +234,11 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert '<dialog class="photo-viewer"' in detail
     assert 'class="gallery-open gallery-thumb-link"' in detail
     assert 'data-gallery-index="0"' in detail
+    assert 'data-gallery-index="1"' in detail
+    assert 'data-gallery-index="2"' in detail
+    assert 'data-gallery-index="3"' in detail
+    assert detail.count('class="gallery-open gallery-thumb-link"') == 4
+    assert 'Zdjęcia i dokumenty (4)' in detail
     assert 'viewer-next' in detail and 'viewer-prev' in detail
     assert "ArrowRight" in detail and "touchend" in detail and "viewer-zoom-in" in detail
 
