@@ -21,7 +21,8 @@ jobs:
             embedded-multiguard/app/routers/multiguard_runtime.py \
             embedded-multiguard/app/routers/multiguard_remote.py \
             embedded-multiguard/app/routers/multiguard_updates.py \
-            embedded-multiguard/app/routers/multiguard_service_panel.py
+            embedded-multiguard/app/routers/multiguard_service_panel.py \
+            embedded-multiguard/app/routers/multiguard_panel_settings.py
       - name: Verify HTML routes and safe owner controls
         run: |
           python - <<'PY'
@@ -38,6 +39,20 @@ jobs:
               assert fragment in install, fragment
           assert 'curl -fsSL "$RAW_BASE/app/routers/multiguard_service_panel.py"' in install
           runtime=(root/"app/routers/multiguard_runtime.py").read_text()
+          config=(root/"app/routers/multiguard_panel_settings.py").read_text()
+          assert 'multiguard_panel_settings.router' in install
+          assert 'SETTINGS_PANEL_FILE' in install
+          assert '@router.post("/multiguard/panel/settings")' in config
+          assert '@router.get("/multiguard/panel/settings"' in config
+          assert 'Depends(_panel_auth)' in config
+          assert '_token_valid(csrf_token)' in config
+          assert 'guard.owner_panel_settings_audit' in config
+          assert 'owner_panel_config' in runtime
+          assert 'device_search_form' in runtime
+          assert 'device_paging' in runtime
+          assert ':search_like' in runtime and ':silence_days' in runtime
+          assert 'USTAWIENIA PANELU' in theme
+          assert '/multiguard/panel/settings' in install
           for fragment in [
               'service_order_count',
               'service.service_orders so',
@@ -97,6 +112,8 @@ jobs:
           assert presence(now-timedelta(days=12),None)[0]=='stale'
           assert presence(None,None)[0]=='unknown'
           assert presence(now-timedelta(minutes=1),now)[0]=='removed'
+          assert presence(now-timedelta(hours=47),None,recent_hours=48)[0]=='recent'
+          assert presence(now-timedelta(days=9),None,delayed_days=10)[0]=='delayed'
           for fragment in [
               'CREATE TABLE IF NOT EXISTS guard.agent_uninstalls',
               'if body.eventType == "CLIENT_UNINSTALLED"',
