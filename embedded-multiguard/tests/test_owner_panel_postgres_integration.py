@@ -277,12 +277,12 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"iid":install_a})
     found=get("/multiguard/panel/dashboard?presence=removed")
     ensure(found.status_code,200,"Reported uninstall filtered view")
-    assert f"{str(install_b)[:8]}" in found.text
-    assert f"{str(install_a)[:8]}" not in found.text
+    assert f'href="/multiguard/panel/device/{install_b}"' in found.text
+    assert f'href="/multiguard/panel/device/{install_a}"' not in found.text
     silent=get("/multiguard/panel/dashboard?presence=silent")
     ensure(silent.status_code,200,"Silent devices filtered view")
-    assert f"{str(install_a)[:8]}" in silent.text
-    assert f"{str(install_b)[:8]}" not in silent.text
+    assert f'href="/multiguard/panel/device/{install_a}"' in silent.text
+    assert f'href="/multiguard/panel/device/{install_b}"' not in silent.text
 
     with engine.begin() as db:
         db.execute(text("""
