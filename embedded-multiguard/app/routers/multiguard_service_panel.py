@@ -7,18 +7,21 @@ from __future__ import annotations
 
 import html
 import uuid
+import time
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Form
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from sqlalchemy import text
 from app.database import engine
 from app.config import settings
-from app.routers.multiguard_license import _panel_auth, _panel_html
+from app.routers.multiguard_license import (_panel_auth, _panel_html,
+    _normalize_link, _update_installation_mirror)
+from app.routers.multiguard_panel_settings import _csrf_token, _token_valid
 
 router = APIRouter(tags=["multiservis-owner-web"])
 
@@ -545,9 +548,66 @@ def service_statistics(
     """)
 
 
+@router.post("/multiguard/panel/service/{order_id}/issue")
+def issue_service_order_from_web(
+    order_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """Issue equipment in one DB transaction, including an installed Guard.
+
+    This route does not activate a paid licence. Client document acceptance
+    remains the only way to start the purchased 3/6/12-month period.
+    """
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowe potwierdzenie wydania.")
+    with engine.begin() as con:
+        order = con.execute(text("""
+            SELECT id,status FROM service.service_orders
+            WHERE id=:id FOR UPDATE
+        """), {"id":order_id}).mappings().first()
+        if order is None:
+            raise HTTPException(404, "Nie znaleziono zlecenia.")
+        current = str(order["status"])
+        if current not in ("READY_FOR_PICKUP","COMPLETED"):
+            raise HTTPException(409, "Wydanie wymaga statusu GOTOWE DO ODBIORU.")
+        if current == "READY_FOR_PICKUP":
+            # Lifecycle DB trigger writes completed_at, released_at and audit.
+            con.execute(text("""
+                UPDATE service.service_orders
+                SET status='COMPLETED'
+                WHERE id=:id AND status='READY_FOR_PICKUP'
+            """), {"id":order_id})
+        # Not every service order has Multi-Guard: release must still work.
+        link_row = con.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE reception_id=:id FOR UPDATE
+        """), {"id":order_id}).mappings().first()
+        if link_row is not None:
+            link = _normalize_link(dict(link_row))
+            if link["lifecycle"] == "SERVICE_TEST" and link.get("installation_id"):
+                new_row = con.execute(text("""
+                    UPDATE guard.license_links
+                    SET lifecycle='PENDING_ACCEPTANCE',
+                        approved_at=COALESCE(approved_at,now()),
+                        updated_at=now()
+                    WHERE id=:id AND lifecycle='SERVICE_TEST'
+                    RETURNING *
+                """), {"id":link["id"]}).mappings().first()
+                if new_row:
+                    _update_installation_mirror(con, _normalize_link(dict(new_row)))
+    # PRG: refresh will not repeat the operation if owner reloads the page.
+    return RedirectResponse(
+        f"/multiguard/panel/service/{order_id}?issued=1",
+        status_code=303,
+        headers={"Cache-Control":"private, no-store"},
+    )
+
+
 @router.get("/multiguard/panel/service/{order_id}", response_class=HTMLResponse)
 def service_order_detail(
     order_id: uuid.UUID,
+    issued: int = Query(0),
     _: None = Depends(_panel_auth),
 ):
     with engine.connect() as con:
@@ -624,6 +684,28 @@ def service_order_detail(
                 f'<td><a{controls} href="{url}">'
                 f'{action}</a></td></tr>')
     media_rows="".join(media_row(x) for x in media)
+    issue_action = ""
+    if row["status"] == "READY_FOR_PICKUP":
+        token = _csrf_token(int(time.time() // 3600))
+        issue_action = f"""
+        <section class="card service-release-card">
+          <div class="section-head"><div><div class="eyebrow">ODBIÓR SPRZĘTU</div>
+            <h2>Potwierdź faktyczne wydanie klientowi</h2>
+            <p>Kwoty pozostają w zwiniętych finansach. Wydanie kończy
+               Tryb serwisowy Multi-Guard, ale nie uruchamia licznika licencji.</p>
+          </div><form method="post" action="/multiguard/panel/service/{order_id}/issue"
+              class="release-confirm-form"
+              onsubmit="return confirm('Czy sprzęt został faktycznie wydany klientowi?');">
+            <input type="hidden" name="csrf_token" value="{token}">
+            <button type="submit">✓ WYDANO SPRZĘT</button>
+          </form></div>
+        </section>"""
+    elif issued and row["status"] == "COMPLETED":
+        issue_action = ('<p class="notice-success" role="status">'
+                        'Wydanie sprzętu zostało zapisane. Multi-Guard oczekuje'
+                        ' teraz na akceptację dokumentów klienta, jeśli przypisano licencję.'
+                        '</p>')
+
     fin=[("Kwota usługi",row["service_amount"]),
          ("Koszt materiałów",row["material_cost"]),
          ("Wartość materiałów z dawcy",row["donor_material_value"]),
@@ -638,6 +720,7 @@ def service_order_detail(
       <p>Podgląd właściciela, bez edycji danych. Przyjmowanie urządzeń ze zdjęciami pozostaje w aplikacji Android.</p>
       <div class="detail-facts">{facts}</div>
     </section>
+    {issue_action}
     <section class="card"><h2>Opis i notatki</h2><div class="notes-grid">{notes}</div></section>
     <details class="card finance-disclosure"><summary><span>Finanse zlecenia</span><span class="finance-disclosure-hint">Dane właściciela · kliknij, aby rozwinąć ▾</span></summary><div class="metrics">{fin_cards}</div><p>Kwota usługi jest uwzględniana w zestawieniu wydanych zleceń dopiero po wydaniu sprzętu.</p></details>
     <section class="card"><h2>Historia statusów</h2><div class="table-wrap"><table><thead><tr><th>Data</th><th>Poprzedni</th><th></th><th>Nowy</th></tr></thead><tbody>{hist or '<tr><td colspan="4">Brak historii.</td></tr>'}</tbody></table></div></section>
