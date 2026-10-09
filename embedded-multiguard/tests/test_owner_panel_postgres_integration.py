@@ -114,6 +114,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     order_a=uuid.uuid4()
     order_b=uuid.uuid4()
     order_ready=uuid.uuid4()
+    pc_ready=uuid.uuid4()
     waiting_id=uuid.uuid4()
     installed_ready=uuid.uuid4()
     media_a=uuid.uuid4()
@@ -156,12 +157,17 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
               VALUES(:id,280,40,0)
             """),{"id":order})
         db.execute(text("""
+            INSERT INTO core.devices(id,manufacturer,model,serial_number,
+                                     hostname,device_type)
+            VALUES (:id,'ASUS','CI-READY','CI-DIFFERENT-SERIAL','ci-host','PC')
+        """),{"id":pc_ready})
+        db.execute(text("""
             INSERT INTO service.service_orders(
                 id,device_id,reception_number,status,received_at,
                 intake_description,fault_description)
             VALUES(:id,:did,'CI-READY','READY_FOR_PICKUP',now(),
                 'Wydanie testowe','Do odbioru')
-        """),{"id":order_ready,"did":pc_a})
+        """),{"id":order_ready,"did":pc_ready})
         db.execute(text("""
             INSERT INTO service.owner_finances(
                 service_order_id,service_amount,material_cost,donor_material_value)
@@ -182,7 +188,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             VALUES(:id,'CI-READY',:did,'test-keygate-ready','test-plan',:hash,
                 'multi_guard',12,'STABLE','SERVICE_TEST',
                 :installed,'ci-device',:cred,'0.3.37')
-        """),{"id":order_ready,"did":pc_a,
+        """),{"id":order_ready,"did":pc_ready,
                "hash":"2"*64,"installed":installed_ready,"cred":"3"*64})
         db.execute(text("""
             INSERT INTO core.storage_objects(id,object_key,original_filename,
