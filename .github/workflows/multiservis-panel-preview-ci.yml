@@ -40,6 +40,24 @@ jobs:
           fi
       - name: Unit-test owner photo access boundaries and safe diagnostic licence drafts
         run: python embedded-multiguard/tests/test_owner_panel_security.py
+      - name: Verify outbound-only owner V12 pull agent and bootstrap
+        run: |
+          python3 -m py_compile embedded-multiguard/scripts/owner_v12_pull_agent.py
+          bash -n embedded-multiguard/install-owner-v12-agent.sh
+          python3 embedded-multiguard/tests/test_owner_v12_pull_agent.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('embedded-multiguard/deploy/owner-v12-release.json').read_text())
+          assert data['scope']=='owner-web-only'
+          assert data['sequence']==0, 'Do not implicitly publish a production release'
+          assert data['target_sha']=='892a8c66e1e3cae662136ddf1360bf880b785ba8'
+          script=Path('embedded-multiguard/install-owner-v12-agent.sh').read_text()
+          assert 'multiservis-owner-v12-pull.timer' in script
+          assert 'OnUnitActiveSec=5min' in script
+          assert 'NoNewPrivileges=yes' in script
+          print('PASS: inert pinned baseline; pull-only, no inbound port or credentials')
+          PY
       - name: Verify HTML routes and safe owner controls
         run: |
           python - <<'PY'
