@@ -109,7 +109,7 @@ def panel_settings(saved: int = 0, _: None = Depends(_panel_auth)):
     notice = '<p class="ok">Ustawienia panelu zostały zapisane.</p>' if saved == 1 else ""
     return HTMLResponse(
         _panel_html(f"""
-          <section class="card panel-hero">
+          <section class="card panel-hero settings-hero">
             <div class="eyebrow">MULTI-SERVIS / KONFIGURACJA WŁAŚCICIELA</div>
             <h1>Ustawienia panelu</h1>
             <p>Progi łączności i wielkość listy można zmieniać bez przebudowy aplikacji.
