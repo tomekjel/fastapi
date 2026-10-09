@@ -24,7 +24,8 @@ jobs:
             embedded-multiguard/app/routers/multiguard_service_panel.py \
             embedded-multiguard/app/routers/multiguard_panel_settings.py \
             embedded-multiguard/app/routers/multiguard_panel_devices.py \
-            embedded-multiguard/app/routers/multiguard_panel_theme.py
+            embedded-multiguard/app/routers/multiguard_panel_theme.py \
+            embedded-multiguard/app/routers/multiguard_panel_triage.py
       - name: Verify HTML routes and safe owner controls
         run: |
           python - <<'PY'
@@ -59,6 +60,19 @@ jobs:
           assert 'curl -fsSL "$RAW_BASE/app/routers/multiguard_service_panel.py"' in install
           runtime=(root/"app/routers/multiguard_runtime.py").read_text()
           config=(root/"app/routers/multiguard_panel_settings.py").read_text()
+          assert 'multiguard_panel_triage.router' in install
+          assert 'TRIAGE_FILE' in install
+          triage=(root/"app/routers/multiguard_panel_triage.py").read_text()
+          for fragment in [
+              'guard.owner_event_triage', 'guard.owner_event_triage_audit',
+              'Depends(_panel_auth)', '_token_valid(csrf_token)',
+              'FALSE_ALARM', 'RESOLVED',
+              '@router.get("/multiguard/panel/incident/{event_id}"',
+              '@router.post("/multiguard/panel/incident/{event_id}")',
+          ]:
+              assert fragment in triage, fragment
+          assert 'OCENA / NOTATKA' in runtime
+          assert '/multiguard/panel/incident/{event_id}' in install
           assert 'multiguard_panel_devices.router' in install
           assert 'OWNER_DEVICE_FILE' in install
           notes=(root/"app/routers/multiguard_panel_devices.py").read_text()
