@@ -56,7 +56,51 @@ def _schema() -> None:
                     changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
             """))
+            con.execute(text("""
+                CREATE TABLE IF NOT EXISTS guard.owner_installation_labels (
+                    installation_external_id UUID PRIMARY KEY,
+                    friendly_name VARCHAR(120) NOT NULL DEFAULT '',
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """))
         _READY = True
+
+
+def owner_friendly_name(external_id: uuid.UUID) -> str:
+    """User-supplied display name, stable across licence edition changes.
+
+    Identified by the Windows installation UUID, not the mutable hostname,
+    unreliable serial number or private customer data.
+    """
+    _schema()
+    with engine.connect() as con:
+        name = con.execute(text("""
+            SELECT friendly_name FROM guard.owner_installation_labels
+            WHERE installation_external_id=:id
+        """), {"id":external_id}).scalar_one_or_none()
+    return str(name or "")
+
+
+def owner_name_form(external_id: uuid.UUID, value: str, *, return_to: str) -> str:
+    """OWNER-only form; never transmitted to a remote Multi-Guard endpoint."""
+    token = _csrf_token(int(time.time() // 3600))
+    escaped = html.escape(value, quote=True)
+    back = html.escape(return_to, quote=True)
+    return f"""
+      <section class="card" id="owner-name">
+        <div class="eyebrow">MULTI-SERVIS / WŁASNA NAZWA</div>
+        <h2>Moja nazwa komputera</h2>
+        <p>Oryginalny model i nazwa Windows pozostają niezmienione.
+           Ta etykieta jest widoczna tylko w panelu właściciela.</p>
+        <form method="post" action="/multiguard/panel/installation/{external_id}/name">
+          <input type="hidden" name="csrf_token" value="{token}">
+          <input type="hidden" name="return_to" value="{back}">
+          <label>Nazwa (maks. 120 znaków)
+            <input name="friendly_name" maxlength="120" value="{escaped}"
+             placeholder="np. ASUS — laptop warsztatowy / Jan Nowak — Bydgoszcz"></label>
+          <button type="submit">ZAPISZ NAZWĘ</button>
+        </form>
+      </section>"""
 
 
 def owner_device_note(installation_id: uuid.UUID) -> dict[str, str]:
@@ -133,3 +177,45 @@ def save_owner_device_note(
                 VALUES(:id,CAST(:old AS jsonb),CAST(:new AS jsonb))
             """),{"id":installation_id,"old":json.dumps(old),"new":json.dumps(changed)})
     return RedirectResponse(f"/multiguard/panel/device/{installation_id}#owner-notes",status_code=303)
+
+
+@router.post("/multiguard/panel/installation/{installation_id}/name")
+def save_owner_installation_name(
+    installation_id: uuid.UUID,
+    friendly_name: str = Form(""),
+    return_to: str = Form(""),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """Update only OWNER's alias; never overwrite Windows identity/hostname."""
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Wygasły lub nieprawidłowy formularz.")
+    clean = " ".join(friendly_name.strip().split())
+    if len(clean) > 120 or any(ord(ch) < 32 for ch in clean):
+        raise HTTPException(400, "Nazwa może mieć maksymalnie 120 znaków.")
+    _schema()
+    with engine.begin() as con:
+        known = con.execute(text("""
+            SELECT 1 FROM guard.pending_installations
+            WHERE installation_id=:id
+            UNION ALL
+            SELECT 1 FROM guard.installations
+            WHERE installation_external_id=:id
+            LIMIT 1
+        """), {"id": installation_id}).first()
+        if not known:
+            raise HTTPException(404, "Nie znaleziono instalacji Multi-Guard.")
+        con.execute(text("""
+            INSERT INTO guard.owner_installation_labels
+                (installation_external_id, friendly_name)
+            VALUES (:id, :name)
+            ON CONFLICT (installation_external_id) DO UPDATE
+              SET friendly_name=EXCLUDED.friendly_name, updated_at=now()
+        """), {"id": installation_id, "name": clean})
+    # Do not allow an arbitrary external redirect supplied by a form.
+    target = (
+        f"/multiguard/panel/pending/{installation_id}#owner-name"
+        if return_to == "pending" else
+        f"/multiguard/panel/computers#pending"
+    )
+    return RedirectResponse(target, status_code=303)
