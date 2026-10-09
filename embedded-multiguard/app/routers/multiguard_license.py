@@ -1445,6 +1445,30 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
         )
 
     reception_id = pending.get("assigned_reception_id")
+    # Direct client licences have no reception_id. Use the stored KeyGate
+    # licence identity, never a fabricated repair order.
+    if (not reception_id and pending["status"] == "ASSIGNED"
+            and pending.get("assigned_license_id")):
+        with engine.connect() as con:
+            direct = con.execute(text("""
+                SELECT * FROM guard.license_links
+                WHERE keygate_license_id=:id AND sale_kind='DIRECT'
+                  AND installation_id=:installation_id
+                LIMIT 1
+            """), {"id":pending["assigned_license_id"],
+                    "installation_id":pending["installation_id"]}).mappings().first()
+        if direct:
+            link = _normalize_link(dict(direct))
+            return {
+                "assigned":True,
+                "status":pending["status"],
+                "edition": "PRO" if link["plan_code"]=="multi_guard_pro" else "STANDARD",
+                "durationMonths":int(link["duration_months"]),
+                "releaseChannel":link.get("release_channel") or "STABLE",
+                "provisioningToken":_keygate_reveal(link["keygate_license_id"]),
+                "serverTime":_iso(_utcnow()),
+            }
+        raise HTTPException(409, "Nie znaleziono powiązanej licencji klienta.")
     if not reception_id or pending["status"] == "WAITING":
         grant = _workshop_grant(pending["installation_id"])
         if grant and grant["enabled"]:
@@ -1572,9 +1596,13 @@ def provision(req: ProvisionRequest):
 
     credential = secrets.token_urlsafe(48)
     credential_hash = _hash(credential)
+    # Keep an explicit OWNER handover even when the computer provisions
+    # later. Do not silently downgrade to workshop privileges.
     lifecycle = (
         link["lifecycle"]
-        if link.get("rebind_pending") and link["lifecycle"] != "UNASSIGNED"
+        if (link.get("rebind_pending")
+            or link.get("sale_kind") == "DIRECT")
+            and link["lifecycle"] != "UNASSIGNED"
         else "SERVICE_TEST"
     )
 
@@ -1631,7 +1659,10 @@ def provision(req: ProvisionRequest):
         "requestId": req.request_id,
         "signedLicense": _signed_envelope(link),
         "installationCredential": credential,
-        "requiredDocuments": [],
+        "requiredDocuments": (
+            _required_documents() if link["lifecycle"] == "PENDING_ACCEPTANCE"
+            else []
+        ),
     }
 
 
