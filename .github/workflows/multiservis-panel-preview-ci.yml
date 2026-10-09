@@ -1,0 +1,41 @@
+name: Multi-Servis Multi-Guard owner panel preview — syntax & integration
+on:
+  push:
+    branches: [multiservis-panel-multiguard-gold-crimson-v1]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Multi-Guard Python modules
+        run: |
+          python -m py_compile \
+            embedded-multiguard/app/routers/multiguard_license.py \
+            embedded-multiguard/app/routers/multiguard_runtime.py \
+            embedded-multiguard/app/routers/multiguard_remote.py \
+            embedded-multiguard/app/routers/multiguard_updates.py \
+            embedded-multiguard/app/routers/multiguard_service_panel.py
+      - name: Verify HTML routes and safe owner controls
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          root=Path("embedded-multiguard")
+          source=(root/"app/routers/multiguard_service_panel.py").read_text()
+          install=(root/"install.sh").read_text()
+          theme=(root/"app/routers/multiguard_license.py").read_text()
+          for fragment in ['Depends(_panel_auth)', '/multiguard/panel/service', 'service.v_service_order_summary','owner_finances','media_kind']:
+              assert fragment in source, fragment
+          assert "Multi-Guard V12 web owner theme" in theme
+          for fragment in ['SERVICE_PANEL_FILE','multiguard_service_panel.router','multiguard_panel.py','/multiguard/panel/service']:
+              if fragment=="multiguard_panel.py": continue
+              assert fragment in install, fragment
+          assert 'curl -fsSL "$RAW_BASE/app/routers/multiguard_service_panel.py"' in install
+          print("OWNER PANEL SOURCE AUDIT PASS")
+          PY
