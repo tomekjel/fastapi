@@ -145,9 +145,20 @@ PY
 # All validation passed; code-only replace, no release sync and no Android files.
 CHANGED=1
 for name in "${ROUTER_FILES[@]}"; do
-  cp -p "$STAGE/$name" "$ROUTERS/$name"
+  # The pull service has UMask=0077. curl creates stage files as 0600;
+  # cp -p would copy that root-only mode into the FastAPI router directory.
+  # Uvicorn runs without root privileges and then fails on import with
+  # PermissionError, taking the entire API down. Use a fixed, safe read-only
+  # module mode instead of preserving the temporary download permissions.
+  install -m 0644 "$STAGE/$name" "$ROUTERS/$name"
 done
 cp -p "$STAGE/main.py" "$MAIN"
+# Pre-restart, fail-closed check for readable Python modules; do not permit
+# future changes to silently recreate the previous 0600 permissions regression.
+for name in "${ROUTER_FILES[@]}"; do
+  [ "$(stat -c '%a' "$ROUTERS/$name")" = "644" ] ||
+    { echo "BLOCKED: owner router file mode is not 0644: $name" >&2; false; }
+done
 systemctl restart multiservis-api.service
 systemctl is-active --quiet multiservis-api.service
 
