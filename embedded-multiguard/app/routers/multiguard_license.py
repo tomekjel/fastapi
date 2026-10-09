@@ -928,7 +928,9 @@ tr:hover td{{background:#192c408a}}
 .notes-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:11px;margin-top:18px}}
 .detail-note strong{{color:#dfbd8c}}
 .detail-note p{{white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:0}}
-input,select{{background:#09192b;border-color:#496078;color:#f2f8fc}}
+input,select,textarea{{background:#09192b;border:1px solid #496078;border-radius:9px;color:#f2f8fc;font:inherit;padding:12px;width:100%}}
+textarea{{resize:vertical;min-height:110px}}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{{outline:2px solid #e6bf7f;outline-offset:2px}}
 button{{background:linear-gradient(115deg,#a96f3c,#b45b56);box-shadow:inset 0 1px #ffffff26}}
 button:hover{{filter:brightness(1.1)}}
 .presence-label{{display:inline-flex;align-items:center;gap:9px;font-weight:650;font-size:12px;white-space:normal;line-height:1.4;}}
