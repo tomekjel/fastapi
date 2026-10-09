@@ -1295,7 +1295,7 @@ def multi_guard_panel_dashboard(
           <div class="metrics">{metrics_html}</div>
         </section>
 
-        <section class="card">
+        <section class="card" id="devices">
           <div class="section-head">
             <div>
               <h2>Nowe / nieprzypisane instalacje</h2>
@@ -1315,7 +1315,7 @@ def multi_guard_panel_dashboard(
           </div>
         </section>
 
-        <section class="card" id="devices">
+        <section class="card">
           <div class="section-head">
             <div>
               <h2>Urządzenia</h2>
