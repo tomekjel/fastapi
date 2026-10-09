@@ -1346,7 +1346,6 @@ def multi_guard_panel_computers(
         raise HTTPException(400, "Nieprawidłowy filtr kontaktu Multi-Guard.")
     _ensure_schema()
     config = owner_panel_config()
-    config = owner_panel_config()
     page_size = config["inventory_page_size"]
     device_results = _fetch_device_rows(
         page_size + 1,
