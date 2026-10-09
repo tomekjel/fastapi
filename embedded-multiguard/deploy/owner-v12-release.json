@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 0,
-  "target_sha": "892a8c66e1e3cae662136ddf1360bf880b785ba8",
-  "summary": "Baseline: already installed OWNER V12. Automatic deployment is not activated by this manifest."
+  "sequence": 1,
+  "target_sha": "0c04f4e16045397b5de8da2daecc5e0b6d789b4b",
+  "summary": "OWNER-approved Multi-Servis WEB: awaiting installs, Standard/Pro assignment, guarded equipment release, private finances and statistics; CI 37987538606 PASS."
 }
