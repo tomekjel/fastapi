@@ -2199,7 +2199,7 @@ def multiguard_panel_pending(
             "<p class='ok'>Licencja klienta: "
             + _panel_escape("Pro" if direct["plan_code"]=="multi_guard_pro" else "Standard")
             + " · " + str(direct["duration_months"])
-            + " miesięcy · " + _panel_escape(direct["lifecycle"])
+            + " miesięcy · " + _panel_escape({"UNASSIGNED":"Przypisana","SERVICE_TEST":"Przygotowana","PENDING_ACCEPTANCE":"Oczekuje na akceptację","ACTIVE":"Aktywna","EXPIRED":"Wygasła","REVOKED":"Cofnięta"}.get(direct["lifecycle"],"Nieznana"))
             + "</p>"
             + (
                 f'<p><a class="button-link" href="/multiguard/panel/license/installation/{installation_id}/extend">'
@@ -2464,7 +2464,7 @@ def multiguard_panel_generate(
           <p class="ok">{product} • {link["duration_months"]} mies. • {"BETA" if link.get("release_channel") == "PILOT" else "STABILNA"} • {link["reception_number"]}</p>
           <code class="key" id="license-key">{license_key}</code>
           <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('license-key').innerText)">KOPIUJ KLUCZ</button>
-          <p class="warn">Po wpisaniu klucza w Multi-Guard uruchomi się SERVICE_TEST. Czas licencji jeszcze nie biegnie.</p>
+          <p class="warn">Po wpisaniu klucza program zostanie przygotowany do przekazania klientowi. Okres płatnej licencji rozpocznie się dopiero po akceptacji wymaganych dokumentów.</p>
           <a href="/multiguard/panel">← Wróć do generatora</a>
         </section>
         """
