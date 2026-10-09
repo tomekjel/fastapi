@@ -63,10 +63,8 @@ Group=root
 ExecStart=/usr/bin/python3 /usr/local/libexec/multiservis-owner-v12-agent.py
 WorkingDirectory=/opt/multiservis
 NoNewPrivileges=yes
-PrivateDevices=yes
-ProtectSystem=full
-ProtectHome=yes
-ReadWritePaths=/opt/multiservis /var/lib/multiservis-owner-v12 /run
+UMask=0077
+# LXC-safe: avoid mount-namespace sandbox flags, which fail in unprivileged Proxmox CT.
 TimeoutStartSec=300
 EOF
 
