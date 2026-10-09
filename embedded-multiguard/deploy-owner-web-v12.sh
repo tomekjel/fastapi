@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Deploy ONLY Multi-Servis V12 OWNER browser panel from an immutable commit.
-# No Android APK/client code, no agent release/manifests, no timers or KeyGate writes.
+# Deploy reviewed Multi-Servis V12 OWNER panel and explicitly approved Multi-Guard licensing backend from immutable SHA.
+# No Android APK/client code, no timers, no direct database content edits. Rollback on failure.
 # Requires root, source SHA, a compatible running Multi-Servis backend, and PostgreSQL.
 set -Eeuo pipefail
 test "${EUID}" -eq 0 || { echo "BLOCKED: run as root on FastAPI host" >&2; exit 1; }
@@ -77,11 +77,18 @@ cd "$ROOT"
 PYTHONPATH="$ROOT" "$PY" "$STAGE/preflight.py"
 "$PY" -m py_compile "$STAGE"/*.py
 
-# Verify existing client/Android router contracts are not lost by replacement.
+# Verify existing Android/agent contracts are unchanged apart from the TWO
+# approved Multi-Guard licensing handlers needed for OWNER workshop + direct
+# sales.  Never broadly disable the former non-OWNER route guard.
 "$PY" - "$ROUTERS" "$STAGE" <<'PY'
 from pathlib import Path
 import ast,sys
 old,new=map(Path,sys.argv[1:])
+AUTHORIZED_LICENSE_EVOLUTION=frozenset({
+    ("post","/v1/multi-guard/provision"),
+    ("post","/v1/multi-guard/discovery/assignment"),
+})
+changed_authorized=set()
 for name in ("multiguard_license.py","multiguard_runtime.py"):
     def routes(p):
         tree=ast.parse(p.read_text(encoding="utf-8"))
@@ -97,17 +104,38 @@ for name in ("multiguard_license.py","multiguard_runtime.py"):
                 if dec.args and isinstance(dec.args[0],ast.Constant) and isinstance(dec.args[0].value,str):
                     route=dec.args[0].value
                     if "/panel" in route:continue
-                    # Freeze the entire existing Android/agent-facing handler,
-                    # not only its argument signature. OWNER web redesigns may
-                    # change /panel handlers, never unrelated API behaviour.
-                    paths[(dec.func.attr,route)]=ast.dump(node,include_attributes=False)
+                    key=dec.func.attr,route
+                    if key in paths:
+                        raise SystemExit(f"BLOCKED: duplicate non-owner route {key}")
+                    paths[key]=node
         return paths
     before=routes(old/name);after=routes(new/name)
     missing=set(before)-set(after)
-    changed={k for k in before.keys()&after.keys() if before[k]!=after[k]}
-    if missing or changed:
-        raise SystemExit(f"BLOCKED: non-owner endpoints changed: {name}: missing={missing}; signatures={changed}")
-print("PASS: existing non-panel API endpoint bodies and signatures preserved")
+    if missing:
+        raise SystemExit(f"BLOCKED: non-owner endpoint removed: {name}: {missing}")
+    for key in before.keys()&after.keys():
+        original,revised=before[key],after[key]
+        if ast.dump(original,include_attributes=False)==ast.dump(revised,include_attributes=False):
+            continue
+        if name!="multiguard_license.py" or key not in AUTHORIZED_LICENSE_EVOLUTION:
+            raise SystemExit(f"BLOCKED: unrelated Android/agent endpoint changed: {name}:{key}")
+        # Even these two explicitly authorised handlers MUST keep their
+        # request types, arguments, decorators, return annotation, etc.
+        def interface(node):
+            return (
+                node.name,
+                ast.dump(node.args,include_attributes=False),
+                ast.dump(node.returns,include_attributes=False) if node.returns else None,
+                tuple(ast.dump(d,include_attributes=False) for d in node.decorator_list),
+            )
+        if interface(original)!=interface(revised):
+            raise SystemExit(f"BLOCKED: incompatible licensing endpoint interface: {key}")
+        changed_authorized.add(key)
+# In this release both existing handlers must be the deliberately reviewed
+# changed handlers; never silently broaden authorised API surface.
+if changed_authorized!=AUTHORIZED_LICENSE_EVOLUTION:
+    raise SystemExit(f"BLOCKED: unexpected licensing evolution set: {changed_authorized}")
+print("PASS: unrelated Android/agent routes unchanged; only two explicitly approved Multi-Guard licensing handlers updated with identical interfaces.")
 PY
 
 # Create a PREPARED copy of main before writing anything into the live service.
