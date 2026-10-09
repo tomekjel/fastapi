@@ -343,7 +343,8 @@ jobs:
       contents: read
     services:
       postgres:
-        image: postgres:16
+        # Verified Docker Official Image mirror: avoid Docker Hub pull throttling on hosted CI.
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci-only
