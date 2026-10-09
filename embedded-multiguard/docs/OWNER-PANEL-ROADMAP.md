@@ -146,3 +146,16 @@ z zachowaniem bezpiecznych archiwów do odzyskiwania.
   sprawdzenie rzeczywistych danych, widoku zdjęć i integracji z
   Androidem nadal wymagane. Bramka wdrożenia i kopia serwera
   pozostają obowiązkowe.
+
+## Ocena błędów i notatki naprawcze (nowa implementacja preview)
+
+- `multiguard_panel_triage.py`: oddzielna audytowana ocena OWNER dla
+  konkretnego `guard.events.event_id`, dostępna z karty PC przez
+  `OCENA / NOTATKA`. Właściciel może oznaczyć stan: NOWE,
+  ANALIZOWANE, POTWIERDZONE, FAŁSZYWY ALARM, NAPRAWIONE; dopisać
+  notatkę i faktyczną wersję naprawy, jeśli została zweryfikowana.
+- Ocena właściciela nigdy nie modyfikuje zdarzenia nadesłanego przez
+  komputer i nie jest automatycznym rozpoznaniem usterki. Zapisy mają
+  kontrolę OWNER oraz token CSRF, oddzielną historię audytową.
+- Wymaga jeszcze testu rzeczywistej bazy, kontroli uprawnień i
+  wykonania migracji przez kontrolowaną procedurę wdrożeniową.
