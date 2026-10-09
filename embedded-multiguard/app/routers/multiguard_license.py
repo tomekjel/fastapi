@@ -159,6 +159,15 @@ class AssignPendingInstallationRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class AssignPendingByNumberRequest(BaseModel):
+    reception_number: str = Field(alias="receptionNumber", min_length=1)
+    edition: str
+    months: int
+    release_channel: str = Field(default="STABLE", alias="releaseChannel")
+
+    model_config = {"populate_by_name": True}
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1736,6 +1745,29 @@ def assign_pending_installation(
 
 
 
+@router.post("/multiguard/pending-installations/{installation_id}/assign-by-number")
+def assign_pending_installation_by_number(
+    installation_id: str,
+    body: AssignPendingByNumberRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    try:
+        iid = uuid.UUID(installation_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowe ID instalacji.") from exc
+
+    reception = _reception_by_number(body.reception_number)
+    link = _assign_pending_to_reception(
+        iid, reception["id"], body.edition, body.months, body.release_channel
+    )
+    pending = _pending_installation(iid)
+    return {
+        **_public_status(link),
+        "pendingInstallation": _pending_public(pending) if pending else None,
+        "autoProvision": True,
+    }
+
+
 @router.get(
     "/multiguard/panel/pending/{installation_id}",
     response_class=HTMLResponse,
@@ -1857,8 +1889,54 @@ def multiguard_panel_pending_assign(
 def multiguard_panel(
     _: None = Depends(_panel_auth),
 ):
+    _ensure_schema()
+    with engine.connect() as connection:
+        pending_rows = connection.execute(
+            text("""
+                SELECT * FROM guard.pending_installations
+                WHERE status IN ('WAITING','ASSIGNED')
+                ORDER BY CASE status WHEN 'WAITING' THEN 0 ELSE 1 END,
+                         last_seen_at DESC
+                LIMIT 100
+            """)
+        ).mappings().all()
+    waiting_rows = []
+    for raw in pending_rows:
+        item = _pending_public(dict(raw))
+        identity = _panel_escape(item["shortId"])
+        hostname = _panel_escape(item["hostname"] or "Komputer bez nazwy")
+        model = _panel_escape(
+            " ".join(x for x in (item["manufacturer"], item["model"]) if x)
+            or "Nieznany model"
+        )
+        seen = _panel_escape(item["lastSeenAt"] or "Brak danych")
+        state = "ONLINE" if item["online"] else "OFFLINE"
+        status = _panel_escape(item["status"])
+        installation_id = uuid.UUID(item["installationId"])
+        waiting_rows.append(
+            "<tr>"
+            f"<td><a class='button-link' href='/multiguard/panel/pending/{installation_id}'>{identity}</a></td>"
+            f"<td>{hostname}<br><span class='muted'>{model}</span></td>"
+            f"<td><span class='badge'>{state}</span></td>"
+            f"<td>{status}</td><td class='muted'>{seen}</td>"
+            "</tr>"
+        )
+    pending_html = (
+        "<div class='table-wrap'><table>"
+        "<thead><tr><th>Instalacja</th><th>Komputer</th>"
+        "<th>Łączność</th><th>Stan</th><th>Ostatni kontakt UTC</th></tr></thead>"
+        "<tbody>" + "".join(waiting_rows) + "</tbody></table></div>"
+        if waiting_rows else
+        "<p>Brak instalacji oczekujących na licencję.</p>"
+    )
     return _panel_html(
-        """
+        f"""
+        <section class="card">
+          <h1>Oczekujące instalacje Multi-Guard ({len(waiting_rows)})</h1>
+          <p>Widoczne zgłoszenia bez aktywnej licencji. Wybierz instalację,
+          aby przypisać ją do zlecenia i ustawić Standard/Pro, okres oraz kanał.</p>
+          {pending_html}
+        </section>
         <section class="card">
           <h1>Multi-Servis — Multi-Guard</h1>
           <p>Generowanie klucza i instalacja w serwisie nie uruchamiają okresu licencji.</p>
