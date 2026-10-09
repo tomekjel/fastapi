@@ -13,7 +13,7 @@ telemetrii i faktyczne zlecenia serwisowe, również gdy nie ma historii napraw.
   dopasowane **wyłącznie przez `guard.installations.service_device_id =
   service.service_orders.device_id`**.
 - `/multiguard/panel/service/{order_id}`: karta serwisowa — opis, notatki,
-  statusy, finanse i METADANE załączników; z niej wracamy do listy zleceń.
+  statusy, finanse, miniatury i pliki załączników, dostęp OWNER.
 - `/multiguard/panel/versions`: BETA (`PILOT`) i STABLE z faktycznej tabeli
   `guard.release_versions`, wraz z zapisanym opisem zmian i stanem wydania.
   Wewnętrzne TEST/LICENSE_TEST nie występują na zwykłej liście wersji.
@@ -47,14 +47,18 @@ zlecenia naprawy dla sprawnego PC kupującego wyłącznie Multi-Guard.
 
 ## Zdjęcia i dostępność archiwum
 
-W wersji testowej panel widzi liczbę i metadane plików dołączonych do zleceń;
-nie renderuje jeszcze prywatnych zdjęć. Aby pokazać ich miniatury i pełny
-podgląd należy wykonać osobny chroniony endpoint/adapter z kontrolą OWNER,
-który korzysta z istniejącego mechanizmu odczytu obiektów w
-`core.storage_objects`. Nie wolno publikować samych `object_key`,
-ścieżek dyskowych, publicznych folderów lub bezterminowych adresów plików.
-Sprawdzić istniejące trasy serwera Multi-Servis i implementację dostępu do
-plików przed podjęciem decyzji o adapterze.
+W gałęzi preview dodano prywatny endpoint
+`/multiguard/panel/service/{order_id}/media/{media_id}` weryfikujący
+OWNER, powiązanie pliku z konkretnym zleceniem, flagi usunięcia,
+zabezpieczenie ścieżki pod `settings.media_root`, MIME i nagłówki no-store.
+W karcie naprawy pokazuje miniatury bezpośrednio z dysku danych oraz
+umożliwia pobranie pozostałych dokumentów. Bazowano na kodzie archiwum
+`MultiServisServer_FINAL.zip`, który ma trasę
+`/receptions/media/{media_id}/content` oraz `settings.media_root`.
+
+**Wdrożenie i test na rzeczywistym dysku danych NIE były wykonywane**.
+Nie ujawniać plików przez publiczne ścieżki; przed wdrożeniem sprawdzić
+różne rodzaje zdjęć, uprawnienia i możliwość dużej dokumentacji.
 
 ## Dalszy rozwój: diagnostyka i poprawki oparte na zdarzeniach
 
@@ -100,7 +104,7 @@ nigdy nie staje się automatycznie STABLE.
 - Historyczny wpis zlecenia nie jest automatycznie oznaczany `naprawa`,
   jeżeli był to tylko zakup lub instalacja.
 - Historia wydań nie pokazuje wewnętrznych TEST jako produkcyjnego STABLE.
-- Pełne zdjęcia widoczne jedynie po dodatkowym testowanym module bezpiecznego
-  dostępu — obecnie funkcja nieukończona.
+- Pełne zdjęcia: kod dostępu OWNER przygotowany; akceptacja wymaga
+  rzeczywistego testu dysku/serwera i kontroli dostępu.
 - Integrację danych i przepływy OWNER przetestować na testowej bazie przed
   wdrożeniem na żywych danych.
