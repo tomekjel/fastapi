@@ -363,8 +363,18 @@ def _statistics_range(period: str, month: str, year: int, quarter: int,
             label = str(y)
         grouping = "month"
     elif period == "custom":
+        if not from_date and not to_date:
+            first = now.date().replace(day=1)
+            last_inclusive = now.date()
+        else:
+            try:
+                first, last_inclusive = date.fromisoformat(from_date), date.fromisoformat(to_date)
+            except ValueError as exc:
+                raise HTTPException(400, "Podaj poprawny zakres dat.") from exc
+        if first.year < 2000:
+            raise HTTPException(400, "Zakres nie może zaczynać się przed rokiem 2000.")
         try:
-            first, last_inclusive = date.fromisoformat(from_date), date.fromisoformat(to_date)
+            first, last_inclusive = date.fromisoformat(first.isoformat()), date.fromisoformat(last_inclusive.isoformat())
         except ValueError as exc:
             raise HTTPException(400, "Podaj poprawny zakres dat.") from exc
         if first > last_inclusive or (last_inclusive-first).days > 1826:
