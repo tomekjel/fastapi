@@ -1,0 +1,59 @@
+name: Preflight Multi-Servis OWNER V12 on actual server (read-only)
+on:
+  push:
+    branches: [multiservis-panel-multiguard-gold-crimson-v1]
+    paths:
+      - 'embedded-multiguard/deploy/owner-v12-preflight.trigger'
+permissions:
+  contents: read
+concurrency:
+  group: multiservis-owner-web-preflight
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact integration-tested source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python embedded-multiguard/tests/test_owner_panel_security.py
+          python -m py_compile embedded-multiguard/scripts/preflight_owner_panel.py
+      - name: Configure SSH for read-only contract check
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+          SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?No SSH host configured}"
+          : "${SSH_USER:?No SSH user configured}"
+          : "${SSH_KEY:?No SSH key configured}"
+          SSH_PORT="${SSH_PORT:-22}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/multiservis_backend
+          chmod 600 ~/.ssh/multiservis_backend
+          ssh-keyscan -T 10 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Check actual PostgreSQL table contracts and mounted media read-only
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SSH_PORT:-22}"
+          ssh -i ~/.ssh/multiservis_backend -p "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "cd /opt/multiservis && .venv/bin/python -" \
+            < embedded-multiguard/scripts/preflight_owner_panel.py
+      - name: Verify live API response is up (GET only)
+        run: |
+          curl -fsS --max-time 20 https://api.multi-servis.pl/health >/dev/null
+          echo 'PASS: Live health is reachable; NO DEPLOY performed.'
