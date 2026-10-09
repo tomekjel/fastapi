@@ -56,11 +56,12 @@ OWNER_FILES=frozenset({
     "embedded-multiguard/scripts/preflight_owner_panel.py",
     "embedded-multiguard/scripts/preview_owner_panel.py",
     "embedded-multiguard/scripts/audit_backend_storage.py",
+    ".github/workflows/multiservis-panel-preview-ci.yml",
+    ".github/workflows/multiservis-owner-v12-live-smoke.yml",
 })
 SAFE_PREFIXES=(
     "embedded-multiguard/tests/",
     "embedded-multiguard/docs/",
-    ".github/workflows/",
 )
 
 class Blocked(Exception):
