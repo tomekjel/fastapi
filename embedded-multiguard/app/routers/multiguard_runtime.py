@@ -926,7 +926,7 @@ def _device_label(row: Any) -> str:
     return label
 
 
-def _fetch_device_rows(limit: int = 250):
+def _fetch_device_rows(limit: int = 250, presence_filter: str = "all"):
     _ensure_schema()
     limit = min(max(int(limit), 1), 500)
     with engine.connect() as connection:
@@ -1016,6 +1016,12 @@ def _fetch_device_rows(limit: int = 250):
                     WHERE so.device_id=gi.service_device_id
                 ) visits ON TRUE
                 WHERE gi.is_current=TRUE
+                  AND (
+                    :presence_filter='all'
+                    OR (:presence_filter='removed' AND au.installation_id IS NOT NULL)
+                    OR (:presence_filter='silent' AND au.installation_id IS NULL
+                        AND (gi.last_seen_at IS NULL OR gi.last_seen_at < now()-interval '7 days'))
+                  )
                 ORDER BY
                     -- Client-initiated uninstalls stay accessible, at the
                     -- bottom of the inventory instead of disappearing.
@@ -1033,7 +1039,7 @@ def _fetch_device_rows(limit: int = 250):
                 LIMIT :limit
                 """
             ),
-            {"limit": limit},
+            {"limit": limit, "presence_filter": presence_filter},
         ).mappings().all()
 
 
@@ -1195,8 +1201,11 @@ def _presence_indicator(last_seen_at: Optional[datetime], uninstall_reported_at:
 
 @router.get("/panel/dashboard", response_class=HTMLResponse)
 def multi_guard_panel_dashboard(
+    presence: str = "all",
     _: None = Depends(_panel_auth),
 ):
+    if presence not in {"all", "silent", "removed"}:
+        raise HTTPException(400, "Nieprawidłowy filtr kontaktu Multi-Guard.")
     _ensure_schema()
     with engine.connect() as connection:
         counts = connection.execute(
@@ -1271,7 +1280,7 @@ def multi_guard_panel_dashboard(
             )
         ).mappings().all()
 
-    devices = _fetch_device_rows(250)
+    devices = _fetch_device_rows(250, presence_filter=presence)
 
     metrics = [
         ("Aktywne", counts["active"]),
@@ -1419,6 +1428,11 @@ def multi_guard_panel_dashboard(
               <h2>Urządzenia</h2>
               <p>Zielona kropka oznacza kontakt w ciągu 24 godzin, nie aktywność użytkownika w tej chwili. Szary status „odinstalowanie zgłoszone” pojawia się tylko po otrzymaniu zdarzenia od instalatora Windows. Liczniki dotyczą 30 dni.</p>
             </div>
+          </div>
+          <div class="filter-tabs">
+            <a class="filter-tab {'selected' if presence=='all' else ''}" href="/multiguard/panel/dashboard?presence=all#devices">WSZYSTKIE</a>
+            <a class="filter-tab {'selected' if presence=='silent' else ''}" href="/multiguard/panel/dashboard?presence=silent#devices">BRAK KONTAKTU PONAD 7 DNI</a>
+            <a class="filter-tab {'selected' if presence=='removed' else ''}" href="/multiguard/panel/dashboard?presence=removed#devices">ZGŁOSZONE ODINSTALOWANIE</a>
           </div>
           <div class="table-wrap">
             <table>
