@@ -23,6 +23,8 @@ from app.routers.multiguard_panel_devices import (
     _schema as _ensure_owner_device_schema,
     owner_device_note,
     owner_device_note_form,
+    owner_friendly_name,
+    owner_name_form,
 )
 from app.routers.multiguard_license import (
     _ensure_schema as _ensure_license_schema,
@@ -923,6 +925,20 @@ def _panel_dt(value: Any) -> str:
         return _panel_h(value)
 
 
+def _human_license_state(raw: Any) -> str:
+    return {
+        "SERVICE_TEST":"Tryb serwisowy",
+        "WORKSHOP":"Tryb warsztatowy",
+        "UNASSIGNED":"Nieprzypisana",
+        "PENDING_ACCEPTANCE":"Oczekuje na akceptację",
+        "ACTIVE":"Aktywna",
+        "EXPIRED":"Wygasła",
+        "REVOKED":"Cofnięta",
+        "UNKNOWN":"Nieznana",
+        "ERROR":"Błąd",
+    }.get(str(raw or "").upper(), "Nieznana")
+
+
 def _device_label(row: Any) -> str:
     parts = [
         str(row.get("manufacturer") or "").strip(),
@@ -963,10 +979,11 @@ def _fetch_device_rows(
                     gi.app_version,
                     gi.release_channel,
                     d.device_type,
-                    d.manufacturer,
-                    d.model,
-                    d.serial_number,
-                    d.hostname,
+                    COALESCE(d.manufacturer,p.manufacturer) AS manufacturer,
+                    COALESCE(d.model,p.model) AS model,
+                    COALESCE(d.serial_number,p.serial_number) AS serial_number,
+                    COALESCE(d.hostname,p.hostname) AS hostname,
+                    owner_alias.friendly_name,
                     ll.reception_id,
                     ll.reception_number,
                     COALESCE(ev.warning_30d,0) AS warning_30d,
@@ -979,6 +996,10 @@ def _fetch_device_rows(
                 FROM guard.installations gi
                 LEFT JOIN core.devices d
                     ON d.id=gi.service_device_id
+                LEFT JOIN guard.pending_installations p
+                    ON p.installation_id=gi.installation_external_id
+                LEFT JOIN guard.owner_installation_labels owner_alias
+                    ON owner_alias.installation_external_id=gi.installation_external_id
                 LEFT JOIN guard.agent_uninstalls au
                     ON au.installation_id=gi.id
                 LEFT JOIN guard.owner_device_notes owner_notes
@@ -1045,10 +1066,11 @@ def _fetch_device_rows(
                   )
                   AND (
                       :search_is_empty OR
-                      COALESCE(d.model,'') ILIKE :search_like OR
-                      COALESCE(d.manufacturer,'') ILIKE :search_like OR
-                      COALESCE(d.hostname,'') ILIKE :search_like OR
-                      COALESCE(d.serial_number,'') ILIKE :search_like OR
+                      COALESCE(d.model,p.model,'') ILIKE :search_like OR
+                      COALESCE(d.manufacturer,p.manufacturer,'') ILIKE :search_like OR
+                      COALESCE(d.hostname,p.hostname,'') ILIKE :search_like OR
+                      COALESCE(d.serial_number,p.serial_number,'') ILIKE :search_like OR
+                      COALESCE(owner_alias.friendly_name,'') ILIKE :search_like OR
                       COALESCE(ll.reception_number,'') ILIKE :search_like
                   )
                 ORDER BY
@@ -1393,10 +1415,11 @@ def multi_guard_panel_computers(
         iid = pending["installation_id"]
         name = " ".join(str(x).strip() for x in (pending["manufacturer"],pending["model"]) if x
                         ) or pending["hostname"] or "Komputer bez nazwy"
+        alias = owner_friendly_name(iid)
         status_label = "OCZEKUJE NA LICENCJĘ" if pending["status"]=="WAITING" else "PRZYPISANA — POBIERANIE"
         pending_trs.append(f"""
             <tr><td><strong>{_panel_h('MG-'+str(iid).replace('-','')[:8].upper())}</strong></td>
-                <td>{_panel_h(name)}<small class="row-sub">{_panel_h(pending["serial_number"] or pending["hostname"] or "")}</small></td>
+                <td><b>{_panel_h(alias or name)}</b><small class="row-sub">{_panel_h(name)} · {_panel_h(pending["serial_number"] or pending["hostname"] or "")}</small></td>
                 <td>{_panel_h(pending["app_version"] or "—")}</td>
                 <td><span class="badge {'mg-gold' if pending["status"]=='WAITING' else 'mg-blue'}">{status_label}</span></td>
                 <td>{_panel_dt(pending["last_seen_at"])}</td>
@@ -1447,10 +1470,10 @@ def multi_guard_panel_computers(
                 </a>
               </td>
               <td>
-                <b>{_panel_h(_device_label(row))}</b><br>
+                <b>{_panel_h(row['friendly_name'] or _device_label(row))}</b><br>
                 <span class="muted">{_panel_h(row['serial_number'] or row['hostname'] or '')}</span>{owner_attention}
               </td>
-              <td><span class="badge {'mg-gold' if plan=='PRO' else 'mg-red'}">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(row['lifecycle'])}</span></td>
+              <td><span class="badge {'mg-gold' if plan=='PRO' else 'mg-red'}">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(_human_license_state(row['lifecycle']))}</span></td>
               <td><span class="badge {health_class}">{_panel_h(health)}</span></td>
               <td>{_panel_h(row['app_version'] or '—')}</td>
               <td><span class="presence-label"><span class="presence-dot presence-{presence_style}" aria-hidden="true"></span>{_panel_h(presence_label)}</span></td>
@@ -1536,10 +1559,15 @@ def multi_guard_panel_device(
                     gi.plan_code,gi.lifecycle,gi.valid_until,gi.last_seen_at,
                     gi.health_level,gi.app_version,gi.release_channel,
                     au.reported_at AS uninstall_reported_at,
-                    d.device_type,d.manufacturer,d.model,d.serial_number,d.hostname,
-                    ll.reception_number
+                    d.device_type,
+                    COALESCE(d.manufacturer,p.manufacturer) AS manufacturer,
+                    COALESCE(d.model,p.model) AS model,
+                    COALESCE(d.serial_number,p.serial_number) AS serial_number,
+                    COALESCE(d.hostname,p.hostname) AS hostname,
+                    ll.reception_number,ll.reception_id
                 FROM guard.installations gi
                 LEFT JOIN core.devices d ON d.id=gi.service_device_id
+                LEFT JOIN guard.pending_installations p ON p.installation_id=gi.installation_external_id
                 LEFT JOIN guard.agent_uninstalls au ON au.installation_id=gi.id
                 LEFT JOIN guard.license_links ll
                   ON ll.installation_id=gi.installation_external_id
@@ -1607,6 +1635,8 @@ def multi_guard_panel_device(
     )
     own_note_data = owner_device_note(iid)
     note_edit_html = owner_device_note_form(iid, own_note_data)
+    own_label = owner_friendly_name(row["installation_external_id"])
+    name_edit_html = owner_name_form(row["installation_external_id"], own_label, return_to="device")
     diagnostic_plan_html = owner_diagnostic_plan_panel(iid)
     event_rows = []
     for event in events:
@@ -1689,9 +1719,9 @@ def multi_guard_panel_device(
         f"""
         <section class="card panel-hero device-hero">
           <a class="button-link compact" href="/multiguard/panel/dashboard#devices">← Wróć do komputerów</a>
-          <h1>{_panel_h(_short_installation_id(row['installation_external_id']))} — {_panel_h(_device_label(row))}</h1>
+          <h1>{_panel_h(_short_installation_id(row['installation_external_id']))} — {_panel_h(own_label or _device_label(row))}</h1>
           <div class="detail-grid">
-            <div><b>Licencja</b><span>{_panel_h(row['plan_code'])} / {_panel_h(row['lifecycle'])}</span></div>
+            <div><b>Licencja</b><span>{_panel_h(row['plan_code'])} / {_panel_h(_human_license_state(row['lifecycle']))}</span></div>
             <div><b>Wersja Multi-Guard</b><span>{_panel_h(row['app_version'] or '—')}</span></div>
             <div><b>Kanał</b><span>{_panel_h(row['release_channel'] or 'STABLE')}</span></div>
             <div><b>Stan</b><span>{_panel_h(row['health_level'] or '—')}</span></div>
@@ -1700,9 +1730,11 @@ def multi_guard_panel_device(
             <div><b>Zlecenie</b><span>{_panel_h(row['reception_number'] or '—')}</span></div>
             <div><b>Numer seryjny</b><span>{_panel_h(row['serial_number'] or '—')}</span></div>
             <div><b>Ważność</b><span>{_panel_dt(row['valid_until'])}</span></div>
+            <div><b>Przedłużenie</b><span>{f'<a href="/multiguard/panel/license/{row["reception_id"]}/extend">PRZEDŁUŻ LICENCJĘ</a>' if row.get("reception_id") and row["lifecycle"]=="ACTIVE" else '—'}</span></div>
           </div>
         </section>
 
+        {name_edit_html}
         {diagnostic_plan_html}
         {note_edit_html}
 

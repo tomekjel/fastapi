@@ -430,6 +430,127 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     ensure(get(f"/multiguard/panel/service/{order_a}/media/{media_a}").status_code,
            404,"Deleted private attachment")
 
+
+    # A true direct sale must never insert a repair order. KeyGate is
+    # mocked locally, while SQL and FastAPI routes run against real Postgres.
+    import base64, hashlib, json
+    direct_id=uuid.uuid4()
+    direct_device="ci-direct-device-id-1234567890"
+    discovery_secret="ci-workshop-secret-1234567890-abcdefgh"
+    token_key="KG-AAAAAAAA-AAAAAAAA-AAAAAAAA-AAAAAAAA"
+    with engine.begin() as db:
+        db.execute(text("""
+            INSERT INTO guard.pending_installations(
+                installation_id,device_id,discovery_credential_sha256,
+                app_version,hostname,manufacturer,model,status
+            ) VALUES(:id,:device,:cred,'0.3.37','ci-direct-host',
+                     'ASUS','Client-DIRECT','WAITING')
+        """), {"id":direct_id,"device":direct_device,
+               "cred":hashlib.sha256(discovery_secret.encode()).hexdigest()})
+    os.environ["MULTIGUARD_SIGNING_SEED_B64"]=base64.b64encode(b"1"*32).decode()
+    docs=[{"kind":name,"version":"v1","title":name,"content_markdown":"Treść "+name}
+          for name in ("terms","privacy","safety")]
+    os.environ["MULTIGUARD_REQUIRED_DOCUMENTS"]=json.dumps(docs)
+    mock_calls={"create":0,"keygate_end":[]}
+    def fake_create_license(*,reception_number,edition,months):
+        mock_calls["create"]+=1
+        assert reception_number.startswith("MG-DIRECT-")
+        assert edition=="PRO" and months==12
+        return {"id":"fake-direct-ci","_plan_id":"fake-plan",
+                "_license_key":token_key}
+    license._keygate_create_license=fake_create_license
+    license._keygate_reveal=lambda license_id:token_key
+    license._keygate_activate=lambda key,device,installation:{"license_id":"fake-direct-ci"}
+    license._keygate_license=lambda license_id:{"status":"active"}
+    license._keygate_set_valid_until=lambda license_id,end:mock_calls["keygate_end"].append(end)
+
+    # Workshop rights exist before sale, with a signed envelope.
+    workshop=license._set_workshop_grant(direct_id,"PRO","STABLE",True)
+    assert workshop["edition"]=="PRO" and workshop["enabled"]
+    discovery={"installationId":str(direct_id),"deviceId":direct_device,
+               "discoveryCredential":discovery_secret}
+    lease=c.post("/v1/multi-guard/discovery/assignment",json=discovery)
+    ensure(lease.status_code,200,"Initial workshop lease")
+    assert json.loads(lease.json()["workshopLease"]["payload"])["lifecycle"]=="WORKSHOP"
+    assert lease.json()["assigned"] is False
+
+    direct_url=f"/multiguard/pending-installations/{direct_id}/direct"
+    ensure(c.post(direct_url,json={"edition":"PRO","months":12}).status_code,
+           200,"Direct licence without service reception")
+    assert c.post(direct_url,json={"edition":"PRO","months":12}).status_code==409
+    with engine.connect() as db:
+        assert db.execute(text("""
+            SELECT count(*) FROM service.service_orders
+            WHERE reception_number LIKE 'MG-DIRECT-%'
+        """)).scalar_one()==0
+        linked=db.execute(text("""
+            SELECT reception_id,service_device_id,installation_id,sale_kind
+            FROM guard.license_links WHERE keygate_license_id='fake-direct-ci'
+        """)).mappings().one()
+    assert linked["reception_id"] is None
+    assert linked["service_device_id"] is None
+    assert linked["installation_id"]==direct_id
+    assert linked["sale_kind"]=="DIRECT"
+    assert mock_calls["create"]==1
+
+    before_handover=c.post("/v1/multi-guard/discovery/assignment",json=discovery)
+    ensure(before_handover.status_code,200,"Direct assignment online")
+    assert before_handover.json()["assigned"] is True
+    assert before_handover.json()["provisioningToken"]==token_key
+    direct_hand=f"/multiguard/pending-installations/{direct_id}/handover"
+    ensure(c.post(direct_hand).status_code,200,"Direct handover without service")
+    assert c.post(direct_hand).status_code==200
+
+    provision_json={"requestId":str(uuid.uuid4()),"nonce":"ci-nonce",
+      "sentAt":"2026-10-09T00:00:00Z","provisioningToken":token_key,
+      "installationId":str(direct_id),"deviceId":direct_device,"appVersion":"0.3.37"}
+    provision_result=c.post("/v1/multi-guard/provision",json=provision_json)
+    ensure(provision_result.status_code,200,"Direct provisioning after handover")
+    signed=json.loads(provision_result.json()["signedLicense"]["payload"])
+    assert signed["lifecycle"]=="PENDING_ACCEPTANCE",signed
+    assert signed["validUntil"] is None
+    assert len(provision_result.json()["requiredDocuments"])==3
+    assert not mock_calls["keygate_end"],"Paid period must not start before consent"
+
+    refresh_fields={
+      "requestId":str(uuid.uuid4()),"nonce":"ci-nonce",
+      "sentAt":"2026-10-09T00:00:00Z",
+      "installationId":str(direct_id),"deviceId":direct_device,
+      "installationCredential":provision_result.json()["installationCredential"],
+      "appVersion":"0.3.37"}
+    accept_docs=[{"kind":d["kind"],"version":d["version"],
+                  "sha256":hashlib.sha256(d["content_markdown"].encode()).hexdigest()}
+                 for d in docs]
+    accepted=c.post("/v1/multi-guard/acceptance",
+                    json={**refresh_fields,"documents":accept_docs})
+    ensure(accepted.status_code,200,"Direct client activation after three documents")
+    final=json.loads(accepted.json()["signedLicense"]["payload"])
+    assert final["lifecycle"]=="ACTIVE" and final["validUntil"]
+    assert len(mock_calls["keygate_end"])==1
+    direct_link=license._link_by_installation(direct_id)
+    assert direct_link["valid_from"] is not None
+    assert direct_link["accepted_at"] is not None
+
+    # Strict idempotent renewal. Two clicks with the same ID must not
+    # add two years; the beginning of the term never changes.
+    renewal_id=str(uuid.uuid4())
+    extend_url=f"/multiguard/licenses/installations/{direct_id}/extend"
+    payload={"operationId":renewal_id,"months":12,"paymentConfirmed":True}
+    renewed=c.post(extend_url,json=payload)
+    ensure(renewed.status_code,200,"Direct paid renewal")
+    assert renewed.json()["status"]=="EXTENDED"
+    again=c.post(extend_url,json=payload)
+    ensure(again.status_code,200,"Idempotent renewal")
+    assert again.json()["status"]=="ALREADY_EXTENDED"
+    assert renewed.json()["newValidUntil"]==again.json()["newValidUntil"]
+    assert renewed.json()["oldValidUntil"]==final["validUntil"]
+    with engine.connect() as db:
+        assert db.execute(text("""
+            SELECT count(*) FROM guard.license_extensions
+            WHERE keygate_license_id='fake-direct-ci'
+        """)).scalar_one()==1
+    assert len(mock_calls["keygate_end"])==2
+
     # Gate future deployment on read-only compatibility with the historical
     # Multi-Servis schema. It must neither mutate nor fetch customer records.
     spec=importlib.util.spec_from_file_location(

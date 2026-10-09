@@ -119,6 +119,21 @@ class GenerateLicenseRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class DirectLicenseRequest(BaseModel):
+    edition: str
+    months: int
+    release_channel: str = Field(default="STABLE", alias="releaseChannel")
+    model_config = {"populate_by_name": True}
+
+
+class ExtendLicenseRequest(BaseModel):
+    operation_id: uuid.UUID = Field(alias="operationId")
+    months: int
+    payment_confirmed: bool = Field(default=False, alias="paymentConfirmed")
+
+    model_config = {"populate_by_name": True}
+
+
 class ReleaseChannelRequest(BaseModel):
     release_channel: str = Field(alias="releaseChannel")
 
@@ -149,6 +164,11 @@ class DiscoveryAssignmentRequest(BaseModel):
     )
 
     model_config = {"populate_by_name": True}
+
+
+class WorkshopReportRequest(DiscoveryAssignmentRequest):
+    """Explicit minimal workshop diagnostics, authenticated with discovery credential."""
+    summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class AssignPendingInstallationRequest(BaseModel):
@@ -411,7 +431,7 @@ def _signed_envelope(link: dict[str, Any]) -> dict[str, str]:
     payload_obj = {
         "schemaVersion": 1,
         "licenseId": link["keygate_license_id"],
-        "serviceDeviceId": str(link["service_device_id"]),
+        "serviceDeviceId": (str(link["service_device_id"]) if link.get("service_device_id") else None),
         "installationId": str(link["installation_id"] or ""),
         "deviceId": link.get("device_id") or "",
         "planCode": link["plan_code"],
@@ -441,10 +461,11 @@ CREATE SCHEMA IF NOT EXISTS guard;
 
 CREATE TABLE IF NOT EXISTS guard.license_links (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    reception_id UUID NOT NULL UNIQUE REFERENCES service.service_orders(id) ON DELETE CASCADE,
+    reception_id UUID UNIQUE REFERENCES service.service_orders(id) ON DELETE CASCADE,
     reception_number TEXT NOT NULL UNIQUE,
-    service_device_id UUID NOT NULL REFERENCES core.devices(id) ON DELETE RESTRICT,
+    service_device_id UUID REFERENCES core.devices(id) ON DELETE RESTRICT,
     keygate_license_id TEXT NOT NULL UNIQUE,
+    sale_kind TEXT NOT NULL DEFAULT 'SERVICE' CHECK (sale_kind IN ('SERVICE','DIRECT')),
     keygate_plan_id TEXT NOT NULL,
     license_key_hash TEXT NOT NULL UNIQUE,
     plan_code TEXT NOT NULL CHECK (plan_code IN ('multi_guard','multi_guard_pro')),
@@ -473,6 +494,22 @@ CREATE INDEX IF NOT EXISTS idx_guard_license_links_device
 CREATE INDEX IF NOT EXISTS idx_guard_license_links_lifecycle
     ON guard.license_links(lifecycle);
 
+CREATE TABLE IF NOT EXISTS guard.license_extensions (
+    id UUID PRIMARY KEY,
+    license_link_id UUID NOT NULL
+        REFERENCES guard.license_links(id) ON DELETE RESTRICT,
+    keygate_license_id TEXT NOT NULL,
+    months INTEGER NOT NULL CHECK (months IN (3,6,12)),
+    previous_valid_until TIMESTAMPTZ NOT NULL,
+    new_valid_until TIMESTAMPTZ NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('WEB','ANDROID')),
+    payment_confirmed BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (new_valid_until > previous_valid_until)
+);
+CREATE INDEX IF NOT EXISTS idx_guard_license_extensions_license
+    ON guard.license_extensions(license_link_id,created_at DESC);
+
 CREATE TABLE IF NOT EXISTS guard.pending_installations (
     installation_id UUID PRIMARY KEY,
     device_id TEXT NOT NULL,
@@ -500,9 +537,34 @@ CREATE INDEX IF NOT EXISTS idx_guard_pending_installations_serial
     ON guard.pending_installations(serial_number)
     WHERE serial_number IS NOT NULL AND serial_number <> '';
 
+CREATE TABLE IF NOT EXISTS guard.workshop_grants (
+    installation_id UUID PRIMARY KEY
+        REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+    edition TEXT NOT NULL CHECK (edition IN ('STANDARD','PRO')),
+    release_channel TEXT NOT NULL DEFAULT 'STABLE'
+        CHECK (release_channel IN ('STABLE','PILOT')),
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS guard.workshop_grant_audit (
+    id BIGSERIAL PRIMARY KEY,
+    installation_id UUID NOT NULL,
+    before_state JSONB NOT NULL,
+    after_state JSONB NOT NULL,
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS guard.workshop_reports (
+    installation_id UUID PRIMARY KEY
+        REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+    summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS guard.installations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_device_id UUID NOT NULL REFERENCES core.devices(id) ON DELETE CASCADE,
+    service_device_id UUID REFERENCES core.devices(id) ON DELETE CASCADE,
     installation_external_id UUID NOT NULL UNIQUE,
     device_id_hash TEXT NOT NULL,
     credential_sha256 TEXT NOT NULL CHECK (length(credential_sha256)=64),
@@ -528,7 +590,7 @@ CREATE INDEX IF NOT EXISTS idx_guard_installations_device
 
 CREATE TABLE IF NOT EXISTS guard.activation_events (
     id BIGSERIAL PRIMARY KEY,
-    reception_id UUID NOT NULL REFERENCES service.service_orders(id) ON DELETE CASCADE,
+    reception_id UUID REFERENCES service.service_orders(id) ON DELETE CASCADE,
     reception_number TEXT NOT NULL,
     keygate_license_id TEXT NOT NULL UNIQUE,
     edition TEXT NOT NULL CHECK (edition IN ('STANDARD','PRO')),
@@ -539,6 +601,13 @@ CREATE TABLE IF NOT EXISTS guard.activation_events (
 CREATE INDEX IF NOT EXISTS idx_guard_activation_events_created
     ON guard.activation_events(id DESC);
 
+ALTER TABLE guard.license_links ALTER COLUMN reception_id DROP NOT NULL;
+ALTER TABLE guard.license_links ALTER COLUMN service_device_id DROP NOT NULL;
+ALTER TABLE guard.license_links
+    ADD COLUMN IF NOT EXISTS sale_kind TEXT NOT NULL DEFAULT 'SERVICE'
+        CHECK (sale_kind IN ('SERVICE','DIRECT'));
+ALTER TABLE guard.installations ALTER COLUMN service_device_id DROP NOT NULL;
+ALTER TABLE guard.activation_events ALTER COLUMN reception_id DROP NOT NULL;
 ALTER TABLE guard.license_links
     ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
 ALTER TABLE guard.installations
@@ -642,6 +711,97 @@ def _authenticate_pending(
         raise HTTPException(401, "Nieprawidłowe poświadczenie wykrywania instalacji.")
 
     return pending
+
+
+def _workshop_grant(installation_id: uuid.UUID) -> dict[str, Any] | None:
+    _ensure_schema()
+    with engine.connect() as connection:
+        row = connection.execute(text("""
+            SELECT * FROM guard.workshop_grants
+            WHERE installation_id=:id
+        """), {"id": installation_id}).mappings().first()
+    return dict(row) if row else None
+
+
+def _signed_workshop_grant(pending: dict[str, Any],
+                           grant: dict[str, Any]) -> dict[str, str]:
+    """Ephemeral, installation-bound entitlement; never touches KeyGate.
+
+    Workshop permission is open-ended on the server, but each client lease
+    is only trusted for a short offline grace period and must be refreshed.
+    """
+    plan = ("multi_guard_pro" if grant["edition"] == "PRO" else "multi_guard")
+    payload = json.dumps({
+        "schemaVersion": 1,
+        "licenseId": "WORKSHOP-" + str(pending["installation_id"]),
+        "serviceDeviceId": None,
+        "installationId": str(pending["installation_id"]),
+        "deviceId": str(pending["device_id"]),
+        "planCode": plan,
+        "releaseChannel": grant["release_channel"],
+        "lifecycle": "WORKSHOP",
+        "validFrom": None,
+        "validUntil": None,
+        "acceptedAt": None,
+        "acceptedDocuments": [],
+        "serverTime": _iso(_utcnow()),
+    }, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    signature = _signing_key().sign(payload.encode("utf-8"))
+    return {
+        "payload": payload,
+        "signatureB64": base64.b64encode(signature).decode("ascii"),
+    }
+
+
+def _set_workshop_grant(
+    installation_id: uuid.UUID,
+    edition: str,
+    channel: str,
+    enabled: bool,
+) -> dict[str, Any]:
+    _ensure_schema()
+    edition = edition.strip().upper()
+    channel = channel.strip().upper()
+    if edition not in {"STANDARD", "PRO"}:
+        raise HTTPException(400, "Edycja musi być Standard albo Pro.")
+    if channel not in {"STABLE", "PILOT"}:
+        raise HTTPException(400, "Kanał musi być stabilny albo Beta.")
+    with engine.begin() as con:
+        pending = con.execute(text("""
+            SELECT installation_id,status FROM guard.pending_installations
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id":installation_id}).mappings().first()
+        if not pending:
+            raise HTTPException(404, "Instalacja nie została zgłoszona do Multi-Servis.")
+        if str(pending["status"]) in ("ASSIGNED", "PROVISIONED"):
+            raise HTTPException(409,
+                "Komputer ma już przypisaną licencję klienta. "
+                "Nie można równocześnie uruchomić trybu warsztatowego.")
+        existing = con.execute(text("""
+            SELECT edition,release_channel,enabled FROM guard.workshop_grants
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id": installation_id}).mappings().first()
+        previous = dict(existing) if existing else None
+        current = {"edition":edition,"release_channel":channel,"enabled":enabled}
+        con.execute(text("""
+            INSERT INTO guard.workshop_grants(
+                installation_id,edition,release_channel,enabled
+            ) VALUES (:id,:edition,:channel,:enabled)
+            ON CONFLICT (installation_id) DO UPDATE
+              SET edition=EXCLUDED.edition,
+                  release_channel=EXCLUDED.release_channel,
+                  enabled=EXCLUDED.enabled,
+                  updated_at=now()
+        """), {"id":installation_id,"edition":edition,"channel":channel,"enabled":enabled})
+        if previous != current:
+            con.execute(text("""
+                INSERT INTO guard.workshop_grant_audit(
+                    installation_id,before_state,after_state
+                ) VALUES (:id,CAST(:before AS jsonb),CAST(:after AS jsonb))
+            """), {"id":installation_id,
+                    "before":json.dumps(previous),
+                    "after":json.dumps(current)})
+    return current
 
 
 def _pending_public(
@@ -764,6 +924,104 @@ def _assign_pending_to_reception(
         )
 
     return link
+
+
+
+def _assign_direct_customer_license(
+    installation_id: uuid.UUID, edition: str, months: int, channel: str
+) -> dict[str, Any]:
+    """Assign paid client rights without creating a repair order."""
+    edition = edition.strip().upper()
+    channel = channel.strip().upper()
+    if edition not in {"STANDARD", "PRO"} or months not in {3, 6, 12}:
+        raise HTTPException(400, "Wybierz Standard/Pro i okres 3, 6 lub 12 miesięcy.")
+    if channel not in {"STABLE", "PILOT"}:
+        raise HTTPException(400, "Kanał musi być Stabilna albo Beta.")
+    _ensure_schema()
+    with engine.begin() as con:
+        pending = con.execute(text("""
+            SELECT * FROM guard.pending_installations
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id": installation_id}).mappings().first()
+        if pending is None:
+            raise HTTPException(404, "Komputer nie został zarejestrowany.")
+        if pending["status"] != "WAITING" or pending["assigned_license_id"]:
+            raise HTTPException(409, "Komputer ma już przypisaną licencję.")
+        existing = con.execute(text("""
+            SELECT id FROM guard.license_links
+            WHERE installation_id=:id LIMIT 1
+        """), {"id": installation_id}).first()
+        if existing:
+            raise HTTPException(409, "Istnieje już powiązanie tej instalacji.")
+        # A KeyGate workspace reference identifies the installation, not
+        # an imaginary repair order. No service.order record is created.
+        reference = "MG-DIRECT-" + installation_id.hex
+        created = _keygate_create_license(
+            reception_number=reference, edition=edition, months=months,
+        )
+        lic = con.execute(text("""
+            INSERT INTO guard.license_links(
+                reception_id,reception_number,service_device_id,
+                sale_kind,installation_id,
+                keygate_license_id,keygate_plan_id,license_key_hash,
+                plan_code,duration_months,release_channel,lifecycle
+            ) VALUES (
+                NULL,:reference,NULL,'DIRECT',:installation_id,
+                :license_id,:plan_id,:key_hash,:plan,:months,:channel,'UNASSIGNED'
+            ) RETURNING *
+        """), {
+            "reference":reference, "installation_id":installation_id,
+            "license_id":str(created["id"]), "plan_id":created["_plan_id"],
+            "key_hash":_hash(created["_license_key"]),
+            "plan":"multi_guard_pro" if edition=="PRO" else "multi_guard",
+            "months":months,"channel":channel,
+        }).mappings().one()
+        con.execute(text("""
+            UPDATE guard.pending_installations SET
+                status='ASSIGNED',assigned_reception_id=NULL,
+                assigned_license_id=:license_id,
+                assigned_at=now(),updated_at=now()
+            WHERE installation_id=:id
+        """), {"license_id":lic["keygate_license_id"],"id":installation_id})
+        con.execute(text("""
+            UPDATE guard.workshop_grants SET enabled=FALSE,updated_at=now()
+            WHERE installation_id=:id AND enabled=TRUE
+        """), {"id":installation_id})
+    return _normalize_link(dict(lic))
+
+
+def _handover_direct_customer(installation_id: uuid.UUID) -> dict[str, Any]:
+    """Require customer document acceptance before starting paid time."""
+    _ensure_schema()
+    with engine.begin() as con:
+        pending = con.execute(text("""
+            SELECT assigned_license_id FROM guard.pending_installations
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id":installation_id}).mappings().first()
+        if not pending or not pending["assigned_license_id"]:
+            raise HTTPException(404, "Nie znaleziono przypisanej licencji.")
+        link = con.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE keygate_license_id=:license_id AND sale_kind='DIRECT'
+                  AND installation_id=:installation_id
+            FOR UPDATE
+        """), {"license_id":pending["assigned_license_id"],
+                "installation_id":installation_id}).mappings().first()
+        if not link:
+            raise HTTPException(404, "Brak bezpośredniej licencji klienta.")
+        if link["lifecycle"] in {"REVOKED", "EXPIRED"}:
+            raise HTTPException(409, "Licencja została cofnięta lub wygasła.")
+        if link["lifecycle"] in {"ACTIVE", "PENDING_ACCEPTANCE"}:
+            return _normalize_link(dict(link))
+        updated = con.execute(text("""
+            UPDATE guard.license_links
+            SET lifecycle='PENDING_ACCEPTANCE',
+                approved_at=COALESCE(approved_at,now()),updated_at=now()
+            WHERE id=:id RETURNING *
+        """), {"id":link["id"]}).mappings().one()
+        result = _normalize_link(dict(updated))
+        _update_installation_mirror(con,result)
+        return result
 
 
 def _reception(reception_id: uuid.UUID) -> dict[str, Any]:
@@ -1042,7 +1300,7 @@ def _public_status(link: dict[str, Any] | None) -> dict[str, Any]:
         "configured": True,
         "installed": bool(link.get("installation_id")),
         "licenseId": link["keygate_license_id"],
-        "serviceDeviceId": str(link["service_device_id"]),
+        "serviceDeviceId": (str(link["service_device_id"]) if link.get("service_device_id") else None),
         "receptionNumber": link["reception_number"],
         "edition": "PRO" if link["plan_code"] == "multi_guard_pro" else "STANDARD",
         "planCode": link["plan_code"],
@@ -1187,7 +1445,40 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
         )
 
     reception_id = pending.get("assigned_reception_id")
+    # Direct client licences have no reception_id. Use the stored KeyGate
+    # licence identity, never a fabricated repair order.
+    if (not reception_id and pending["status"] == "ASSIGNED"
+            and pending.get("assigned_license_id")):
+        with engine.connect() as con:
+            direct = con.execute(text("""
+                SELECT * FROM guard.license_links
+                WHERE keygate_license_id=:id AND sale_kind='DIRECT'
+                  AND installation_id=:installation_id
+                LIMIT 1
+            """), {"id":pending["assigned_license_id"],
+                    "installation_id":pending["installation_id"]}).mappings().first()
+        if direct:
+            link = _normalize_link(dict(direct))
+            return {
+                "assigned":True,
+                "status":pending["status"],
+                "edition": "PRO" if link["plan_code"]=="multi_guard_pro" else "STANDARD",
+                "durationMonths":int(link["duration_months"]),
+                "releaseChannel":link.get("release_channel") or "STABLE",
+                "provisioningToken":_keygate_reveal(link["keygate_license_id"]),
+                "serverTime":_iso(_utcnow()),
+            }
+        raise HTTPException(409, "Nie znaleziono powiązanej licencji klienta.")
     if not reception_id or pending["status"] == "WAITING":
+        grant = _workshop_grant(pending["installation_id"])
+        if grant and grant["enabled"]:
+            return {
+                "assigned": False,
+                "status": "WORKSHOP",
+                "releaseChannel": grant["release_channel"],
+                "workshopLease": _signed_workshop_grant(pending, grant),
+                "serverTime": _iso(_utcnow()),
+            }
         return {
             "assigned": False,
             "status": pending["status"],
@@ -1225,6 +1516,40 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
         "provisioningToken": _keygate_reveal(link["keygate_license_id"]),
         "serverTime": _iso(_utcnow()),
     }
+
+
+@router.post("/v1/multi-guard/workshop/report")
+def workshop_report(req: WorkshopReportRequest):
+    """Store a bounded current workshop diagnostic summary, no core.devices required."""
+    pending = _authenticate_pending(
+        req.installation_id, req.device_id, req.discovery_credential,
+    )
+    if len(json.dumps(req.summary, ensure_ascii=False)) > 16_384:
+        raise HTTPException(413, "Raport diagnostyczny jest zbyt duży.")
+    allowed = {
+        "defenderAvailable", "realtimeProtection", "activeThreatCount",
+        "firewallProtected", "whea24h", "kernelPower7d",
+        "diskProblemCount", "browserInstalledCount", "browserActiveCount",
+        "browserNeedsAttentionCount", "capturedAt", "appVersion",
+    }
+    if not set(req.summary).issubset(allowed):
+        raise HTTPException(400, "Raport zawiera nieobsługiwane pola.")
+    _ensure_schema()
+    with engine.begin() as con:
+        enabled = con.execute(text("""
+            SELECT enabled FROM guard.workshop_grants
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id":pending["installation_id"]}).scalar_one_or_none()
+        if enabled is not True:
+            raise HTTPException(403, "Tryb warsztatowy nie jest aktywny.")
+        con.execute(text("""
+            INSERT INTO guard.workshop_reports(installation_id,summary,reported_at)
+            VALUES (:id,CAST(:data AS jsonb),now())
+            ON CONFLICT(installation_id) DO UPDATE
+              SET summary=EXCLUDED.summary,reported_at=now()
+        """), {"id":pending["installation_id"],
+                 "data":json.dumps(req.summary,ensure_ascii=False)})
+    return {"saved":True,"serverTime":_iso(_utcnow())}
 
 
 @router.get("/v1/multi-guard/license/pubkey")
@@ -1271,9 +1596,13 @@ def provision(req: ProvisionRequest):
 
     credential = secrets.token_urlsafe(48)
     credential_hash = _hash(credential)
+    # Keep an explicit OWNER handover even when the computer provisions
+    # later. Do not silently downgrade to workshop privileges.
     lifecycle = (
         link["lifecycle"]
-        if link.get("rebind_pending") and link["lifecycle"] != "UNASSIGNED"
+        if (link.get("rebind_pending")
+            or link.get("sale_kind") == "DIRECT")
+            and link["lifecycle"] != "UNASSIGNED"
         else "SERVICE_TEST"
     )
 
@@ -1330,7 +1659,10 @@ def provision(req: ProvisionRequest):
         "requestId": req.request_id,
         "signedLicense": _signed_envelope(link),
         "installationCredential": credential,
-        "requiredDocuments": [],
+        "requiredDocuments": (
+            _required_documents() if link["lifecycle"] == "PENDING_ACCEPTANCE"
+            else []
+        ),
     }
 
 
@@ -1738,6 +2070,100 @@ def assign_pending_installation(
 
 
 
+
+@router.post("/multiguard/pending-installations/{installation_id}/direct")
+def assign_direct_license_api(
+    installation_id: uuid.UUID,
+    body: DirectLicenseRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    return _public_status(_assign_direct_customer_license(
+        installation_id, body.edition, body.months, body.release_channel,
+    ))
+
+
+@router.post("/multiguard/pending-installations/{installation_id}/handover")
+def handover_direct_license_api(
+    installation_id: uuid.UUID,
+    user: CurrentUser = Depends(require_owner),
+):
+    return _public_status(_handover_direct_customer(installation_id))
+
+
+@router.post("/multiguard/panel/pending/{installation_id}/direct",
+             response_class=HTMLResponse)
+def assign_direct_license_web(
+    installation_id: uuid.UUID,
+    edition: str = Form(...),
+    months: int = Form(...),
+    release_channel: str = Form("STABLE"),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Wygasły formularz.")
+    _assign_direct_customer_license(installation_id, edition, months, release_channel)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(
+        f"/multiguard/panel/pending/{installation_id}#client-license", status_code=303,
+        headers={"Cache-Control":"private, no-store"},
+    )
+
+
+@router.post("/multiguard/panel/pending/{installation_id}/handover",
+             response_class=HTMLResponse)
+def handover_direct_license_web(
+    installation_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Wygasły formularz.")
+    _handover_direct_customer(installation_id)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(
+        f"/multiguard/panel/pending/{installation_id}#client-license", status_code=303,
+        headers={"Cache-Control":"private, no-store"},
+    )
+
+
+def _workshop_csrf() -> str:
+    from app.routers.multiguard_panel_settings import _csrf_token
+    import time
+    return _csrf_token(int(time.time() // 3600))
+
+
+@router.post("/multiguard/panel/pending/{installation_id}/workshop",
+             response_class=HTMLResponse)
+def panel_update_workshop(
+    installation_id: uuid.UUID,
+    edition: str = Form("STANDARD"),
+    release_channel: str = Form("STABLE"),
+    action: str = Form("enable"),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowy formularz.")
+    if action not in {"enable", "disable"}:
+        raise HTTPException(400, "Nieprawidłowa operacja.")
+    result = _set_workshop_grant(
+        installation_id, edition, release_channel, action == "enable",
+    )
+    return HTMLResponse(_panel_html(
+        '<section class="card"><h1>Tryb warsztatowy zapisany</h1>'
+        '<p>Komputer pobierze zmienione uprawnienia po kolejnym kontakcie '
+        'z Multi-Servis. Nie uruchomiono żadnej licencji czasowej.</p>'
+        f'<p>Stan: {"WŁĄCZONY" if result["enabled"] else "ZAKOŃCZONY"} '
+        f'· {result["edition"]}</p>'
+        f'<a class="button-link" href="/multiguard/panel/pending/{installation_id}">'
+        'WRÓĆ DO KOMPUTERA</a></section>'
+    ), headers={"Cache-Control":"private, no-store"})
+
+
 @router.get(
     "/multiguard/panel/pending/{installation_id}",
     response_class=HTMLResponse,
@@ -1756,6 +2182,86 @@ def multiguard_panel_pending(
         raise HTTPException(404, "Nie znaleziono oczekującej instalacji.")
 
     public = _pending_public(pending)
+    from app.routers.multiguard_panel_devices import owner_friendly_name, owner_name_form
+    alias = owner_friendly_name(iid)
+    alias_form = owner_name_form(iid, alias, return_to="pending")
+    grant = _workshop_grant(iid)
+    direct = None
+    if pending.get("assigned_license_id"):
+        with engine.connect() as direct_con:
+            direct = direct_con.execute(text("""
+                SELECT * FROM guard.license_links
+                WHERE sale_kind='DIRECT' AND installation_id=:iid
+                  AND keygate_license_id=:license_id
+            """), {"iid":iid,"license_id":pending["assigned_license_id"]}).mappings().first()
+    if direct:
+        direct_info = (
+            "<p class='ok'>Licencja klienta: "
+            + _panel_escape("Pro" if direct["plan_code"]=="multi_guard_pro" else "Standard")
+            + " · " + str(direct["duration_months"])
+            + " miesięcy · " + _panel_escape({"UNASSIGNED":"Przypisana","SERVICE_TEST":"Przygotowana","PENDING_ACCEPTANCE":"Oczekuje na akceptację","ACTIVE":"Aktywna","EXPIRED":"Wygasła","REVOKED":"Cofnięta"}.get(direct["lifecycle"],"Nieznana"))
+            + "</p>"
+            + (
+                f'<p><a class="button-link" href="/multiguard/panel/license/installation/{installation_id}/extend">'
+                'PRZEDŁUŻ LICENCJĘ</a></p>'
+                if direct["lifecycle"]=="ACTIVE" else ""
+            )
+        )
+        direct_buttons = (
+            f'<form method="post" action="/multiguard/panel/pending/{installation_id}/handover">'
+            f'<input type="hidden" name="csrf_token" value="{_workshop_csrf()}">'
+            '<button type="submit">PRZEKAŻ KLIENTOWI / POPROŚ O AKCEPTACJĘ</button></form>'
+            if direct["lifecycle"] in {"UNASSIGNED","SERVICE_TEST"} else
+            '<p class="muted">Przekazanie zarejestrowane; komputer pobierze status po synchronizacji.</p>'
+        )
+    elif pending["status"] == "WAITING":
+        direct_info = '<p>Sprzedaż bez przyjęcia sprzętu do warsztatu i bez numeru zlecenia.</p>'
+        direct_buttons = f"""
+            <form method="post" action="/multiguard/panel/pending/{installation_id}/direct">
+              <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+              <label>Edycja<select name="edition">
+                <option value="STANDARD">Standard</option>
+                <option value="PRO">Pro</option>
+              </select></label>
+              <label>Okres<select name="months">
+                <option value="3">3 miesiące</option>
+                <option value="6">6 miesięcy</option>
+                <option value="12" selected>12 miesięcy</option>
+              </select></label>
+              <label>Kanał<select name="release_channel">
+                <option value="STABLE">Stabilna</option>
+                <option value="PILOT">Beta</option>
+              </select></label>
+              <button type="submit">PRZYPISZ LICENCJĘ KLIENTA</button>
+            </form>
+        """
+    else:
+        direct_info = '<p>Ta instalacja ma już powiązanie ze zleceniem serwisowym.</p>'
+        direct_buttons = ''
+    with engine.connect() as report_db:
+        workshop_report_row = report_db.execute(text("""
+            SELECT summary,reported_at FROM guard.workshop_reports
+            WHERE installation_id=:id
+        """), {"id":iid}).mappings().first()
+    if grant and grant["enabled"]:
+        workshop_state_html = (
+            '<p class="ok">TRYB WARSZTATOWY AKTYWNY — '
+            + _panel_escape(grant["edition"]) + ' / '
+            + _panel_escape(grant["release_channel"]) + '</p>'
+        )
+    else:
+        workshop_state_html = '<p>Tryb warsztatowy nie jest aktywny.</p>'
+    report_html = (
+        '<div class="detail-facts">'
+        + "".join(
+            '<div class="detail-fact"><b>'+_panel_escape(key)+'</b><span>'
+            +_panel_escape(value)+'</span></div>'
+            for key,value in (workshop_report_row["summary"] or {}).items()
+        ) + '</div>'
+        + '<p class="muted">Ostatni raport: '
+        + _panel_escape(workshop_report_row["reported_at"]) + '</p>'
+        if workshop_report_row else '<p class="muted">Komputer nie wysłał jeszcze raportu warsztatowego.</p>'
+    )
     device = " ".join(
         part for part in [
             public["manufacturer"].strip(),
@@ -1768,6 +2274,7 @@ def multiguard_panel_pending(
         <section class="card">
           <a href="/multiguard/panel/dashboard">← Wróć do pulpitu</a>
           <h1>Przypisz {_panel_escape(public['shortId'])}</h1>
+          <p>Własna nazwa: <strong>{_panel_escape(alias or "Nie nadano")}</strong></p>
           <p>
             <b>{_panel_escape(device)}</b>
             • wersja {_panel_escape(public['appVersion'] or '—')}
@@ -1777,6 +2284,39 @@ def multiguard_panel_pending(
             Serial: {_panel_escape(public['serialNumber'] or '—')}
             • host: {_panel_escape(public['hostname'] or '—')}
           </p>
+          {alias_form}
+          <section class="card" id="client-license">
+            <div class="eyebrow">LICENCJA KOMERCYJNA</div>
+            <h2>Licencja klienta bez zlecenia</h2>
+            {direct_info}
+            {direct_buttons}
+          </section>
+          <section class="card" id="workshop-mode">
+            {workshop_state_html}
+            {report_html}
+            <div class="eyebrow">BEZ LICENCJI CZASOWEJ</div>
+            <h2>Tryb warsztatowy</h2>
+            <p>Może działać na komputerze warsztatowym albo u klienta.
+               Nie wymaga zlecenia i nie nalicza 3/6/12 miesięcy.
+               Dostęp wymaga odnawiania potwierdzenia przez serwer.</p>
+            <form method="post" action="/multiguard/panel/pending/{installation_id}/workshop">
+              <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+              <label>Edycja <select name="edition">
+                <option value="STANDARD">Standard</option>
+                <option value="PRO">Pro</option>
+              </select></label>
+              <label>Kanał <select name="release_channel">
+                <option value="STABLE">Stabilna</option>
+                <option value="PILOT">Beta</option>
+              </select></label>
+              <label>Akcja <select name="action">
+                <option value="enable">Włącz / zmień edycję</option>
+                <option value="disable">Zakończ tryb warsztatowy</option>
+              </select></label>
+              <button type="submit">ZAPISZ TRYB WARSZTATOWY</button>
+            </form>
+          </section>
+          <section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>
           <form method="post" action="/multiguard/panel/pending/{installation_id}/assign">
             <label>Numer zlecenia Multi-Servis
               <input name="reception_number" placeholder="np. MS-2026-00123" required>
@@ -1803,7 +2343,7 @@ def multiguard_panel_pending(
               </label>
             </div>
             <button type="submit">PRZYPISZ I PRZYGOTUJ LICENCJĘ</button>
-          </form>
+          </form></section>
         </section>
         """
     )
@@ -1924,7 +2464,7 @@ def multiguard_panel_generate(
           <p class="ok">{product} • {link["duration_months"]} mies. • {"BETA" if link.get("release_channel") == "PILOT" else "STABILNA"} • {link["reception_number"]}</p>
           <code class="key" id="license-key">{license_key}</code>
           <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('license-key').innerText)">KOPIUJ KLUCZ</button>
-          <p class="warn">Po wpisaniu klucza w Multi-Guard uruchomi się SERVICE_TEST. Czas licencji jeszcze nie biegnie.</p>
+          <p class="warn">Po wpisaniu klucza program zostanie przygotowany do przekazania klientowi. Okres płatnej licencji rozpocznie się dopiero po akceptacji wymaganych dokumentów.</p>
           <a href="/multiguard/panel">← Wróć do generatora</a>
         </section>
         """
@@ -2117,3 +2657,312 @@ def rebind_reception_license(
         "licenseKey": license_key,
         "message": "Licencja gotowa do instalacji na nowym komputerze. Data końcowa nie została zmieniona.",
     }
+
+
+def _extend_active_license(
+    reception_id: uuid.UUID,
+    months: int,
+    operation_id: uuid.UUID,
+    *,
+    source: str,
+    payment_confirmed: bool,
+    by_installation: bool = False,
+) -> dict[str, Any]:
+    """Append time to existing expiry, never to purchase date.
+
+    Serialised per licence, idempotent by operation UUID, auditable.
+    The KeyGate operation sets an absolute date rather than adding a period,
+    so a retry after a partial failure cannot double-add time. A signed
+    refreshed licence reaches the Windows client on its next sync.
+    """
+    if months not in (3, 6, 12):
+        raise HTTPException(400, "Przedłużenie obejmuje 3, 6 albo 12 miesięcy.")
+    if not payment_confirmed:
+        raise HTTPException(400, "Potwierdź otrzymanie płatności od klienta.")
+    if source not in {"WEB", "ANDROID"}:
+        raise HTTPException(400, "Nieprawidłowe źródło operacji.")
+    _ensure_schema()
+    with engine.begin() as connection:
+        # Lock the row before checking the existing operation, so two
+        # concurrent requests serialize even with distinct request IDs.
+        lookup = (
+            "installation_id=:id" if by_installation
+            else "reception_id=:id"
+        )
+        link = connection.execute(text(
+            "SELECT * FROM guard.license_links WHERE " + lookup + " FOR UPDATE"
+        ), {"id":reception_id}).mappings().first()
+        if not link:
+            raise HTTPException(404, "Zlecenie nie ma licencji Multi-Guard.")
+        link = _normalize_link(dict(link))
+        earlier = connection.execute(text("""
+            SELECT months,previous_valid_until,new_valid_until,
+                   license_link_id,created_at
+            FROM guard.license_extensions
+            WHERE id=:id
+        """), {"id": operation_id}).mappings().first()
+        if earlier:
+            if earlier["license_link_id"] != link["id"] or int(earlier["months"]) != months:
+                raise HTTPException(409, "Identyfikator operacji został już wykorzystany.")
+            return {
+                "status": "ALREADY_EXTENDED",
+                "operationId": str(operation_id),
+                "months": months,
+                "oldValidUntil": _iso(earlier["previous_valid_until"]),
+                "newValidUntil": _iso(earlier["new_valid_until"]),
+                "edition": ("PRO" if link["plan_code"] == "multi_guard_pro" else "STANDARD"),
+            }
+
+        if link["lifecycle"] != "ACTIVE":
+            raise HTTPException(409, "Przedłużyć można wyłącznie aktywną licencję klienta.")
+        end = link.get("valid_until")
+        if end is None or end <= _utcnow():
+            raise HTTPException(409, "Licencja wygasła — wymagane osobne odnowienie.")
+        new_end = _add_months(end, months)
+        # Absolute-date mutation in KeyGate deliberately executes while
+        # holding the local row lock. If database commit later fails, a
+        # same-ID retry will safely request this absolute date again.
+        _keygate_set_valid_until(link["keygate_license_id"], new_end)
+        updated = connection.execute(text("""
+            UPDATE guard.license_links
+            SET valid_until=:end, updated_at=now()
+            WHERE id=:id
+            RETURNING *
+        """), {"id": link["id"], "end": new_end}).mappings().one()
+        _update_installation_mirror(connection, _normalize_link(dict(updated)))
+        connection.execute(text("""
+            INSERT INTO guard.license_extensions (
+                id,license_link_id,keygate_license_id,months,
+                previous_valid_until,new_valid_until,source,payment_confirmed
+            ) VALUES (
+                :op,:link,:license_id,:months,:old_end,:new_end,:source,TRUE
+            )
+        """), {
+            "op": operation_id, "link": link["id"],
+            "license_id": link["keygate_license_id"], "months": months,
+            "old_end": end, "new_end": new_end, "source": source,
+        })
+        return {
+            "status": "EXTENDED",
+            "operationId": str(operation_id),
+            "months": months,
+            "oldValidUntil": _iso(end),
+            "newValidUntil": _iso(new_end),
+            "edition": ("PRO" if link["plan_code"] == "multi_guard_pro" else "STANDARD"),
+        }
+
+
+@router.post("/multiguard/licenses/receptions/{reception_id}/extend")
+def extend_reception_license(
+    reception_id: uuid.UUID,
+    body: ExtendLicenseRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    """OWNER Android/API endpoint. STAFF may not change paid licences."""
+    return _extend_active_license(
+        reception_id, body.months, body.operation_id,
+        source="ANDROID", payment_confirmed=body.payment_confirmed,
+    )
+
+
+@router.post("/multiguard/licenses/installations/{installation_id}/extend")
+def extend_direct_license_api(
+    installation_id: uuid.UUID,
+    body: ExtendLicenseRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    """Owner-only extension for direct licences without repair orders."""
+    _ensure_schema()
+    with engine.connect() as con:
+        direct = con.execute(text("""
+            SELECT sale_kind FROM guard.license_links
+            WHERE installation_id=:id
+        """), {"id":installation_id}).mappings().first()
+    if not direct or direct["sale_kind"] != "DIRECT":
+        raise HTTPException(404, "Brak licencji bezpośredniej dla komputera.")
+    return _extend_active_license(
+        installation_id, body.months, body.operation_id, source="ANDROID",
+        payment_confirmed=body.payment_confirmed, by_installation=True,
+    )
+
+
+
+@router.get("/multiguard/panel/license/installation/{installation_id}/extend",
+            response_class=HTMLResponse)
+def panel_direct_extension(
+    installation_id: uuid.UUID,
+    _: None = Depends(_panel_auth),
+):
+    _ensure_schema()
+    with engine.connect() as con:
+        link = con.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE installation_id=:id AND sale_kind='DIRECT' LIMIT 1
+        """), {"id":installation_id}).mappings().first()
+    if not link:
+        raise HTTPException(404, "Nie znaleziono licencji tego komputera.")
+    link = _normalize_link(dict(link))
+    if link["lifecycle"] != "ACTIVE" or not link.get("valid_until"):
+        raise HTTPException(409, "Licencja nie jest aktywna.")
+    title = _panel_escape("Pro" if link["plan_code"] == "multi_guard_pro" else "Standard")
+    date = _panel_escape(link["valid_until"].strftime("%d.%m.%Y"))
+    return HTMLResponse(_panel_html(f"""
+      <section class="card">
+        <a href="/multiguard/panel/pending/{installation_id}">← Komputer</a>
+        <h1>Przedłuż licencję klienta — {title}</h1>
+        <p>Obecna ważność do: <strong>{date}</strong></p>
+        <p>Nowy okres doliczamy do obecnej daty wygaśnięcia, nie do dzisiaj.
+           Zachowujemy dotychczasową edycję i dokumenty klienta.</p>
+        <form method="post" action="/multiguard/panel/license/installation/{installation_id}/extend">
+          <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+          <input type="hidden" name="operation_id" value="{uuid.uuid4()}">
+          <label>Okres<select name="months">
+            <option value="3">+3 miesiące</option>
+            <option value="6">+6 miesięcy</option>
+            <option value="12" selected>+12 miesięcy</option>
+          </select></label>
+          <label><input type="checkbox" name="payment_confirmed" value="yes" required>
+            Potwierdzam otrzymanie płatności</label>
+          <button type="submit">POTWIERDŹ PRZEDŁUŻENIE</button>
+        </form>
+      </section>
+    """), headers={"Cache-Control":"private, no-store"})
+
+
+@router.post("/multiguard/panel/license/installation/{installation_id}/extend",
+             response_class=HTMLResponse)
+def panel_direct_extension_post(
+    installation_id: uuid.UUID,
+    operation_id: uuid.UUID = Form(...),
+    months: int = Form(...),
+    csrf_token: str = Form(...),
+    payment_confirmed: str = Form(""),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    if not _token_valid(csrf_token):
+        raise HTTPException(403,"Wygasły formularz.")
+    _ensure_schema()
+    with engine.connect() as con:
+        sale = con.execute(text("""
+            SELECT sale_kind FROM guard.license_links
+            WHERE installation_id=:id LIMIT 1
+        """), {"id":installation_id}).mappings().first()
+    if not sale or sale["sale_kind"] != "DIRECT":
+        raise HTTPException(404,"Nie znaleziono licencji bezpośredniej.")
+    result = _extend_active_license(
+        installation_id, months, operation_id, source="WEB",
+        payment_confirmed=(payment_confirmed=="yes"),by_installation=True,
+    )
+    new_date = _panel_escape(result["newValidUntil"][:10])
+    return HTMLResponse(_panel_html(f"""
+      <section class="card">
+        <h1>Przedłużenie zapisane</h1>
+        <p>Nowa ważność licencji: <strong>{new_date}</strong></p>
+        <p>Wersja {result["edition"]} · +{result["months"]} miesięcy.
+           Komputer pobierze zmieniony termin podczas kolejnego połączenia.</p>
+        <a class="button-link" href="/multiguard/panel/pending/{installation_id}">
+        WRÓĆ DO KOMPUTERA</a>
+      </section>
+    """), headers={"Cache-Control":"private, no-store"})
+
+
+@router.get(
+    "/multiguard/panel/license/{reception_id}/extend",
+    response_class=HTMLResponse,
+)
+def panel_extend_license(
+    reception_id: uuid.UUID,
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _csrf_token
+    import time
+
+    _ensure_schema()
+    link = _link_by_reception_id(reception_id)
+    if not link:
+        raise HTTPException(404, "Nie znaleziono licencji dla tego zlecenia.")
+    link = _normalize_link(link)
+    if link["lifecycle"] != "ACTIVE" or not link.get("valid_until"):
+        raise HTTPException(409, "Licencja nie jest aktualnie aktywna.")
+    with engine.connect() as connection:
+        history = connection.execute(text("""
+            SELECT months,previous_valid_until,new_valid_until,created_at
+            FROM guard.license_extensions WHERE license_link_id=:id
+            ORDER BY created_at DESC LIMIT 30
+        """), {"id": link["id"]}).mappings().all()
+    history_html = "".join(
+        f'<tr><td>{_panel_escape(h["created_at"].strftime("%d.%m.%Y"))}</td>'
+        f'<td>+{int(h["months"])} mies.</td>'
+        f'<td>{_panel_escape(h["previous_valid_until"].strftime("%d.%m.%Y"))}</td>'
+        f'<td>{_panel_escape(h["new_valid_until"].strftime("%d.%m.%Y"))}</td></tr>'
+        for h in history
+    )
+    token = _csrf_token(int(time.time() // 3600))
+    operation = uuid.uuid4()
+    name = _panel_escape(link["reception_number"])
+    date_txt = _panel_escape(link["valid_until"].strftime("%d.%m.%Y"))
+    edition = "Pro" if link["plan_code"] == "multi_guard_pro" else "Standard"
+    return HTMLResponse(_panel_html(f"""
+        <section class="card">
+          <div class="eyebrow">MULTI-GUARD / PRZEDŁUŻENIE UPRAWNIEŃ KLIENTA</div>
+          <h1>Przedłuż licencję</h1>
+          <p><strong>{name}</strong> · Multi-Guard {edition}</p>
+          <p>Aktualna data wygaśnięcia: <strong>{date_txt}</strong>.</p>
+          <p>Nowy okres zostanie dodany do obecnej daty końcowej,
+             nie do dnia płatności. Nie wymaga ponownej instalacji
+             ani ponownej akceptacji niezmienionych dokumentów.</p>
+          <form method="post" action="/multiguard/panel/license/{reception_id}/extend">
+            <input type="hidden" name="csrf_token" value="{token}">
+            <input type="hidden" name="operation_id" value="{operation}">
+            <label>Dolicz okres
+              <select name="months" required>
+                <option value="3">3 miesiące</option>
+                <option value="6">6 miesięcy</option>
+                <option value="12" selected>12 miesięcy</option>
+              </select>
+            </label>
+            <label><input type="checkbox" name="payment_confirmed" value="yes" required>
+              Potwierdzam otrzymanie płatności i przedłużenie licencji</label>
+            <button type="submit">POTWIERDŹ PRZEDŁUŻENIE</button>
+          </form>
+        </section>
+        <section class="card">
+          <h2>Historia przedłużeń</h2>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Data operacji</th><th>Okres</th><th>Było ważne do</th>
+            <th>Nowa data końcowa</th></tr></thead>
+            <tbody>{history_html or '<tr><td colspan="4">Brak przedłużeń.</td></tr>'}</tbody>
+          </table></div>
+        </section>
+    """), headers={"Cache-Control": "private, no-store"})
+
+
+@router.post(
+    "/multiguard/panel/license/{reception_id}/extend",
+    response_class=HTMLResponse,
+)
+def panel_extend_license_post(
+    reception_id: uuid.UUID,
+    operation_id: uuid.UUID = Form(...),
+    months: int = Form(...),
+    csrf_token: str = Form(...),
+    payment_confirmed: str = Form(""),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowy formularz.")
+    result = _extend_active_license(
+        reception_id, months, operation_id,
+        source="WEB", payment_confirmed=(payment_confirmed == "yes"),
+    )
+    return HTMLResponse(_panel_html(f"""
+      <section class="card"><h1>Licencja przedłużona</h1>
+        <p>Nowa data ważności: <strong>{_panel_escape(result["newValidUntil"][:10])}</strong></p>
+        <p>{_panel_escape(result["edition"])} · +{int(result["months"])} miesięcy</p>
+        <p>Multi-Guard pobierze nową datę po kolejnym połączeniu z serwerem.</p>
+        <a class="button-link" href="/multiguard/panel/license/{reception_id}/extend">
+          HISTORIA LICENCJI</a></section>
+    """), headers={"Cache-Control": "private, no-store"})
