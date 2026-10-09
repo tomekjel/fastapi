@@ -18,6 +18,7 @@ from sqlalchemy import text
 from app.database import engine
 from app.security import CurrentUser, require_owner
 from app.routers.multiguard_panel_settings import owner_panel_config
+from app.routers.multiguard_panel_diagnostics import owner_diagnostic_plan_panel
 from app.routers.multiguard_panel_devices import (
     _schema as _ensure_owner_device_schema,
     owner_device_note,
@@ -1632,6 +1633,7 @@ def multi_guard_panel_device(
     )
     own_note_data = owner_device_note(iid)
     note_edit_html = owner_device_note_form(iid, own_note_data)
+    diagnostic_plan_html = owner_diagnostic_plan_panel(iid)
     event_rows = []
     for event in events:
         payload = event["payload"] or {}
@@ -1727,6 +1729,7 @@ def multi_guard_panel_device(
           </div>
         </section>
 
+        {diagnostic_plan_html}
         {note_edit_html}
 
         <section class="card" id="service-history">
