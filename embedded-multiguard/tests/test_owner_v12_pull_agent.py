@@ -93,6 +93,7 @@ class AgentTests(unittest.TestCase):
         for name in ("app/routers/receptions.py",
                      "embedded-multiguard/app/routers/multiguard_updates.py",
                      "embedded-multiguard/install.sh",
+                     ".github/workflows/deploy-multiservis-backend.yml",
                      "README.md"):
             self.manifest.update(sequence=1,target_sha=NEW)
             self.compare_file=name
