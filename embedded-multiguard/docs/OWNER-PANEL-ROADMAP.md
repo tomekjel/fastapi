@@ -1,6 +1,36 @@
 # Multi-Servis × Multi-Guard — kanoniczna mapa wdrożenia panelu OWNER
 Ustalenia właściciela: 9 października 2026. Status: **gałąź testowa; produkcyjny backend i aplikacja Android bez zmian**.
 
+## Zatwierdzona reguła wizualna — panel tylko dla OWNER
+
+- **Jedna aplikacja WWW Multi-Servis, jedna edycja dla właściciela.**
+  Nie istnieją osobne Standard/Pro dla panelu administratora;
+  Standard i Pro są wyłącznie cechami instalacji Multi-Guard u klienta.
+- Stylistyka spokrewniona z zaakceptowanym Multi-Guard V12: ciemny
+  granat, cienkie metaliczne złote i karmazynowe akcenty,
+  delikatny relief i glow, wysoka jakość materiału bez kopiowania
+  tarczy ani jej układu na każdą stronę.
+- **Liternictwo regularne, bez pogrubionych fontów**, teksty użyteczne
+  ~15–16 px lub większe, wyraźne nagłówki o grubości 400,
+  brak miniaturowych etykiet, czytelne formularze i tabele.
+- Każda funkcja zachowuje własny układ: pulpit operacyjny, techniczna
+  karta urządzenia, lista zleceń, analityka zdarzeń, historia wydań,
+  licencje i konfiguracja. Żadnego automatycznego kopiowania siatki
+  kafli we wszystkich ekranach.
+- Wspólne wizualne tokeny są w
+  `app/routers/multiguard_panel_theme.py` (`PANEL_CSS`).
+  Wspólny szkielet, nawigacja i znak marki:
+  `multiguard_license.py::_panel_html`.
+  Dzięki temu kolejne warianty wizualne nie wymagają przebudowy
+  licencjonowania ani logiki serwisu.
+- W GitHub CI rzeczywista przeglądarka Chromium renderuje HTML+CSS
+  pochodzące z produkcyjnie używanego renderera, **na jawnie
+  fikcyjnych danych poglądowych**, dla desktop i mobile.
+  Te obrazy nie są screenshotem live backendu. Realne screenshoty
+  serwera i test dostępu do klientów są osobnym etapem wdrożeniowym.
+- W przyszłości aplikacja Android Multi-Servis ma uzyskać spójny styl
+  rodziny, lecz nie jest modyfikowana w tej transzy.
+
 ## Kierunek architektury: nie „przespawane” ekrany
 - Ten sam fizyczny komputer (`core.devices.id`) jest osią relacji pomiędzy
   naprawą, zdjęciami, instalacją programu, licencjami, incydentami i powrotami
@@ -103,3 +133,16 @@ z zachowaniem bezpiecznych archiwów do odzyskiwania.
   po odbiorze z autoryzowanego agenta.
 - Migracje na istniejącej bazie są idempotentne; rollback kodu
   zachowuje dane audytowe i nie uszkadza Androida.
+
+## Transza 1 — uaktualnienie (9 października 2026)
+
+- Zatwierdzono i zakodowano wspólny design system V12 panelu WWW oraz
+  jeden układ OWNER, bez rozdzielania administratora na Standard/Pro.
+- Nowa typografia normal-weight, boczna nawigacja desktop,
+  pozioma mobilna, wyraźne karty, przeznaczone dla funkcji widoki.
+- Gotowe jest źródłowe renderowanie 7 ekranów poglądowych z **danymi
+  fikcyjnymi**, sprawdzane screenshotami Chromium w GitHub Actions.
+- Status: testowana gałąź, **nie publikowana produkcyjnie**;
+  sprawdzenie rzeczywistych danych, widoku zdjęć i integracji z
+  Androidem nadal wymagane. Bramka wdrożenia i kopia serwera
+  pozostają obowiązkowe.
