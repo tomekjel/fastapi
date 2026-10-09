@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 3,
-  "target_sha": "81651ad1393bac41c28aa9acf93684a3b64b8bc2",
-  "summary": "OWNER-approved Multi-Guard licensing upgrade: workshop Standard/Pro, direct sale without order, owner handover, computer aliases and idempotent renewals. GitHub Actions owner real PostgreSQL/Chromium PASS run 37998278514. Backend-only rollout; Windows client test 0.3.38 separate."
+  "sequence": 4,
+  "target_sha": "bee1dc9ccfc998dd26bce356aaac05b007f23b34",
+  "summary": "Owner-authorized licensing backend deployment after seq3 blocked by strict old non-owner AST policy. New deployer explicitly permits ONLY provision and discovery/assignment handler body changes with unchanged request interfaces; every other prior Android/agent API AST remains frozen. Exact live baseline comparison, malicious-change tests and isolated PostgreSQL/Chromium CI PASS: 37999160774. No Windows APK rollout, no production data content edits."
 }
