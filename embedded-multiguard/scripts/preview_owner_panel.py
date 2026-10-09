@@ -47,23 +47,47 @@ rows=[
      vers,f'<span class="presence-label"><span class="presence-dot presence-{"removed" if "Odinstalowanie" in last else ("recent" if "24" in last else "delayed")}"></span>{last}</span>',
      issue,status) for i,name,lic,vers,last,issue,status in devices
 ]
-dashboard = f"""
+dashboard=f"""
 <section class="card panel-hero dashboard-hero">
- <div class="eyebrow">MULTI-SERVIS / CENTRUM OPERACYJNE</div>
- <h1>Centrum właściciela</h1>
- <p>Komputery klientów, diagnostyka, licencje i zlecenia serwisowe w jednym miejscu.</p>
+ <div class="eyebrow">MULTI-SERVIS / CENTRUM WŁAŚCICIELA</div>
+ <h1>Pulpit</h1>
+ <p>Krótki przegląd sytuacji. Szczegóły otwieraj w osobnych modułach.</p>
  {notice}
  <div class="metrics">
  {metric("Aktywne komputery","124","blue")}
- {metric("Diagnostyka serwisowa","7","gold")}
  {metric("Wymagają uwagi","3","red")}
- {metric("Nowe zlecenia","11","green")}
+ {metric("Krytyczne","2","red")}
+ {metric("Oczekujące instalacje","7","gold")}
+ {metric("Nieodczytane powiadomienia","5","blue")}
+ {metric("Otwarte zgłoszenia","3","green")}
  </div>
 </section>
-{section("Urządzenia wymagające uwagi","Zdarzenia i historia kontaktu w czytelnej tabeli.",
- table(["Instalacja","Sprzęt","Uprawnienie","Wersja","Ostatni kontakt","Zdarzenia","Uwagi"],rows))}
-{section("Szybki dostęp","Przegląd pozostałych obszarów bez przeładowywania tej samej siatki kafli.",
- '<div class="detail-facts"><div class="detail-fact"><b>Zlecenia</b><span>Naprawy, zdjęcia i statusy</span></div><div class="detail-fact"><b>Telemetria</b><span>Wzorce problemów</span></div><div class="detail-fact"><b>Licencje</b><span>Standard · Pro · Serwis</span></div></div>')}
+<section class="card">
+ <div class="section-head"><div><div class="eyebrow">PRZEJDŹ DO MODUŁU</div>
+ <h2>Twoje obszary pracy</h2><p>Każdy moduł ma własną stronę i odpowiada za inne zadanie.</p></div></div>
+ <div class="hub-grid">
+ <a class="hub-tile" href="/multiguard/panel/computers">
+  <span class="hub-symbol">▤</span><strong>Komputery</strong><span>Lista instalacji, zdarzenia i historia napraw</span>
+  <small>88 Standard · 36 Pro →</small></a>
+ <a class="hub-tile" href="/multiguard/panel/service">
+  <span class="hub-symbol">◇</span><strong>Zlecenia serwisowe</strong><span>Statusy napraw, zdjęcia, dokumentacja, kwoty</span>
+  <small>Otwórz rejestr zleceń →</small></a>
+ <a class="hub-tile" href="/multiguard/panel/telemetry">
+  <span class="hub-symbol">⌁</span><strong>Telemetria</strong><span>Analiza zgłaszanych usterek i anomalii</span>
+  <small>Otwórz zdarzenia →</small></a>
+ <a class="hub-tile" href="/multiguard/panel/licenses">
+  <span class="hub-symbol">▣</span><strong>Licencje</strong><span>Standard, Pro i przypisanie instalacji</span>
+  <small>Otwórz licencje →</small></a>
+ </div>
+</section>
+<section class="card summary-footnote">
+ <div class="section-head"><div><h2>Stan komunikacji</h2>
+ <p>Brak raportu nie oznacza potwierdzonego odinstalowania.</p></div></div>
+ <div class="detail-facts">
+ <div class="detail-fact"><b>Brak kontaktu ponad 7 dni</b><span>8</span></div>
+ <div class="detail-fact"><b>Instalacje oczekujące</b><span>7</span></div>
+ </div>
+</section>
 """
 inventory=f"""
 <section class="card panel-hero computers-hero">
