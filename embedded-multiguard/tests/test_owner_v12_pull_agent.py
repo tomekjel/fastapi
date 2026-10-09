@@ -49,7 +49,10 @@ class AgentTests(unittest.TestCase):
         self.tmp.cleanup()
     def fetch(self,url,limit=agent.MAX_BYTES):
         self.fetch_calls.append(url)
+        if "/branches/" in url:
+            return {"commit":{"sha":"c"*40}}
         if "raw.githubusercontent.com" in url:
+            assert "/"+("c"*40)+"/" in url, "Manifest must use immutable commit ref"
             return dict(self.manifest)
         if "/actions/workflows/" in url:
             return {"workflow_runs":[{
@@ -71,7 +74,9 @@ class AgentTests(unittest.TestCase):
     def test_noop_never_restarts_production(self):
         self.assertEqual(agent.poll(self.fetch,self.runner),"NO_CHANGE")
         self.assertEqual(self.runner_calls,[])
-        self.assertEqual(len(self.fetch_calls),1)
+        self.assertEqual(len(self.fetch_calls),2)
+        self.assertIn("/branches/",self.fetch_calls[0])
+        self.assertIn("/"+("c"*40)+"/",self.fetch_calls[1])
 
     def test_one_approved_web_release_runs_once_and_records_state(self):
         self.manifest.update(sequence=1,target_sha=NEW)
