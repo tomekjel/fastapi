@@ -925,6 +925,20 @@ def _panel_dt(value: Any) -> str:
         return _panel_h(value)
 
 
+def _human_license_state(raw: Any) -> str:
+    return {
+        "SERVICE_TEST":"Tryb serwisowy",
+        "WORKSHOP":"Tryb warsztatowy",
+        "UNASSIGNED":"Nieprzypisana",
+        "PENDING_ACCEPTANCE":"Oczekuje na akceptację",
+        "ACTIVE":"Aktywna",
+        "EXPIRED":"Wygasła",
+        "REVOKED":"Cofnięta",
+        "UNKNOWN":"Nieznana",
+        "ERROR":"Błąd",
+    }.get(str(raw or "").upper(), "Nieznana")
+
+
 def _device_label(row: Any) -> str:
     parts = [
         str(row.get("manufacturer") or "").strip(),
@@ -1459,7 +1473,7 @@ def multi_guard_panel_computers(
                 <b>{_panel_h(row['friendly_name'] or _device_label(row))}</b><br>
                 <span class="muted">{_panel_h(row['serial_number'] or row['hostname'] or '')}</span>{owner_attention}
               </td>
-              <td><span class="badge {'mg-gold' if plan=='PRO' else 'mg-red'}">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(row['lifecycle'])}</span></td>
+              <td><span class="badge {'mg-gold' if plan=='PRO' else 'mg-red'}">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(_human_license_state(row['lifecycle']))}</span></td>
               <td><span class="badge {health_class}">{_panel_h(health)}</span></td>
               <td>{_panel_h(row['app_version'] or '—')}</td>
               <td><span class="presence-label"><span class="presence-dot presence-{presence_style}" aria-hidden="true"></span>{_panel_h(presence_label)}</span></td>
@@ -1707,7 +1721,7 @@ def multi_guard_panel_device(
           <a class="button-link compact" href="/multiguard/panel/dashboard#devices">← Wróć do komputerów</a>
           <h1>{_panel_h(_short_installation_id(row['installation_external_id']))} — {_panel_h(own_label or _device_label(row))}</h1>
           <div class="detail-grid">
-            <div><b>Licencja</b><span>{_panel_h(row['plan_code'])} / {_panel_h(row['lifecycle'])}</span></div>
+            <div><b>Licencja</b><span>{_panel_h(row['plan_code'])} / {_panel_h(_human_license_state(row['lifecycle']))}</span></div>
             <div><b>Wersja Multi-Guard</b><span>{_panel_h(row['app_version'] or '—')}</span></div>
             <div><b>Kanał</b><span>{_panel_h(row['release_channel'] or 'STABLE')}</span></div>
             <div><b>Stan</b><span>{_panel_h(row['health_level'] or '—')}</span></div>
