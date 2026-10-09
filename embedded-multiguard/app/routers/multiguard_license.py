@@ -119,6 +119,14 @@ class GenerateLicenseRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ExtendLicenseRequest(BaseModel):
+    operation_id: uuid.UUID = Field(alias="operationId")
+    months: int
+    payment_confirmed: bool = Field(default=False, alias="paymentConfirmed")
+
+    model_config = {"populate_by_name": True}
+
+
 class ReleaseChannelRequest(BaseModel):
     release_channel: str = Field(alias="releaseChannel")
 
@@ -472,6 +480,22 @@ CREATE INDEX IF NOT EXISTS idx_guard_license_links_device
     ON guard.license_links(service_device_id);
 CREATE INDEX IF NOT EXISTS idx_guard_license_links_lifecycle
     ON guard.license_links(lifecycle);
+
+CREATE TABLE IF NOT EXISTS guard.license_extensions (
+    id UUID PRIMARY KEY,
+    license_link_id UUID NOT NULL
+        REFERENCES guard.license_links(id) ON DELETE RESTRICT,
+    keygate_license_id TEXT NOT NULL,
+    months INTEGER NOT NULL CHECK (months IN (3,6,12)),
+    previous_valid_until TIMESTAMPTZ NOT NULL,
+    new_valid_until TIMESTAMPTZ NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('WEB','ANDROID')),
+    payment_confirmed BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (new_valid_until > previous_valid_until)
+);
+CREATE INDEX IF NOT EXISTS idx_guard_license_extensions_license
+    ON guard.license_extensions(license_link_id,created_at DESC);
 
 CREATE TABLE IF NOT EXISTS guard.pending_installations (
     installation_id UUID PRIMARY KEY,
@@ -2117,3 +2141,206 @@ def rebind_reception_license(
         "licenseKey": license_key,
         "message": "Licencja gotowa do instalacji na nowym komputerze. Data końcowa nie została zmieniona.",
     }
+
+
+def _extend_active_license(
+    reception_id: uuid.UUID,
+    months: int,
+    operation_id: uuid.UUID,
+    *,
+    source: str,
+    payment_confirmed: bool,
+) -> dict[str, Any]:
+    """Append time to existing expiry, never to purchase date.
+
+    Serialised per licence, idempotent by operation UUID, auditable.
+    The KeyGate operation sets an absolute date rather than adding a period,
+    so a retry after a partial failure cannot double-add time. A signed
+    refreshed licence reaches the Windows client on its next sync.
+    """
+    if months not in (3, 6, 12):
+        raise HTTPException(400, "Przedłużenie obejmuje 3, 6 albo 12 miesięcy.")
+    if not payment_confirmed:
+        raise HTTPException(400, "Potwierdź otrzymanie płatności od klienta.")
+    if source not in {"WEB", "ANDROID"}:
+        raise HTTPException(400, "Nieprawidłowe źródło operacji.")
+    _ensure_schema()
+    with engine.begin() as connection:
+        # Lock the row before checking the existing operation, so two
+        # concurrent requests serialize even with distinct request IDs.
+        link = connection.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE reception_id=:id FOR UPDATE
+        """), {"id": reception_id}).mappings().first()
+        if not link:
+            raise HTTPException(404, "Zlecenie nie ma licencji Multi-Guard.")
+        link = _normalize_link(dict(link))
+        earlier = connection.execute(text("""
+            SELECT months,previous_valid_until,new_valid_until,
+                   license_link_id,created_at
+            FROM guard.license_extensions
+            WHERE id=:id
+        """), {"id": operation_id}).mappings().first()
+        if earlier:
+            if earlier["license_link_id"] != link["id"] or int(earlier["months"]) != months:
+                raise HTTPException(409, "Identyfikator operacji został już wykorzystany.")
+            return {
+                "status": "ALREADY_EXTENDED",
+                "operationId": str(operation_id),
+                "months": months,
+                "oldValidUntil": _iso(earlier["previous_valid_until"]),
+                "newValidUntil": _iso(earlier["new_valid_until"]),
+                "edition": ("PRO" if link["plan_code"] == "multi_guard_pro" else "STANDARD"),
+            }
+
+        if link["lifecycle"] != "ACTIVE":
+            raise HTTPException(409, "Przedłużyć można wyłącznie aktywną licencję klienta.")
+        end = link.get("valid_until")
+        if end is None or end <= _utcnow():
+            raise HTTPException(409, "Licencja wygasła — wymagane osobne odnowienie.")
+        new_end = _add_months(end, months)
+        # Absolute-date mutation in KeyGate deliberately executes while
+        # holding the local row lock. If database commit later fails, a
+        # same-ID retry will safely request this absolute date again.
+        _keygate_set_valid_until(link["keygate_license_id"], new_end)
+        updated = connection.execute(text("""
+            UPDATE guard.license_links
+            SET valid_until=:end, updated_at=now()
+            WHERE id=:id
+            RETURNING *
+        """), {"id": link["id"], "end": new_end}).mappings().one()
+        _update_installation_mirror(connection, _normalize_link(dict(updated)))
+        connection.execute(text("""
+            INSERT INTO guard.license_extensions (
+                id,license_link_id,keygate_license_id,months,
+                previous_valid_until,new_valid_until,source,payment_confirmed
+            ) VALUES (
+                :op,:link,:license_id,:months,:old_end,:new_end,:source,TRUE
+            )
+        """), {
+            "op": operation_id, "link": link["id"],
+            "license_id": link["keygate_license_id"], "months": months,
+            "old_end": end, "new_end": new_end, "source": source,
+        })
+        return {
+            "status": "EXTENDED",
+            "operationId": str(operation_id),
+            "months": months,
+            "oldValidUntil": _iso(end),
+            "newValidUntil": _iso(new_end),
+            "edition": ("PRO" if link["plan_code"] == "multi_guard_pro" else "STANDARD"),
+        }
+
+
+@router.post("/multiguard/licenses/receptions/{reception_id}/extend")
+def extend_reception_license(
+    reception_id: uuid.UUID,
+    body: ExtendLicenseRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    """OWNER Android/API endpoint. STAFF may not change paid licences."""
+    return _extend_active_license(
+        reception_id, body.months, body.operation_id,
+        source="ANDROID", payment_confirmed=body.payment_confirmed,
+    )
+
+
+@router.get(
+    "/multiguard/panel/license/{reception_id}/extend",
+    response_class=HTMLResponse,
+)
+def panel_extend_license(
+    reception_id: uuid.UUID,
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _csrf_token
+    import time
+
+    _ensure_schema()
+    link = _link_by_reception_id(reception_id)
+    if not link:
+        raise HTTPException(404, "Nie znaleziono licencji dla tego zlecenia.")
+    link = _normalize_link(link)
+    if link["lifecycle"] != "ACTIVE" or not link.get("valid_until"):
+        raise HTTPException(409, "Licencja nie jest aktualnie aktywna.")
+    with engine.connect() as connection:
+        history = connection.execute(text("""
+            SELECT months,previous_valid_until,new_valid_until,created_at
+            FROM guard.license_extensions WHERE license_link_id=:id
+            ORDER BY created_at DESC LIMIT 30
+        """), {"id": link["id"]}).mappings().all()
+    history_html = "".join(
+        f'<tr><td>{_panel_escape(h["created_at"].strftime("%d.%m.%Y"))}</td>'
+        f'<td>+{int(h["months"])} mies.</td>'
+        f'<td>{_panel_escape(h["previous_valid_until"].strftime("%d.%m.%Y"))}</td>'
+        f'<td>{_panel_escape(h["new_valid_until"].strftime("%d.%m.%Y"))}</td></tr>'
+        for h in history
+    )
+    token = _csrf_token(int(time.time() // 3600))
+    operation = uuid.uuid4()
+    name = _panel_escape(link["reception_number"])
+    date_txt = _panel_escape(link["valid_until"].strftime("%d.%m.%Y"))
+    edition = "Pro" if link["plan_code"] == "multi_guard_pro" else "Standard"
+    return HTMLResponse(_panel_html(f"""
+        <section class="card">
+          <div class="eyebrow">MULTI-GUARD / PRZEDŁUŻENIE UPRAWNIEŃ KLIENTA</div>
+          <h1>Przedłuż licencję</h1>
+          <p><strong>{name}</strong> · Multi-Guard {edition}</p>
+          <p>Aktualna data wygaśnięcia: <strong>{date_txt}</strong>.</p>
+          <p>Nowy okres zostanie dodany do obecnej daty końcowej,
+             nie do dnia płatności. Nie wymaga ponownej instalacji
+             ani ponownej akceptacji niezmienionych dokumentów.</p>
+          <form method="post" action="/multiguard/panel/license/{reception_id}/extend">
+            <input type="hidden" name="csrf_token" value="{token}">
+            <input type="hidden" name="operation_id" value="{operation}">
+            <label>Dolicz okres
+              <select name="months" required>
+                <option value="3">3 miesiące</option>
+                <option value="6">6 miesięcy</option>
+                <option value="12" selected>12 miesięcy</option>
+              </select>
+            </label>
+            <label><input type="checkbox" name="payment_confirmed" value="yes" required>
+              Potwierdzam otrzymanie płatności i przedłużenie licencji</label>
+            <button type="submit">POTWIERDŹ PRZEDŁUŻENIE</button>
+          </form>
+        </section>
+        <section class="card">
+          <h2>Historia przedłużeń</h2>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Data operacji</th><th>Okres</th><th>Było ważne do</th>
+            <th>Nowa data końcowa</th></tr></thead>
+            <tbody>{history_html or '<tr><td colspan="4">Brak przedłużeń.</td></tr>'}</tbody>
+          </table></div>
+        </section>
+    """), headers={"Cache-Control": "private, no-store"})
+
+
+@router.post(
+    "/multiguard/panel/license/{reception_id}/extend",
+    response_class=HTMLResponse,
+)
+def panel_extend_license_post(
+    reception_id: uuid.UUID,
+    operation_id: uuid.UUID = Form(...),
+    months: int = Form(...),
+    csrf_token: str = Form(...),
+    payment_confirmed: str = Form(""),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowy formularz.")
+    result = _extend_active_license(
+        reception_id, months, operation_id,
+        source="WEB", payment_confirmed=(payment_confirmed == "yes"),
+    )
+    return HTMLResponse(_panel_html(f"""
+      <section class="card"><h1>Licencja przedłużona</h1>
+        <p>Nowa data ważności: <strong>{_panel_escape(result["newValidUntil"][:10])}</strong></p>
+        <p>{_panel_escape(result["edition"])} · +{int(result["months"])} miesięcy</p>
+        <p>Multi-Guard pobierze nową datę po kolejnym połączeniu z serwerem.</p>
+        <a class="button-link" href="/multiguard/panel/license/{reception_id}/extend">
+          HISTORIA LICENCJI</a></section>
+    """), headers={"Cache-Control": "private, no-store"})
