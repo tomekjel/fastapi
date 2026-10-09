@@ -18,6 +18,11 @@ from sqlalchemy import text
 from app.database import engine
 from app.security import CurrentUser, require_owner
 from app.routers.multiguard_panel_settings import owner_panel_config
+from app.routers.multiguard_panel_devices import (
+    _schema as _ensure_owner_device_schema,
+    owner_device_note,
+    owner_device_note_form,
+)
 from app.routers.multiguard_license import (
     _ensure_schema as _ensure_license_schema,
     _panel_auth,
@@ -934,6 +939,7 @@ def _fetch_device_rows(
 ):
 
     _ensure_schema()
+    _ensure_owner_device_schema()
     limit = min(max(int(limit), 1), 500)
     offset = min(max(int(offset), 0), 500000)
     silence_days = min(max(int(silence_days), 1), 90)
@@ -951,6 +957,7 @@ def _fetch_device_rows(
                     gi.valid_until,
                     gi.last_seen_at,
                     au.reported_at AS uninstall_reported_at,
+                    COALESCE(owner_notes.priority,'NORMAL') AS owner_priority,
                     gi.health_level,
                     gi.app_version,
                     gi.release_channel,
@@ -973,6 +980,8 @@ def _fetch_device_rows(
                     ON d.id=gi.service_device_id
                 LEFT JOIN guard.agent_uninstalls au
                     ON au.installation_id=gi.id
+                LEFT JOIN guard.owner_device_notes owner_notes
+                    ON owner_notes.installation_id=gi.id
                 LEFT JOIN guard.license_links ll
                     ON ll.installation_id=gi.installation_external_id
                 LEFT JOIN LATERAL (
@@ -1045,6 +1054,8 @@ def _fetch_device_rows(
                     -- Client-initiated uninstalls stay accessible, at the
                     -- bottom of the inventory instead of disappearing.
                     CASE WHEN au.installation_id IS NOT NULL THEN 1 ELSE 0 END,
+                    CASE COALESCE(owner_notes.priority,'NORMAL')
+                        WHEN 'URGENT' THEN 0 WHEN 'WATCH' THEN 1 ELSE 2 END,
                     CASE gi.health_level
                         WHEN 'RED' THEN 0
                         WHEN 'ORANGE' THEN 1
@@ -1380,6 +1391,13 @@ def multi_guard_panel_dashboard(
             "GREEN": "good",
         }.get(health, "muted")
         plan = "PRO" if str(row["plan_code"]).upper() == "PRO" else "STANDARD"
+        owner_priority = str(row["owner_priority"] or "NORMAL")
+        owner_attention = (
+            '<br><span class="badge mg-red">PILNE — OBSERWUJ</span>'
+            if owner_priority=="URGENT" else
+            ('<br><span class="badge mg-gold">DO OBSERWACJI</span>'
+             if owner_priority=="WATCH" else "")
+        )
         rows_html.append(
             f"""
             <tr>
@@ -1390,7 +1408,7 @@ def multi_guard_panel_dashboard(
               </td>
               <td>
                 <b>{_panel_h(_device_label(row))}</b><br>
-                <span class="muted">{_panel_h(row['serial_number'] or row['hostname'] or '')}</span>
+                <span class="muted">{_panel_h(row['serial_number'] or row['hostname'] or '')}</span>{owner_attention}
               </td>
               <td><span class="badge">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(row['lifecycle'])}</span></td>
               <td><span class="badge {health_class}">{_panel_h(health)}</span></td>
@@ -1611,6 +1629,8 @@ def multi_guard_panel_device(
         row["last_seen_at"], row["uninstall_reported_at"],
         settings["contact_recent_hours"], settings["contact_delayed_days"],
     )
+    own_note_data = owner_device_note(iid)
+    note_edit_html = owner_device_note_form(iid, own_note_data)
     event_rows = []
     for event in events:
         payload = event["payload"] or {}
@@ -1704,6 +1724,8 @@ def multi_guard_panel_device(
             <div><b>Ważność</b><span>{_panel_dt(row['valid_until'])}</span></div>
           </div>
         </section>
+
+        {note_edit_html}
 
         <section class="card" id="service-history">
           <div class="section-head">
