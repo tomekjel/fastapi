@@ -1,0 +1,33 @@
+name: Multi-Guard issued handover — source validation only
+on:
+  push:
+    branches: [feature/multiguard-issued-acceptance]
+    paths:
+      - 'embedded-multiguard/app/routers/multiguard_license.py'
+      - '.github/workflows/multiguard-issued-ci.yml'
+permissions:
+  contents: read
+jobs:
+  source-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse Python source without importing production settings
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          path=Path("embedded-multiguard/app/routers/multiguard_license.py")
+          text=path.read_text(encoding="utf-8")
+          tree=ast.parse(text, filename=str(path))
+          names={getattr(n,"name",None) for n in ast.walk(tree)}
+          for name in ("_issue_equipment_with_license","web_issue_reception_with_guard",
+                       "issue_reception_with_guard","approve_reception_license",
+                       "acceptance","provision"):
+              assert name in names, f"Missing route/function: {name}"
+          assert "PENDING_ACCEPTANCE" in text and "SERVICE_TEST" in text
+          assert 'SET status=\'COMPLETED\'' in text
+          assert 'valid_until = _add_months(started' in text
+          print("PASS: syntax, handover route, acceptance start-date contract")
+          PY

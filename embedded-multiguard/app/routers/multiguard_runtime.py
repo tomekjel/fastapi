@@ -1292,6 +1292,7 @@ def multi_guard_panel_dashboard(
         <section class="card">
           <h1>Multi-Guard — Centrum właściciela</h1>
           <p>Widok komputerowy do zarządzania flotą, zgłoszeniami, telemetrią i licencjami.</p>
+          <p><a class="button-link" href="/multiguard/panel">LICENCJE / WYDANO SPRZĘT</a></p>
           <div class="metrics">{metrics_html}</div>
         </section>
 
