@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "scope": "owner-web-only",
+  "sequence": 0,
+  "target_sha": "892a8c66e1e3cae662136ddf1360bf880b785ba8",
+  "summary": "Baseline: already installed OWNER V12. Automatic deployment is not activated by this manifest."
+}
