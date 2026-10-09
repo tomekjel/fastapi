@@ -524,6 +524,24 @@ CREATE INDEX IF NOT EXISTS idx_guard_pending_installations_serial
     ON guard.pending_installations(serial_number)
     WHERE serial_number IS NOT NULL AND serial_number <> '';
 
+CREATE TABLE IF NOT EXISTS guard.workshop_grants (
+    installation_id UUID PRIMARY KEY
+        REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+    edition TEXT NOT NULL CHECK (edition IN ('STANDARD','PRO')),
+    release_channel TEXT NOT NULL DEFAULT 'STABLE'
+        CHECK (release_channel IN ('STABLE','PILOT')),
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS guard.workshop_grant_audit (
+    id BIGSERIAL PRIMARY KEY,
+    installation_id UUID NOT NULL,
+    before_state JSONB NOT NULL,
+    after_state JSONB NOT NULL,
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS guard.installations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     service_device_id UUID NOT NULL REFERENCES core.devices(id) ON DELETE CASCADE,
@@ -666,6 +684,97 @@ def _authenticate_pending(
         raise HTTPException(401, "Nieprawidłowe poświadczenie wykrywania instalacji.")
 
     return pending
+
+
+def _workshop_grant(installation_id: uuid.UUID) -> dict[str, Any] | None:
+    _ensure_schema()
+    with engine.connect() as connection:
+        row = connection.execute(text("""
+            SELECT * FROM guard.workshop_grants
+            WHERE installation_id=:id
+        """), {"id": installation_id}).mappings().first()
+    return dict(row) if row else None
+
+
+def _signed_workshop_grant(pending: dict[str, Any],
+                           grant: dict[str, Any]) -> dict[str, str]:
+    """Ephemeral, installation-bound entitlement; never touches KeyGate.
+
+    Workshop permission is open-ended on the server, but each client lease
+    is only trusted for a short offline grace period and must be refreshed.
+    """
+    plan = ("multi_guard_pro" if grant["edition"] == "PRO" else "multi_guard")
+    payload = json.dumps({
+        "schemaVersion": 1,
+        "licenseId": "WORKSHOP-" + str(pending["installation_id"]),
+        "serviceDeviceId": None,
+        "installationId": str(pending["installation_id"]),
+        "deviceId": str(pending["device_id"]),
+        "planCode": plan,
+        "releaseChannel": grant["release_channel"],
+        "lifecycle": "WORKSHOP",
+        "validFrom": None,
+        "validUntil": None,
+        "acceptedAt": None,
+        "acceptedDocuments": [],
+        "serverTime": _iso(_utcnow()),
+    }, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    signature = _signing_key().sign(payload.encode("utf-8"))
+    return {
+        "payload": payload,
+        "signatureB64": base64.b64encode(signature).decode("ascii"),
+    }
+
+
+def _set_workshop_grant(
+    installation_id: uuid.UUID,
+    edition: str,
+    channel: str,
+    enabled: bool,
+) -> dict[str, Any]:
+    _ensure_schema()
+    edition = edition.strip().upper()
+    channel = channel.strip().upper()
+    if edition not in {"STANDARD", "PRO"}:
+        raise HTTPException(400, "Edycja musi być Standard albo Pro.")
+    if channel not in {"STABLE", "PILOT"}:
+        raise HTTPException(400, "Kanał musi być stabilny albo Beta.")
+    with engine.begin() as con:
+        pending = con.execute(text("""
+            SELECT installation_id,status FROM guard.pending_installations
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id":installation_id}).mappings().first()
+        if not pending:
+            raise HTTPException(404, "Instalacja nie została zgłoszona do Multi-Servis.")
+        if str(pending["status"]) in ("ASSIGNED", "PROVISIONED"):
+            raise HTTPException(409,
+                "Komputer ma już przypisaną licencję klienta. "
+                "Nie można równocześnie uruchomić trybu warsztatowego.")
+        existing = con.execute(text("""
+            SELECT edition,release_channel,enabled FROM guard.workshop_grants
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id": installation_id}).mappings().first()
+        previous = dict(existing) if existing else None
+        current = {"edition":edition,"release_channel":channel,"enabled":enabled}
+        con.execute(text("""
+            INSERT INTO guard.workshop_grants(
+                installation_id,edition,release_channel,enabled
+            ) VALUES (:id,:edition,:channel,:enabled)
+            ON CONFLICT (installation_id) DO UPDATE
+              SET edition=EXCLUDED.edition,
+                  release_channel=EXCLUDED.release_channel,
+                  enabled=EXCLUDED.enabled,
+                  updated_at=now()
+        """), {"id":installation_id,"edition":edition,"channel":channel,"enabled":enabled})
+        if previous != current:
+            con.execute(text("""
+                INSERT INTO guard.workshop_grant_audit(
+                    installation_id,before_state,after_state
+                ) VALUES (:id,CAST(:before AS jsonb),CAST(:after AS jsonb))
+            """), {"id":installation_id,
+                    "before":json.dumps(previous),
+                    "after":json.dumps(current)})
+    return current
 
 
 def _pending_public(
@@ -1212,6 +1321,15 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
 
     reception_id = pending.get("assigned_reception_id")
     if not reception_id or pending["status"] == "WAITING":
+        grant = _workshop_grant(pending["installation_id"])
+        if grant and grant["enabled"]:
+            return {
+                "assigned": False,
+                "status": "WORKSHOP",
+                "releaseChannel": grant["release_channel"],
+                "workshopLease": _signed_workshop_grant(pending, grant),
+                "serverTime": _iso(_utcnow()),
+            }
         return {
             "assigned": False,
             "status": pending["status"],
@@ -1762,6 +1880,41 @@ def assign_pending_installation(
 
 
 
+def _workshop_csrf() -> str:
+    from app.routers.multiguard_panel_settings import _csrf_token
+    import time
+    return _csrf_token(int(time.time() // 3600))
+
+
+@router.post("/multiguard/panel/pending/{installation_id}/workshop",
+             response_class=HTMLResponse)
+def panel_update_workshop(
+    installation_id: uuid.UUID,
+    edition: str = Form("STANDARD"),
+    release_channel: str = Form("STABLE"),
+    action: str = Form("enable"),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowy formularz.")
+    if action not in {"enable", "disable"}:
+        raise HTTPException(400, "Nieprawidłowa operacja.")
+    result = _set_workshop_grant(
+        installation_id, edition, release_channel, action == "enable",
+    )
+    return HTMLResponse(_panel_html(
+        '<section class="card"><h1>Tryb warsztatowy zapisany</h1>'
+        '<p>Komputer pobierze zmienione uprawnienia po kolejnym kontakcie '
+        'z Multi-Servis. Nie uruchomiono żadnej licencji czasowej.</p>'
+        f'<p>Stan: {"WŁĄCZONY" if result["enabled"] else "ZAKOŃCZONY"} '
+        f'· {result["edition"]}</p>'
+        f'<a class="button-link" href="/multiguard/panel/pending/{installation_id}">'
+        'WRÓĆ DO KOMPUTERA</a></section>'
+    ), headers={"Cache-Control":"private, no-store"})
+
+
 @router.get(
     "/multiguard/panel/pending/{installation_id}",
     response_class=HTMLResponse,
@@ -1806,6 +1959,30 @@ def multiguard_panel_pending(
             • host: {_panel_escape(public['hostname'] or '—')}
           </p>
           {alias_form}
+          <section class="card" id="workshop-mode">
+            <div class="eyebrow">BEZ LICENCJI CZASOWEJ</div>
+            <h2>Tryb warsztatowy</h2>
+            <p>Może działać na komputerze warsztatowym albo u klienta.
+               Nie wymaga zlecenia i nie nalicza 3/6/12 miesięcy.
+               Dostęp wymaga odnawiania potwierdzenia przez serwer.</p>
+            <form method="post" action="/multiguard/panel/pending/{installation_id}/workshop">
+              <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+              <label>Edycja <select name="edition">
+                <option value="STANDARD">Standard</option>
+                <option value="PRO">Pro</option>
+              </select></label>
+              <label>Kanał <select name="release_channel">
+                <option value="STABLE">Stabilna</option>
+                <option value="PILOT">Beta</option>
+              </select></label>
+              <label>Akcja <select name="action">
+                <option value="enable">Włącz / zmień edycję</option>
+                <option value="disable">Zakończ tryb warsztatowy</option>
+              </select></label>
+              <button type="submit">ZAPISZ TRYB WARSZTATOWY</button>
+            </form>
+          </section>
+          <section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>
           <form method="post" action="/multiguard/panel/pending/{installation_id}/assign">
             <label>Numer zlecenia Multi-Servis
               <input name="reception_number" placeholder="np. MS-2026-00123" required>
@@ -1832,7 +2009,7 @@ def multiguard_panel_pending(
               </label>
             </div>
             <button type="submit">PRZYPISZ I PRZYGOTUJ LICENCJĘ</button>
-          </form>
+          </form></section>
         </section>
         """
     )
