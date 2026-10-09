@@ -1410,7 +1410,7 @@ def multi_guard_panel_dashboard(
                 <b>{_panel_h(_device_label(row))}</b><br>
                 <span class="muted">{_panel_h(row['serial_number'] or row['hostname'] or '')}</span>{owner_attention}
               </td>
-              <td><span class="badge">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(row['lifecycle'])}</span></td>
+              <td><span class="badge {'mg-gold' if plan=='PRO' else 'mg-red'}">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(row['lifecycle'])}</span></td>
               <td><span class="badge {health_class}">{_panel_h(health)}</span></td>
               <td>{_panel_h(row['app_version'] or '—')}</td>
               <td><span class="presence-label"><span class="presence-dot presence-{presence_style}" aria-hidden="true"></span>{_panel_h(presence_label)}</span></td>
@@ -2176,7 +2176,7 @@ def multi_guard_panel_licenses(
             f"""
             <tr>
               <td>{_panel_h(row['reception_number'])}</td>
-              <td><span class="badge">{edition}</span></td>
+              <td><span class="badge {'mg-gold' if edition=='PRO' else 'mg-red'}">{edition}</span></td>
               <td>{_panel_h(row['duration_months'])} mies.</td>
               <td>{_panel_h(row['release_channel'] or 'STABLE')}</td>
               <td>{_panel_h(row['lifecycle'])}</td>
