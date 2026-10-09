@@ -51,7 +51,7 @@ dashboard=f"""
 <section class="card panel-hero dashboard-hero">
  <div class="eyebrow">MULTI-SERVIS / CENTRUM WŁAŚCICIELA</div>
  <h1>Pulpit</h1>
- <p>Krótki przegląd sytuacji. Szczegóły otwieraj w osobnych modułach.</p>
+ <p>Aktualny stan serwisu i Multi-Guard. Kliknij oczekujące instalacje, aby przypisać licencję.</p>
  {notice}
  <div class="metrics">
  {metric("Aktywne komputery","124","blue")}
@@ -63,8 +63,7 @@ dashboard=f"""
  </div>
 </section>
 <section class="card">
- <div class="section-head"><div><div class="eyebrow">PRZEJDŹ DO MODUŁU</div>
- <h2>Twoje obszary pracy</h2><p>Każdy moduł ma własną stronę i odpowiada za inne zadanie.</p></div></div>
+ <div class="section-head"><div><div class="eyebrow">SKRÓTY</div><h2>Szybki dostęp</h2></div></div>
  <div class="hub-grid">
  <a class="hub-tile" href="/multiguard/panel/computers">
   <span class="hub-symbol">▤</span><strong>Komputery</strong><span>Lista instalacji, zdarzenia i historia napraw</span>
@@ -72,20 +71,12 @@ dashboard=f"""
  <a class="hub-tile" href="/multiguard/panel/service">
   <span class="hub-symbol">◇</span><strong>Zlecenia serwisowe</strong><span>Statusy napraw, zdjęcia, dokumentacja, kwoty</span>
   <small>Otwórz rejestr zleceń →</small></a>
- <a class="hub-tile" href="/multiguard/panel/telemetry">
-  <span class="hub-symbol">⌁</span><strong>Telemetria</strong><span>Analiza zgłaszanych usterek i anomalii</span>
-  <small>Otwórz zdarzenia →</small></a>
+ <a class="hub-tile" href="/multiguard/panel/statistics">
+  <span class="hub-symbol">▥</span><strong>Statystyki</strong><span>Finanse, materiały z dawcy i rozliczenia</span>
+  <small>Dostęp właściciela →</small></a>
  <a class="hub-tile" href="/multiguard/panel/licenses">
   <span class="hub-symbol">▣</span><strong>Licencje</strong><span>Standard, Pro i przypisanie instalacji</span>
   <small>Otwórz licencje →</small></a>
- </div>
-</section>
-<section class="card summary-footnote">
- <div class="section-head"><div><h2>Stan komunikacji</h2>
- <p>Brak raportu nie oznacza potwierdzonego odinstalowania.</p></div></div>
- <div class="detail-facts">
- <div class="detail-fact"><b>Brak kontaktu ponad 7 dni</b><span>8</span></div>
- <div class="detail-fact"><b>Instalacje oczekujące</b><span>7</span></div>
  </div>
 </section>
 """
@@ -146,19 +137,62 @@ telemetry=f"""
 service=f"""
 <section class="card panel-hero service-hero">
  <div class="eyebrow">MULTI-SERVIS / OBSŁUGA SERWISOWA</div>
- <h1>Zlecenia i historia napraw</h1>
- <p>Jeden widok usług i dokumentacji fizycznych urządzeń.</p>{notice}
+ <h1>Zlecenia serwisowe</h1>
+ <p>Domyślnie wyświetlamy zlecenia wymagające pracy. Zbiorcze kwoty są w Statystykach.</p>{notice}
  <div class="metrics">
  {metric("W naprawie","18","blue")}
  {metric("Gotowe do odbioru","5","gold")}
  {metric("Wydane","104","green")}
  </div>
 </section>
-{section("Zlecenia","Wyszukaj numer, model, klienta lub telefon.",
- table(["Numer","Sprzęt","Status","Przyjęto","Kwota"],[
- ("MS-2026-211","Lenovo ThinkPad T14",'<span class="badge mg-gold">W naprawie</span>',"09.10.2026","—"),
- ("MS-2026-208","HP Pavilion",'<span class="badge mg-green">Wydane</span>',"07.10.2026","280 zł"),
- ("MS-2026-195","Dell Latitude",'<span class="badge mg-gold">Do odbioru</span>',"02.10.2026","—")]))}
+<section class="card">
+ <div class="section-head"><div><h2>W trakcie naprawy</h2><p>Lista aktywnych zleceń · 20 na stronę</p></div></div>
+ <div class="filter-tabs">
+  <span class="filter-tab selected">W trakcie naprawy</span><span class="filter-tab">Gotowe do odbioru</span>
+  <span class="filter-tab">Wydane</span><span class="filter-tab">Anulowane</span>
+  <span class="filter-tab">Wszystkie</span>
+ </div>
+ {table(["Numer","Sprzęt","Klient","Status","Przyjęto"],[
+  ("MS-2026-211","Lenovo ThinkPad T14","Przykładowy klient",'<span class="badge mg-blue">W naprawie</span>',"09.10.2026"),
+  ("MS-2026-210","Dell Latitude 5420","Przykładowy klient",'<span class="badge mg-blue">W naprawie</span>',"08.10.2026"),
+  ("MS-2026-207","Asus TUF Gaming","Przykładowy klient",'<span class="badge mg-blue">W naprawie</span>',"06.10.2026")])}
+</section>
+"""
+statistics=f"""
+<section class="card panel-hero statistics-hero">
+ <div class="eyebrow">MULTI-SERVIS / ANALITYKA WŁAŚCICIELA</div>
+ <h1>Statystyki</h1>
+ <p>Finanse wydanych napraw w okresie: <strong>październik 2026</strong>.</p>{notice}
+ <div class="filter-tabs statistics-filter-tabs">
+  <span class="filter-tab selected">Miesiąc</span><span class="filter-tab">Kwartał</span>
+  <span class="filter-tab">Rok</span><span class="filter-tab">Własny okres</span>
+ </div>
+ <div class="statistics-period-controls"><a class="button-link compact">←</a>
+   <label>Miesiąc <input type="month" value="2026-10"></label>
+   <a class="button-link compact">→</a>
+ </div>
+</section>
+<section class="card">
+ <div class="section-head"><div><h2>Podsumowanie okresu</h2>
+  <p>Osobno pokazujemy koszt zakupionych części i wartość materiałów z dawcy.</p></div></div>
+ <div class="metrics statistics-metrics">
+ {metric("Wydane zlecenia","24","blue")}
+ {metric("Przychód z usług","5 870 zł","green")}
+ {metric("Koszt materiałów","1 240 zł","red")}
+ {metric("Materiał z dawcy","460 zł","gold")}
+ {metric("Zysk rzeczywisty","4 630 zł","blue")}
+ {metric("Zysk ekonomiczny","4 170 zł","green")}
+ </div>
+</section>
+<section class="card statistics-trend">
+ <div class="section-head"><div><h2>Przychody i koszty w czasie</h2>
+  <p>Jasny pasek: przychód · czerwony: zakupione materiały.</p></div></div>
+ <div class="finance-trend-row"><span>01.10</span><div class="finance-trend-bars"><i class="finance-trend-revenue" style="width:64%"></i><i class="finance-trend-cost" style="width:15%"></i></div><b>1 540 zł</b></div>
+ <div class="finance-trend-row"><span>08.10</span><div class="finance-trend-bars"><i class="finance-trend-revenue" style="width:80%"></i><i class="finance-trend-cost" style="width:28%"></i></div><b>1 940 zł</b></div>
+ <div class="finance-trend-row"><span>15.10</span><div class="finance-trend-bars"><i class="finance-trend-revenue" style="width:45%"></i><i class="finance-trend-cost" style="width:11%"></i></div><b>1 090 zł</b></div>
+ <div class="finance-trend-row"><span>22.10</span><div class="finance-trend-bars"><i class="finance-trend-revenue" style="width:54%"></i><i class="finance-trend-cost" style="width:19%"></i></div><b>1 300 zł</b></div>
+</section>
+<details class="card statistics-table-disclosure"><summary>Pełne zestawienie okresów ▾</summary></details>
 """
 licenses=f"""
 <section class="card panel-hero license-hero">
@@ -206,7 +240,7 @@ settings=f"""
 """
 for name,body in [
   ("01-pulpit",dashboard),("02-karta-komputera",device),("08-komputery",inventory),
-  ("03-telemetria",telemetry),("04-serwis",service),
+  ("03-telemetria",telemetry),("04-serwis",service),("09-statystyki",statistics),
   ("05-licencje",licenses),("06-historia-wersji",versions),
   ("07-ustawienia",settings)
 ]:
