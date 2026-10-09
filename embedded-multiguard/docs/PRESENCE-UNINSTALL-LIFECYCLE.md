@@ -109,3 +109,23 @@ Brak sygnału NIGDY nie pozwala rozpoznać, który z tych przypadków zaszedł.
   bez wyłączania Windows Defender; ten element jeszcze niewdrożony.
 - Wydajność: test z tysiącem instalacji, dużo zdarzeń i właścicielska lista
   nie wymagają skanowania `guard.events` dla każdej pozycji.
+
+## Serwisowa licencja diagnostyczna — częstsze raportowanie
+
+- Poprawna nazwa: **SERWISOWA / DIAGNOSTYCZNA**, nie „testowa”.
+  Ten sam Multi-Guard, niezależnie od tego, czy działa w warsztacie,
+  czy u klienta, i niezależnie od edycji Standard/Pro.
+- Proponowany harmonogram specjalnie dla aktywnej licencji
+  diagnostycznej: próbki lokalnie co **5–10 sekund**, pakiet danych
+  na serwer co **60 sekund**, szczegółowe zestawienie zdarzeń co
+  **5 minut**, istotny alert możliwie natychmiast.
+- Diagnostyczny pakiet wysłany do serwera może zarazem potwierdzić
+  „ostatnio widziany” — nie potrzebuje równoległych pingów obecności.
+- Komercyjna licencja ma oszczędniejszy harmonogram, ale ważne
+  alerty też nie mogą czekać wiele godzin na kolejny heartbeat.
+- Zasada oszczędności: limity kolejki i wysyłki, pakietowanie,
+  deduplikacja błędów, ograniczenie rozmiaru i retencji danych;
+  wykrywanie problemów nie może samo pogarszać pracy sprzętu.
+- To są ZAŁOŻENIA, NIE działający kod. Obecna implementacja klienta
+  używa 15-minutowego heartbeat, nie rozróżnia jeszcze licencji
+  komercyjnej i serwisowo-diagnostycznej w wysyłaniu raportów.
