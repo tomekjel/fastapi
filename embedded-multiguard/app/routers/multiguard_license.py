@@ -2070,6 +2070,65 @@ def assign_pending_installation(
 
 
 
+
+@router.post("/multiguard/pending-installations/{installation_id}/direct")
+def assign_direct_license_api(
+    installation_id: uuid.UUID,
+    body: DirectLicenseRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    return _public_status(_assign_direct_customer_license(
+        installation_id, body.edition, body.months, body.release_channel,
+    ))
+
+
+@router.post("/multiguard/pending-installations/{installation_id}/handover")
+def handover_direct_license_api(
+    installation_id: uuid.UUID,
+    user: CurrentUser = Depends(require_owner),
+):
+    return _public_status(_handover_direct_customer(installation_id))
+
+
+@router.post("/multiguard/panel/pending/{installation_id}/direct",
+             response_class=HTMLResponse)
+def assign_direct_license_web(
+    installation_id: uuid.UUID,
+    edition: str = Form(...),
+    months: int = Form(...),
+    release_channel: str = Form("STABLE"),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Wygasły formularz.")
+    _assign_direct_customer_license(installation_id, edition, months, release_channel)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(
+        f"/multiguard/panel/pending/{installation_id}#client-license", status_code=303,
+        headers={"Cache-Control":"private, no-store"},
+    )
+
+
+@router.post("/multiguard/panel/pending/{installation_id}/handover",
+             response_class=HTMLResponse)
+def handover_direct_license_web(
+    installation_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Wygasły formularz.")
+    _handover_direct_customer(installation_id)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(
+        f"/multiguard/panel/pending/{installation_id}#client-license", status_code=303,
+        headers={"Cache-Control":"private, no-store"},
+    )
+
+
 def _workshop_csrf() -> str:
     from app.routers.multiguard_panel_settings import _csrf_token
     import time
