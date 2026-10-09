@@ -50,6 +50,7 @@ OWNER_FILES=frozenset({
     "embedded-multiguard/deploy-owner-web-v12.sh",
     "embedded-multiguard/install-owner-v12-agent.sh",
     "embedded-multiguard/deploy/owner-v12-release.json",
+    "embedded-multiguard/deploy/owner-v12-deploy.trigger",
     "embedded-multiguard/deploy/owner-v12-livecheck.trigger",
     "embedded-multiguard/deploy/owner-v12-preflight.trigger",
     "embedded-multiguard/scripts/owner_v12_pull_agent.py",
