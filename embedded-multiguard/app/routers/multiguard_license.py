@@ -955,6 +955,7 @@ button:hover{{filter:brightness(1.1)}}
   <a href="/multiguard/panel/licenses">LICENCJE</a>
   <a href="/multiguard/panel">NOWA LICENCJA</a>
   <a href="/multiguard/panel/versions">HISTORIA WERSJI</a>
+  <a href="/multiguard/panel/settings">USTAWIENIA PANELU</a>
   <a class="service-nav" href="/multiguard/panel/service">SERWIS / ZLECENIA</a>
 </nav>
 {body}
