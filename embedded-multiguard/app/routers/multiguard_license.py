@@ -1780,6 +1780,9 @@ def multiguard_panel_pending(
         raise HTTPException(404, "Nie znaleziono oczekującej instalacji.")
 
     public = _pending_public(pending)
+    from app.routers.multiguard_panel_devices import owner_friendly_name, owner_name_form
+    alias = owner_friendly_name(iid)
+    alias_form = owner_name_form(iid, alias, return_to="pending")
     device = " ".join(
         part for part in [
             public["manufacturer"].strip(),
@@ -1792,6 +1795,7 @@ def multiguard_panel_pending(
         <section class="card">
           <a href="/multiguard/panel/dashboard">← Wróć do pulpitu</a>
           <h1>Przypisz {_panel_escape(public['shortId'])}</h1>
+          <p>Własna nazwa: <strong>{_panel_escape(alias or "Nie nadano")}</strong></p>
           <p>
             <b>{_panel_escape(device)}</b>
             • wersja {_panel_escape(public['appVersion'] or '—')}
@@ -1801,6 +1805,7 @@ def multiguard_panel_pending(
             Serial: {_panel_escape(public['serialNumber'] or '—')}
             • host: {_panel_escape(public['hostname'] or '—')}
           </p>
+          {alias_form}
           <form method="post" action="/multiguard/panel/pending/{installation_id}/assign">
             <label>Numer zlecenia Multi-Servis
               <input name="reception_number" placeholder="np. MS-2026-00123" required>
