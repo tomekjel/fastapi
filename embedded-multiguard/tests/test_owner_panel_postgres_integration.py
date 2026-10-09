@@ -113,6 +113,10 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     install_b=uuid.uuid4()
     order_a=uuid.uuid4()
     order_b=uuid.uuid4()
+    order_ready=uuid.uuid4()
+    pc_ready=uuid.uuid4()
+    waiting_id=uuid.uuid4()
+    installed_ready=uuid.uuid4()
     media_a=uuid.uuid4()
     image_storage=uuid.uuid4()
     event_a=uuid.uuid4()
@@ -152,6 +156,40 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
                 service_order_id,service_amount,material_cost,donor_material_value)
               VALUES(:id,280,40,0)
             """),{"id":order})
+        db.execute(text("""
+            INSERT INTO core.devices(id,manufacturer,model,serial_number,
+                                     hostname,device_type)
+            VALUES (:id,'ASUS','CI-READY','CI-DIFFERENT-SERIAL','ci-host','PC')
+        """),{"id":pc_ready})
+        db.execute(text("""
+            INSERT INTO service.service_orders(
+                id,device_id,reception_number,status,received_at,
+                intake_description,fault_description)
+            VALUES(:id,:did,'CI-READY','READY_FOR_PICKUP',now(),
+                'Wydanie testowe','Do odbioru')
+        """),{"id":order_ready,"did":pc_ready})
+        db.execute(text("""
+            INSERT INTO service.owner_finances(
+                service_order_id,service_amount,material_cost,donor_material_value)
+            VALUES(:id,130,30,15)
+        """),{"id":order_ready})
+        db.execute(text("""
+            INSERT INTO guard.pending_installations(
+                installation_id,device_id,discovery_credential_sha256,app_version,
+                hostname,manufacturer,model,status)
+            VALUES(:id,'ci-await',:hash,'0.3.37','ci-test-pc','ASUS','CI-Model','WAITING')
+        """),{"id":waiting_id,"hash":"4"*64})
+        db.execute(text("""
+            INSERT INTO guard.license_links(
+                reception_id,reception_number,service_device_id,
+                keygate_license_id,keygate_plan_id,license_key_hash,
+                plan_code,duration_months,release_channel,lifecycle,
+                installation_id,device_id,credential_sha256,app_version)
+            VALUES(:id,'CI-READY',:did,'test-keygate-ready','test-plan',:hash,
+                'multi_guard',12,'STABLE','SERVICE_TEST',
+                :installed,'ci-device',:cred,'0.3.37')
+        """),{"id":order_ready,"did":pc_ready,
+               "hash":"2"*64,"installed":installed_ready,"cred":"3"*64})
         db.execute(text("""
             INSERT INTO core.storage_objects(id,object_key,original_filename,
                                              mime_type,size_bytes)
@@ -211,7 +249,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     ensure(get(f"/multiguard/panel/device/{install_a}",False).status_code,401,"Private device")
     owner_dashboard=get("/multiguard/panel/dashboard")
     ensure(owner_dashboard.status_code,200,"Owner dashboard")
-    assert "Twoje obszary pracy" in owner_dashboard.text
+    assert "Szybki dostęp" in owner_dashboard.text
     assert 'href="/multiguard/panel/computers"' in owner_dashboard.text
     assert 'id="devices"' not in owner_dashboard.text, "Dashboard must not duplicate computers table"
     ensure(get("/multiguard/panel/computers",False).status_code,401,"Private inventory")
@@ -223,7 +261,57 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert 'class="brand-multi">Multi</span>' in inventory_page.text
     assert 'class="brand-servis">-Servis</span>' in inventory_page.text
     ensure(get("/multiguard/panel/service").status_code,200,"Owner service")
+    service_list=get("/multiguard/panel/service").text
+    assert 'W trakcie naprawy' in service_list
+    assert '/multiguard/panel/service?status=all' in service_list
+    assert 'Finanse' not in service_list or 'Finanse zbiorcze' in service_list
+    assert get("/multiguard/panel/service?status=bogus").status_code==400
+    assert get("/multiguard/panel/service?page_size=999").status_code==400
+    stats=get("/multiguard/panel/statistics")
+    ensure(stats.status_code,200,"OWNER finances")
+    assert "Zysk rzeczywisty" in stats.text
+    assert "Zysk ekonomiczny" in stats.text
+    assert "Materiał z dawcy" in stats.text
+    assert "560,00 zł" in stats.text  # Only two COMPLETED jobs, not READY.
+    assert get("/multiguard/panel/statistics",False).status_code==401
+    assert get("/multiguard/panel/statistics?period=custom").status_code==200
+    assert get("/multiguard/panel/statistics?period=month&month=not-a-month").status_code in (400,422)
+    assert get("/multiguard/panel/statistics?period=quarter&quarter=9").status_code==400
+    assert 'id="pending"' in inventory_page.text
+    assert str(waiting_id).replace("-","")[:8].upper() in inventory_page.text
+    assert f'/multiguard/panel/pending/{waiting_id}' in inventory_page.text
     ensure(get(f"/multiguard/panel/service/{order_a}").status_code,200,"Service detail")
+    d=get(f"/multiguard/panel/service/{order_a}").text
+    assert '<details class="card finance-disclosure">' in d, "Financial card must be closed by default"
+    assert 'finance-disclosure" open' not in d
+    # Web handover is owner-authenticated + CSRF, and commits the service
+    # order and the signed licence lifecycle without starting paid time.
+    ready=get(f"/multiguard/panel/service/{order_ready}")
+    ensure(ready.status_code,200,"Ready service detail")
+    assert 'WYDANO SPRZĘT' in ready.text
+    token=re.search(r'name="csrf_token" value="([a-f0-9]{64})"',ready.text)
+    assert token
+    issue_url=f"/multiguard/panel/service/{order_ready}/issue"
+    assert c.post(issue_url,data={"csrf_token":token.group(1)}).status_code==401
+    assert c.post(issue_url,auth=auth,data={"csrf_token":"wrong"}).status_code==403
+    with engine.connect() as db:
+        before=db.execute(text("SELECT status FROM service.service_orders WHERE id=:id"),
+            {"id":order_ready}).scalar_one()
+    assert before=="READY_FOR_PICKUP"
+    done=c.post(issue_url,auth=auth,data={"csrf_token":token.group(1)},follow_redirects=False)
+    ensure(done.status_code,303,"Authorized release")
+    with engine.connect() as db:
+        after=db.execute(text("SELECT status FROM service.service_orders WHERE id=:id"),
+            {"id":order_ready}).scalar_one()
+        lic=db.execute(text("""
+            SELECT lifecycle,accepted_at,valid_from,valid_until
+            FROM guard.license_links WHERE reception_id=:id
+        """),{"id":order_ready}).mappings().one()
+    assert after=="COMPLETED"
+    assert lic["lifecycle"]=="PENDING_ACCEPTANCE"
+    assert not lic["accepted_at"] and not lic["valid_from"] and not lic["valid_until"]
+    assert c.post(issue_url,auth=auth,data={"csrf_token":token.group(1)},follow_redirects=False).status_code==303
+
     device_a_response=get(f"/multiguard/panel/device/{install_a}")
     ensure(device_a_response.status_code,200,"Device detail")
     assert f"CI-{str(order_a)[:8]}" in device_a_response.text

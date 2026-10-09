@@ -1,22 +1,27 @@
-"""Read-only Multi-Servis service dashboard embedded in the Multi-Guard owner web panel.
+"""OWNER service orders and financial statistics in Multi-Servis web.
 
-Uses the same service PostgreSQL database and the existing panel owner credentials.
-Never creates/edits service orders: device intake remains on Android with camera/OCR.
+The interface uses the same PostgreSQL figures as Android. Intake and camera/OCR
+remain on Android. No customer data is sent to external dashboards.
 """
 from __future__ import annotations
 
 import html
 import uuid
+import time
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Form
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from sqlalchemy import text
 from app.database import engine
 from app.config import settings
-from app.routers.multiguard_license import _panel_auth, _panel_html
+from app.routers.multiguard_license import (_panel_auth, _panel_html,
+    _normalize_link, _update_installation_mirror)
+from app.routers.multiguard_panel_settings import _csrf_token, _token_valid
 
 router = APIRouter(tags=["multiservis-owner-web"])
 
@@ -203,11 +208,11 @@ def owner_order_media(
 
 
 _STATUS = {
-    "all": ("Wszystkie zlecenia", ""),
     "active": ("W trakcie naprawy", "s.status='IN_SERVICE'"),
     "ready": ("Gotowe do odbioru", "s.status='READY_FOR_PICKUP'"),
     "completed": ("Wydane", "s.status='COMPLETED'"),
     "cancelled": ("Anulowane", "s.status='CANCELLED'"),
+    "all": ("Wszystkie zlecenia", ""),
 }
 
 def status_badge(status: object) -> str:
@@ -224,13 +229,16 @@ def status_badge(status: object) -> str:
 
 @router.get("/multiguard/panel/service", response_class=HTMLResponse)
 def service_orders(
-    status: str = Query("all"),
+    status: str = Query("active"),
     q: str = Query("", max_length=120),
     page_number: int = Query(1, ge=1, le=5000),
+    page_size: int = Query(20),
     _: None = Depends(_panel_auth),
 ):
     if status not in _STATUS:
         raise HTTPException(400, "Nieprawidłowy filtr zleceń.")
+    if page_size not in (20, 50):
+        raise HTTPException(400, "Dostępne rozmiary strony: 20 lub 50.")
     where = []
     params: dict[str, object] = {}
     if _STATUS[status][1]:
@@ -248,14 +256,11 @@ def service_orders(
     sql = f"""
         SELECT s.id,s.reception_number,s.status,s.received_at,s.completed_at,
                s.manufacturer,s.model,s.serial_number,s.device_type,
-               s.display_name,s.phone_e164,
-               COALESCE(f.service_amount,0) AS service_amount,
-               COALESCE(f.material_cost,0) AS material_cost
+               s.display_name,s.phone_e164
         FROM service.v_service_order_summary s
-        LEFT JOIN service.owner_finances f ON f.service_order_id=s.id
         {where_sql}
         ORDER BY s.received_at DESC
-        LIMIT 41 OFFSET :offset
+        LIMIT :limit OFFSET :offset
     """
     with engine.connect() as con:
         counts = con.execute(text("""
@@ -266,18 +271,10 @@ def service_orders(
                    count(*) FILTER (WHERE status='CANCELLED') AS cancelled
             FROM service.service_orders
         """)).mappings().one()
-        finance = con.execute(text("""
-            SELECT COALESCE(sum(f.service_amount),0) AS revenue,
-                   COALESCE(sum(f.material_cost),0) AS costs,
-                   COALESCE(sum(f.service_amount-f.material_cost),0) AS profit
-            FROM service.service_orders s
-            JOIN service.owner_finances f ON f.service_order_id=s.id
-            WHERE s.status='COMPLETED'
-              AND s.completed_at >= (date_trunc('month', now() AT TIME ZONE 'Europe/Warsaw') AT TIME ZONE 'Europe/Warsaw')
-        """)).mappings().one()
-        rows = con.execute(text(sql), {**params, "offset": (page_number-1)*40}).mappings().all()
-    has_more = len(rows) > 40
-    rows = rows[:40]
+        rows = con.execute(text(sql), {**params, "limit": page_size + 1,
+                                       "offset": (page_number-1)*page_size}).mappings().all()
+    has_more = len(rows) > page_size
+    rows = rows[:page_size]
     metrics = [
         ("Aktywne", counts["active"], "/multiguard/panel/service?status=active", "blue"),
         ("Do odbioru", counts["ready"], "/multiguard/panel/service?status=ready", "gold"),
@@ -288,16 +285,8 @@ def service_orders(
         f'<a class="metric metric-link accent-{tone}" href="{url}"><b>{esc(label)}</b><strong>{int(value or 0)}</strong><small>Przejdź do listy →</small></a>'
         for label,value,url,tone in metrics
     )
-    finance_cards = "".join(
-        f'<div class="metric accent-{tone}"><b>{esc(title)}</b><strong class="money">{money(value)}</strong></div>'
-        for title,value,tone in [
-            ("Przychód z wydań · miesiąc",finance["revenue"],"gold"),
-            ("Koszty wydanych · miesiąc",finance["costs"],"red"),
-            ("Wynik z wydanych · miesiąc",finance["profit"],"green"),
-        ]
-    )
     tab_html = "".join(
-        f'<a class="filter-tab {"selected" if status==key else ""}" href="/multiguard/panel/service?{urlencode({"status":key,"q":query})}">{esc(label)}</a>'
+        f'<a class="filter-tab {"selected" if status==key else ""}" href="/multiguard/panel/service?{urlencode({"status":key,"q":query,"page_size":page_size})}">{esc(label)}</a>'
         for key,(label,_) in _STATUS.items()
     )
     trs = []
@@ -311,35 +300,31 @@ def service_orders(
           <td>{esc(row['display_name'] or '—')}<small class="row-sub">{esc(row['phone_e164'] or '')}</small></td>
           <td class="numbers">{dt(row['received_at'])}</td>
           <td class="numbers">{dt(row['completed_at'])}</td>
-          <td class="numbers">{money(row['service_amount']) if row['status']=='COMPLETED' else '—'}</td>
           <td><a class="button-link compact" href="/multiguard/panel/service/{row['id']}">PODGLĄD</a></td>
         </tr>""")
-    table = "".join(trs) or '<tr><td colspan="8" class="muted">Brak zleceń dla wybranych filtrów.</td></tr>'
+    table = "".join(trs) or '<tr><td colspan="7" class="muted">Brak zleceń dla wybranych filtrów.</td></tr>'
     def link_for(n: int) -> str:
-        return "/multiguard/panel/service?" + urlencode({"status":status,"q":query,"page_number":n})
+        return "/multiguard/panel/service?" + urlencode({"status":status,"q":query,"page_number":n,"page_size":page_size})
     prev = f'<a class="button-link compact" href="{link_for(page_number-1)}">← Poprzednie</a>' if page_number>1 else ""
     nxt = f'<a class="button-link compact" href="{link_for(page_number+1)}">Następne →</a>' if has_more else ""
     return page(f"""
     <section class="card panel-hero service-hero">
       <div class="eyebrow">MULTI-SERVIS / SERWIS WŁAŚCICIELA</div>
-      <h1>Zlecenia i statystyki</h1>
-      <p>Podgląd rzeczywistych danych z tej samej bazy PostgreSQL co aplikacja Android. Bez modyfikowania zleceń.</p>
+      <h1>Zlecenia serwisowe</h1>
+      <p>Najpierw sprawy wymagające pracy. Finanse zbiorcze są wyłącznie w zakładce Statystyki.</p>
       <div class="metrics owner-kpis">{cards}</div>
     </section>
     <section class="card">
-      <div class="section-head"><div><div class="eyebrow">FINANSE</div><h2>Wydania w bieżącym miesiącu</h2><p>Przychód liczony wyłącznie po faktycznym wydaniu urządzenia klientowi. Koszty dotyczą tutaj wydanych zleceń, a nie wszystkich bieżących wydatków.</p></div></div>
-      <div class="metrics">{finance_cards}</div>
-    </section>
-    <section class="card">
-      <div class="section-head"><div><div class="eyebrow">ZLECENIA</div><h2>{esc(_STATUS[status][0])}</h2><p>Lista zleceń — 40 pozycji na stronę.</p></div></div>
+      <div class="section-head"><div><div class="eyebrow">ZLECENIA</div><h2>{esc(_STATUS[status][0])}</h2></div><div class="list-size-control"><a href="/multiguard/panel/service?{urlencode({"status":status,"q":query,"page_size":20})}" class="filter-tab {"selected" if page_size==20 else ""}">20</a><a href="/multiguard/panel/service?{urlencode({"status":status,"q":query,"page_size":50})}" class="filter-tab {"selected" if page_size==50 else ""}">50</a><span>na stronę</span></div></div>
       <div class="filter-tabs">{tab_html}</div>
       <form class="service-search" method="get" action="/multiguard/panel/service">
         <input type="hidden" name="status" value="{esc(status)}">
+        <input type="hidden" name="page_size" value="{page_size}">
         <label>Wyszukaj numer, klienta, telefon, model lub numer seryjny<input name="q" maxlength="120" value="{esc(query)}" placeholder="np. MS-2026-..., Lenovo, +48..."></label>
         <button type="submit">SZUKAJ</button>
       </form>
       <div class="table-wrap"><table>
-        <thead><tr><th>Numer</th><th>Status</th><th>Sprzęt</th><th>Klient</th><th>Przyjęto</th><th>Wydano</th><th>Przychód</th><th></th></tr></thead>
+        <thead><tr><th>Numer</th><th>Status</th><th>Sprzęt</th><th>Klient</th><th>Przyjęto</th><th>Wydano</th><th></th></tr></thead>
         <tbody>{table}</tbody>
       </table></div>
       <div class="pagination">{prev}<span>Strona {page_number}</span>{nxt}</div>
@@ -347,9 +332,282 @@ def service_orders(
     """)
 
 
+
+_WARSAW = ZoneInfo("Europe/Warsaw")
+
+
+def _statistics_range(period: str, month: str, year: int, quarter: int,
+                      from_date: str, to_date: str) -> tuple[datetime, datetime, str, str]:
+    """Warsaw civil-day boundaries; completed orders use the same accounting date as Android."""
+    now = datetime.now(_WARSAW)
+    if period == "month":
+        try:
+            month_date = date.fromisoformat((month or now.strftime("%Y-%m")) + "-01")
+        except ValueError as exc:
+            raise HTTPException(400, "Podaj poprawny miesiąc RRRR-MM.") from exc
+        first = month_date
+        last = date(first.year + (first.month == 12), first.month % 12 + 1, 1)
+        label = first.strftime("%m.%Y")
+        grouping = "week"
+    elif period in ("quarter", "year"):
+        y = year or now.year
+        if not 2000 <= y <= 2100:
+            raise HTTPException(400, "Nieprawidłowy rok.")
+        if period == "quarter":
+            q = quarter or ((now.month - 1)//3 + 1)
+            if q not in (1, 2, 3, 4):
+                raise HTTPException(400, "Kwartał musi mieścić się od 1 do 4.")
+            first = date(y, (q-1)*3+1, 1)
+            last = date(y + (q == 4), (q*3)%12+1, 1)
+            label = f"{q}. kwartał {y}"
+        else:
+            first = date(y, 1, 1)
+            last = date(y+1, 1, 1)
+            label = str(y)
+        grouping = "month"
+    elif period == "custom":
+        if not from_date and not to_date:
+            first = now.date().replace(day=1)
+            last_inclusive = now.date()
+        else:
+            try:
+                first, last_inclusive = date.fromisoformat(from_date), date.fromisoformat(to_date)
+            except ValueError as exc:
+                raise HTTPException(400, "Podaj poprawny zakres dat.") from exc
+        if first.year < 2000:
+            raise HTTPException(400, "Zakres nie może zaczynać się przed rokiem 2000.")
+        try:
+            first, last_inclusive = date.fromisoformat(first.isoformat()), date.fromisoformat(last_inclusive.isoformat())
+        except ValueError as exc:
+            raise HTTPException(400, "Podaj poprawny zakres dat.") from exc
+        if first > last_inclusive or (last_inclusive-first).days > 1826:
+            raise HTTPException(400, "Nieprawidłowy okres (maksymalnie 5 lat).")
+        last = last_inclusive + timedelta(days=1)
+        label = f"{first:%d.%m.%Y} – {last_inclusive:%d.%m.%Y}"
+        grouping = "month" if (last-first).days > 90 else "week"
+    else:
+        raise HTTPException(400, "Nieprawidłowy okres statystyk.")
+    return (
+        datetime.combine(first, datetime.min.time(), tzinfo=_WARSAW),
+        datetime.combine(last, datetime.min.time(), tzinfo=_WARSAW),
+        label, grouping
+    )
+
+
+@router.get("/multiguard/panel/statistics", response_class=HTMLResponse)
+def service_statistics(
+    period: str = Query("month"),
+    month: str = Query("", max_length=7),
+    year: int = Query(0),
+    quarter: int = Query(0),
+    from_date: str = Query("", max_length=10),
+    to_date: str = Query("", max_length=10),
+    _: None = Depends(_panel_auth),
+):
+    start, end, period_label, grouping = _statistics_range(
+        period, month, year, quarter, from_date, to_date
+    )
+    query_params = {"start_at": start, "end_at": end}
+    with engine.connect() as con:
+        total = con.execute(text("""
+            SELECT count(*) AS orders,
+                   COALESCE(sum(f.service_amount),0) AS revenue,
+                   COALESCE(sum(f.material_cost),0) AS material_cost,
+                   COALESCE(sum(f.donor_material_value),0) AS donor_material_value,
+                   COALESCE(sum(f.service_amount-f.material_cost),0) AS actual_profit,
+                   COALESCE(sum(f.service_amount-f.material_cost-f.donor_material_value),0)
+                       AS economic_profit
+            FROM service.service_orders s
+            LEFT JOIN service.owner_finances f ON f.service_order_id=s.id
+            WHERE s.status='COMPLETED'
+              AND s.completed_at >= :start_at AND s.completed_at < :end_at
+        """), query_params).mappings().one()
+        breakdown = con.execute(text("""
+            SELECT date_trunc(:grouping, s.completed_at AT TIME ZONE 'Europe/Warsaw')
+                       AS bucket,
+                   count(*) AS orders,
+                   COALESCE(sum(f.service_amount),0) AS revenue,
+                   COALESCE(sum(f.material_cost),0) AS material_cost,
+                   COALESCE(sum(f.donor_material_value),0) AS donor_material_value,
+                   COALESCE(sum(f.service_amount-f.material_cost),0) AS actual_profit,
+                   COALESCE(sum(f.service_amount-f.material_cost-f.donor_material_value),0)
+                       AS economic_profit
+            FROM service.service_orders s
+            LEFT JOIN service.owner_finances f ON f.service_order_id=s.id
+            WHERE s.status='COMPLETED'
+              AND s.completed_at >= :start_at AND s.completed_at < :end_at
+            GROUP BY bucket ORDER BY bucket
+        """), {**query_params, "grouping": grouping}).mappings().all()
+
+    summary_items = [
+        ("Wydane zlecenia", str(int(total["orders"] or 0)), "blue"),
+        ("Przychód z usług", money(total["revenue"]), "green"),
+        ("Koszt materiałów", money(total["material_cost"]), "red"),
+        ("Materiał z dawcy", money(total["donor_material_value"]), "gold"),
+        ("Zysk rzeczywisty", money(total["actual_profit"]), "blue"),
+        ("Zysk ekonomiczny", money(total["economic_profit"]), "green"),
+    ]
+    metrics = "".join(
+        f'<div class="metric accent-{tone}"><b>{esc(label)}</b>'
+        f'<strong class="{"money" if i else ""}">{esc(value)}</strong></div>'
+        for i,(label,value,tone) in enumerate(summary_items)
+    )
+    max_scale = max(
+        [float(row["revenue"] or 0) for row in breakdown]
+        + [float(row["material_cost"] or 0) for row in breakdown] + [1.0]
+    )
+    trend_rows = "".join(
+        '<div class="finance-trend-row">'
+        f'<span>{esc(row["bucket"].strftime("%d.%m") if grouping=="week" else row["bucket"].strftime("%m.%Y"))}</span>'
+        '<div class="finance-trend-bars">'
+        f'<i class="finance-trend-revenue" style="width:{max(0, float(row["revenue"] or 0))*100/max_scale:.1f}%"></i>'
+        f'<i class="finance-trend-cost" style="width:{max(0, float(row["material_cost"] or 0))*100/max_scale:.1f}%"></i>'
+        '</div>'
+        f'<b>{money(row["revenue"])}</b></div>'
+        for row in breakdown
+    ) or '<p class="muted">W tym okresie nie ma wydanych zleceń. Nie pokazujemy fikcyjnych danych.</p>'
+    report_rows = "".join(
+        '<tr>'
+        f'<td>{esc(row["bucket"].strftime("%d.%m.%Y") if grouping=="week" else row["bucket"].strftime("%m.%Y"))}</td>'
+        f'<td class="numbers">{int(row["orders"] or 0)}</td>'
+        f'<td class="numbers">{money(row["revenue"])}</td>'
+        f'<td class="numbers">{money(row["material_cost"])}</td>'
+        f'<td class="numbers">{money(row["donor_material_value"])}</td>'
+        f'<td class="numbers">{money(row["actual_profit"])}</td>'
+        f'<td class="numbers">{money(row["economic_profit"])}</td>'
+        '</tr>'
+        for row in breakdown
+    ) or '<tr><td colspan="7" class="muted">Brak danych dla tego okresu.</td></tr>'
+    filters = "".join(
+        f'<a class="filter-tab {"selected" if period==code else ""}" '
+        f'href="/multiguard/panel/statistics?period={code}">{label}</a>'
+        for code,label in (("month","Miesiąc"),("quarter","Kwartał"),
+                           ("year","Rok"),("custom","Własny okres"))
+    )
+    month_selected = start.strftime("%Y-%m") if period == "month" else datetime.now(_WARSAW).strftime("%Y-%m")
+    prev_month = (start.date().replace(day=1)-timedelta(days=1)).strftime("%Y-%m")
+    next_month = end.strftime("%Y-%m")
+    month_controls = (
+        '<div class="statistics-period-controls">'
+        f'<a class="button-link compact" href="/multiguard/panel/statistics?period=month&month={prev_month}" aria-label="Poprzedni miesiąc">←</a>'
+        '<form method="get" action="/multiguard/panel/statistics">'
+        '<input type="hidden" name="period" value="month">'
+        f'<label>Miesiąc <input type="month" name="month" value="{month_selected}"></label>'
+        '<button type="submit">Pokaż</button></form>'
+        f'<a class="button-link compact" href="/multiguard/panel/statistics?period=month&month={next_month}" aria-label="Następny miesiąc">→</a>'
+        '</div>'
+    ) if period == "month" else ""
+    selected_year = year or datetime.now(_WARSAW).year
+    selected_quarter = quarter or (datetime.now(_WARSAW).month-1)//3+1
+    if period in ("quarter", "year"):
+        options = "".join(f'<option value="{n}" {"selected" if n==selected_year else ""}>{n}</option>' for n in range(datetime.now(_WARSAW).year+1, datetime.now(_WARSAW).year-7, -1))
+        quarters = "".join(f'<option value="{n}" {"selected" if n==selected_quarter else ""}>{n}</option>' for n in range(1,5))
+        month_controls = (
+            '<form class="statistics-period-controls" method="get" action="/multiguard/panel/statistics">'
+            f'<input type="hidden" name="period" value="{period}">'
+            f'<label>Rok <select name="year">{options}</select></label>'
+            + (f'<label>Kwartał <select name="quarter">{quarters}</select></label>' if period=="quarter" else "")
+            + '<button type="submit">Pokaż</button></form>'
+        )
+    if period == "custom":
+        month_controls = (
+            '<form class="statistics-period-controls" method="get" action="/multiguard/panel/statistics">'
+            '<input type="hidden" name="period" value="custom">'
+            f'<label>Od <input name="from_date" type="date" required value="{start.date().isoformat()}"></label>'
+            f'<label>Do <input name="to_date" type="date" required value="{(end.date()-timedelta(days=1)).isoformat()}"></label>'
+            '<button type="submit">Pokaż</button></form>'
+        )
+    return page(f"""
+      <section class="card panel-hero statistics-hero">
+        <div class="eyebrow">MULTI-SERVIS / ANALITYKA WŁAŚCICIELA</div>
+        <h1>Statystyki</h1>
+        <p>Finanse wydanych napraw w okresie: <strong>{esc(period_label)}</strong>. Zestawienie bazuje na rzeczywistych zleceniach Multi-Servis.</p>
+        <div class="filter-tabs statistics-filter-tabs">{filters}</div>
+        {month_controls}
+      </section>
+      <section class="card">
+        <div class="section-head"><div><h2>Podsumowanie okresu</h2>
+          <p>Osobno pokazujemy koszt zakupionych części i wartość materiału z dawcy.</p></div></div>
+        <div class="metrics statistics-metrics">{metrics}</div>
+      </section>
+      <section class="card statistics-trend">
+        <div class="section-head"><div><h2>Przychody i koszty w czasie</h2>
+          <p>Jasny pasek: przychód · czerwony: koszt zakupionych materiałów.</p></div></div>
+        {trend_rows}
+      </section>
+      <details class="card statistics-table-disclosure"><summary>Pełne zestawienie okresów ▾</summary>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Okres</th><th>Zlecenia</th><th>Przychód</th><th>Materiały</th>
+            <th>Dawca</th><th>Zysk rzeczywisty</th><th>Zysk ekonomiczny</th></tr></thead>
+          <tbody>{report_rows}</tbody>
+        </table></div>
+      </details>
+      <p class="statistics-footnote">Przychody i koszty są przypisane do okresu wydania sprzętu,
+      tak jak w aktualnym raporcie Android. Ten raport nie zastępuje ewidencji księgowej.
+      Wydatek na część poniesiony wcześniej może wymagać oddzielnej analizy daty zakupu.</p>
+    """)
+
+
+@router.post("/multiguard/panel/service/{order_id}/issue")
+def issue_service_order_from_web(
+    order_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """Issue equipment in one DB transaction, including an installed Guard.
+
+    This route does not activate a paid licence. Client document acceptance
+    remains the only way to start the purchased 3/6/12-month period.
+    """
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowe potwierdzenie wydania.")
+    with engine.begin() as con:
+        order = con.execute(text("""
+            SELECT id,status FROM service.service_orders
+            WHERE id=:id FOR UPDATE
+        """), {"id":order_id}).mappings().first()
+        if order is None:
+            raise HTTPException(404, "Nie znaleziono zlecenia.")
+        current = str(order["status"])
+        if current not in ("READY_FOR_PICKUP","COMPLETED"):
+            raise HTTPException(409, "Wydanie wymaga statusu GOTOWE DO ODBIORU.")
+        if current == "READY_FOR_PICKUP":
+            # Lifecycle DB trigger writes completed_at, released_at and audit.
+            con.execute(text("""
+                UPDATE service.service_orders
+                SET status='COMPLETED'
+                WHERE id=:id AND status='READY_FOR_PICKUP'
+            """), {"id":order_id})
+        # Not every service order has Multi-Guard: release must still work.
+        link_row = con.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE reception_id=:id FOR UPDATE
+        """), {"id":order_id}).mappings().first()
+        if link_row is not None:
+            link = _normalize_link(dict(link_row))
+            if link["lifecycle"] == "SERVICE_TEST" and link.get("installation_id"):
+                new_row = con.execute(text("""
+                    UPDATE guard.license_links
+                    SET lifecycle='PENDING_ACCEPTANCE',
+                        approved_at=COALESCE(approved_at,now()),
+                        updated_at=now()
+                    WHERE id=:id AND lifecycle='SERVICE_TEST'
+                    RETURNING *
+                """), {"id":link["id"]}).mappings().first()
+                if new_row:
+                    _update_installation_mirror(con, _normalize_link(dict(new_row)))
+    # PRG: refresh will not repeat the operation if owner reloads the page.
+    return RedirectResponse(
+        f"/multiguard/panel/service/{order_id}?issued=1",
+        status_code=303,
+        headers={"Cache-Control":"private, no-store"},
+    )
+
+
 @router.get("/multiguard/panel/service/{order_id}", response_class=HTMLResponse)
 def service_order_detail(
     order_id: uuid.UUID,
+    issued: int = Query(0),
     _: None = Depends(_panel_auth),
 ):
     with engine.connect() as con:
@@ -426,7 +684,33 @@ def service_order_detail(
                 f'<td><a{controls} href="{url}">'
                 f'{action}</a></td></tr>')
     media_rows="".join(media_row(x) for x in media)
-    fin=[("Kwota usługi",row["service_amount"]),("Koszt materiałów",row["material_cost"]),("Wartość dawcy",row["donor_material_value"]),("Wynik",row["actual_profit"])]
+    issue_action = ""
+    if row["status"] == "READY_FOR_PICKUP":
+        token = _csrf_token(int(time.time() // 3600))
+        issue_action = f"""
+        <section class="card service-release-card">
+          <div class="section-head"><div><div class="eyebrow">ODBIÓR SPRZĘTU</div>
+            <h2>Potwierdź faktyczne wydanie klientowi</h2>
+            <p>Kwoty pozostają w zwiniętych finansach. Wydanie kończy
+               Tryb serwisowy Multi-Guard, ale nie uruchamia licznika licencji.</p>
+          </div><form method="post" action="/multiguard/panel/service/{order_id}/issue"
+              class="release-confirm-form"
+              onsubmit="return confirm('Czy sprzęt został faktycznie wydany klientowi?');">
+            <input type="hidden" name="csrf_token" value="{token}">
+            <button type="submit">✓ WYDANO SPRZĘT</button>
+          </form></div>
+        </section>"""
+    elif issued and row["status"] == "COMPLETED":
+        issue_action = ('<p class="notice-success" role="status">'
+                        'Wydanie sprzętu zostało zapisane. Multi-Guard oczekuje'
+                        ' teraz na akceptację dokumentów klienta, jeśli przypisano licencję.'
+                        '</p>')
+
+    fin=[("Kwota usługi",row["service_amount"]),
+         ("Koszt materiałów",row["material_cost"]),
+         ("Wartość materiałów z dawcy",row["donor_material_value"]),
+         ("Zysk rzeczywisty",row["actual_profit"]),
+         ("Zysk ekonomiczny",(row["actual_profit"] or Decimal(0)) - (row["donor_material_value"] or Decimal(0)))]
     fin_cards="".join(f'<div class="metric"><b>{esc(k)}</b><strong class="money">{money(v)}</strong></div>' for k,v in fin)
     return page(f"""
     <section class="card panel-hero device-hero">
@@ -436,8 +720,9 @@ def service_order_detail(
       <p>Podgląd właściciela, bez edycji danych. Przyjmowanie urządzeń ze zdjęciami pozostaje w aplikacji Android.</p>
       <div class="detail-facts">{facts}</div>
     </section>
+    {issue_action}
     <section class="card"><h2>Opis i notatki</h2><div class="notes-grid">{notes}</div></section>
-    <section class="card"><h2>Finanse zlecenia</h2><div class="metrics">{fin_cards}</div><p>Przychód i wynik pojawiają się w statystykach zrealizowanych usług dopiero po statusie „Wydany”.</p></section>
+    <details class="card finance-disclosure"><summary><span>Finanse zlecenia</span><span class="finance-disclosure-hint">Dane właściciela · kliknij, aby rozwinąć ▾</span></summary><div class="metrics">{fin_cards}</div><p>Kwota usługi jest uwzględniana w zestawieniu wydanych zleceń dopiero po wydaniu sprzętu.</p></details>
     <section class="card"><h2>Historia statusów</h2><div class="table-wrap"><table><thead><tr><th>Data</th><th>Poprzedni</th><th></th><th>Nowy</th></tr></thead><tbody>{hist or '<tr><td colspan="4">Brak historii.</td></tr>'}</tbody></table></div></section>
     <section class="card"><h2>Zdjęcia i dokumenty ({len(media)})</h2><p>Chroniony podgląd właściciela: miniatury obrazów i pobieranie pozostałych plików. Materiały są odczytywane wyłącznie ze zlecenia, nie zapisujemy ich w publicznym katalogu WWW.</p><div class="table-wrap"><table><thead><tr><th>Podgląd</th><th>Rodzaj</th><th>Plik</th><th>Opis</th><th>Data</th><th>Otwórz</th></tr></thead><tbody>{media_rows or '<tr><td colspan="6">Brak plików.</td></tr>'}</tbody></table></div></section>
     {GALLERY_WIDGET_HTML if photo_positions else ""}

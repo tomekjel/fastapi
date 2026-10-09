@@ -1,11 +1,13 @@
-name: Multi-Servis Multi-Guard owner panel preview — syntax & integration
+name: Multi-Servis WEB — compact dashboard, finance & handover integration tests
 on:
   # Owner code changes do not burn hosted CI time on each push.
   # Full browser + PostgreSQL regression tests execute only for deliberate release-gate triggers.
   push:
-    branches: [multiservis-panel-multiguard-gold-crimson-v1]
+    branches: [feature/multiservis-web-compact-stats-20261009, multiservis-panel-multiguard-gold-crimson-v1]
     paths:
-      - 'embedded-multiguard/deploy/owner-v12-livecheck.trigger'
+      - 'embedded-multiguard/app/routers/**'
+      - 'embedded-multiguard/tests/**'
+      - '.github/workflows/multiservis-panel-preview-ci.yml'
   workflow_dispatch:
 
 jobs:
@@ -236,12 +238,13 @@ jobs:
       - name: Inspect bundled server storage interfaces for owner-photo streaming
         run: |
           python embedded-multiguard/scripts/audit_backend_storage.py
-      - name: Build eight real V12 panel template previews (sample data clearly labelled)
+      - name: Build nine real V12 panel template previews (sample data clearly labelled)
         run: |
           python embedded-multiguard/scripts/preview_owner_panel.py owner-preview
-          test "$(find owner-preview -maxdepth 1 -name '*.html' | wc -l)" -eq 8
+          test "$(find owner-preview -maxdepth 1 -name '*.html' | wc -l)" -eq 9
           grep -q 'workspace-sidebar' owner-preview/01-pulpit.html
           grep -q 'hub-tile' owner-preview/01-pulpit.html
+          grep -q 'Zysk ekonomiczny' owner-preview/09-statystyki.html
           grep -q 'id="devices"' owner-preview/08-komputery.html
           grep -q 'Dane przykładowe' owner-preview/01-pulpit.html
       - name: Render V12 screenshots in Chromium

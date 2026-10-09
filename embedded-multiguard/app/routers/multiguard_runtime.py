@@ -1279,22 +1279,26 @@ def multi_guard_panel_dashboard(
         ("Otwarte zgłoszenia", support_count, "green"),
     ]
     metrics_html = "".join(
-        f'<div class="metric accent-{tone}"><b>{_panel_h(label)}</b>'
-        f'<strong>{int(value or 0)}</strong></div>'
+        (
+            f'<a class="metric metric-link accent-{tone}" href="/multiguard/panel/computers#pending">'
+            f'<b>{_panel_h(label)}</b><strong>{int(value or 0)}</strong></a>'
+            if label == "Oczekujące instalacje" else
+            f'<div class="metric accent-{tone}"><b>{_panel_h(label)}</b>'
+            f'<strong>{int(value or 0)}</strong></div>'
+        )
         for label, value, tone in kpis
     )
     return _panel_html(f"""
       <section class="card panel-hero dashboard-hero">
         <div class="eyebrow">MULTI-SERVIS / CENTRUM WŁAŚCICIELA</div>
         <h1>Pulpit</h1>
-        <p>Krótki przegląd sytuacji. Szczegóły otwieraj w osobnych obszarach, bez przewijania pulpitu do kolejnej kopii rejestru.</p>
+        <p>Aktualny stan serwisu i Multi-Guard. Kliknij oczekujące instalacje, aby od razu przypisać licencję.</p>
         <div class="metrics">{metrics_html}</div>
       </section>
       <section class="card">
         <div class="section-head">
-          <div><div class="eyebrow">PRZEJDŹ DO MODUŁU</div>
-          <h2>Twoje obszary pracy</h2>
-          <p>Każdy moduł ma własną stronę i odpowiada za inne zadanie.</p></div>
+          <div><div class="eyebrow">SKRÓTY</div>
+          <h2>Szybki dostęp</h2></div>
         </div>
         <div class="hub-grid">
           <a class="hub-tile" href="/multiguard/panel/computers">
@@ -1307,10 +1311,10 @@ def multi_guard_panel_dashboard(
             <strong>Zlecenia serwisowe</strong><span>Statusy napraw, zdjęcia, dokumentacja, kwoty</span>
             <small>Otwórz rejestr zleceń →</small>
           </a>
-          <a class="hub-tile" href="/multiguard/panel/telemetry">
-            <span class="hub-symbol" aria-hidden="true">⌁</span>
-            <strong>Telemetria</strong><span>Analiza zgłaszanych usterek i anomalii</span>
-            <small>Otwórz zdarzenia →</small>
+          <a class="hub-tile" href="/multiguard/panel/statistics">
+            <span class="hub-symbol" aria-hidden="true">▥</span>
+            <strong>Statystyki</strong><span>Finanse, materiały z dawcy i rozliczenia</span>
+            <small>Dostęp właściciela →</small>
           </a>
           <a class="hub-tile" href="/multiguard/panel/licenses">
             <span class="hub-symbol" aria-hidden="true">▣</span>
@@ -1319,17 +1323,7 @@ def multi_guard_panel_dashboard(
           </a>
         </div>
       </section>
-      <section class="card summary-footnote">
-        <div class="section-head">
-          <div><h2>Stan komunikacji</h2>
-          <p>Brak raportu nie oznacza potwierdzonego odinstalowania.</p></div>
-          <a class="button-link compact" href="/multiguard/panel/computers?presence=silent">SPRAWDŹ KOMPUTERY →</a>
-        </div>
-        <div class="detail-facts">
-          <div class="detail-fact"><b>Brak kontaktu ponad 7 dni</b><span>{int(counts["silent"] or 0)}</span></div>
-          <div class="detail-fact"><b>Instalacje oczekujące</b><span>{int(pending_count or 0)}</span></div>
-        </div>
-      </section>
+
     """)
 
 
@@ -1380,6 +1374,48 @@ def multi_guard_panel_computers(
         if has_more_devices else ""
     )
 
+
+    # WAITING machines have no signed paid licence yet, so they cannot
+    # appear in the ACTIVE fleet table. Show them separately, with a direct
+    # link to the existing authenticated assignment form.
+    with engine.connect() as connection:
+        pending_rows = connection.execute(text("""
+            SELECT installation_id,hostname,manufacturer,model,
+                   serial_number,app_version,status,last_seen_at
+            FROM guard.pending_installations
+            WHERE status IN ('WAITING','ASSIGNED')
+            ORDER BY CASE WHEN status='WAITING' THEN 0 ELSE 1 END,
+                     last_seen_at DESC
+            LIMIT 40
+        """)).mappings().all()
+    pending_trs = []
+    for pending in pending_rows:
+        iid = pending["installation_id"]
+        name = " ".join(str(x).strip() for x in (pending["manufacturer"],pending["model"]) if x
+                        ) or pending["hostname"] or "Komputer bez nazwy"
+        status_label = "OCZEKUJE NA LICENCJĘ" if pending["status"]=="WAITING" else "PRZYPISANA — POBIERANIE"
+        pending_trs.append(f"""
+            <tr><td><strong>{_panel_h('MG-'+str(iid).replace('-','')[:8].upper())}</strong></td>
+                <td>{_panel_h(name)}<small class="row-sub">{_panel_h(pending["serial_number"] or pending["hostname"] or "")}</small></td>
+                <td>{_panel_h(pending["app_version"] or "—")}</td>
+                <td><span class="badge {'mg-gold' if pending["status"]=='WAITING' else 'mg-blue'}">{status_label}</span></td>
+                <td>{_panel_dt(pending["last_seen_at"])}</td>
+                <td><a class="button-link compact" href="/multiguard/panel/pending/{iid}">
+                  {'PRZYPISZ LICENCJĘ' if pending["status"]=='WAITING' else 'SZCZEGÓŁY'}</a></td>
+            </tr>
+        """)
+    pending_section = f"""
+        <section class="card" id="pending">
+          <div class="section-head"><div><div class="eyebrow">NOWE INSTALACJE</div>
+            <h2>Oczekujące komputery ({len(pending_rows)})</h2>
+            <p>Tutaj pojawia się nowy Multi-Guard przed przypisaniem licencji.
+            Takie komputery nie są jeszcze w rejestrze aktywnej floty.</p></div></div>
+          <div class="table-wrap"><table><thead><tr><th>ID</th><th>Komputer</th><th>Wersja</th>
+            <th>Stan</th><th>Ostatni kontakt</th><th>Akcja</th></tr></thead>
+            <tbody>{''.join(pending_trs) or '<tr><td colspan="6" class="muted">Brak oczekujących instalacji.</td></tr>'}</tbody>
+          </table></div>
+        </section>
+    """
 
     rows_html = []
     for row in devices:
@@ -1447,6 +1483,7 @@ def multi_guard_panel_computers(
             <span class="muted">Stan łączności pochodzi z ostatniego raportu agenta.</span>
           </div>
         </section>
+        {pending_section}
         <section class="card" id="devices">
           <div class="section-head">
             <div>
