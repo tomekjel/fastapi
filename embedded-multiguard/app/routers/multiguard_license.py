@@ -2661,6 +2661,7 @@ def _extend_active_license(
     *,
     source: str,
     payment_confirmed: bool,
+    by_installation: bool = False,
 ) -> dict[str, Any]:
     """Append time to existing expiry, never to purchase date.
 
@@ -2679,10 +2680,13 @@ def _extend_active_license(
     with engine.begin() as connection:
         # Lock the row before checking the existing operation, so two
         # concurrent requests serialize even with distinct request IDs.
-        link = connection.execute(text("""
-            SELECT * FROM guard.license_links
-            WHERE reception_id=:id FOR UPDATE
-        """), {"id": reception_id}).mappings().first()
+        lookup = (
+            "installation_id=:id" if by_installation
+            else "reception_id=:id"
+        )
+        link = connection.execute(text(
+            "SELECT * FROM guard.license_links WHERE " + lookup + " FOR UPDATE"
+        ), {"id":reception_id}).mappings().first()
         if not link:
             raise HTTPException(404, "Zlecenie nie ma licencji Multi-Guard.")
         link = _normalize_link(dict(link))
@@ -2753,6 +2757,27 @@ def extend_reception_license(
     return _extend_active_license(
         reception_id, body.months, body.operation_id,
         source="ANDROID", payment_confirmed=body.payment_confirmed,
+    )
+
+
+@router.post("/multiguard/licenses/installations/{installation_id}/extend")
+def extend_direct_license_api(
+    installation_id: uuid.UUID,
+    body: ExtendLicenseRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    """Owner-only extension for direct licences without repair orders."""
+    _ensure_schema()
+    with engine.connect() as con:
+        direct = con.execute(text("""
+            SELECT sale_kind FROM guard.license_links
+            WHERE installation_id=:id
+        """), {"id":installation_id}).mappings().first()
+    if not direct or direct["sale_kind"] != "DIRECT":
+        raise HTTPException(404, "Brak licencji bezpośredniej dla komputera.")
+    return _extend_active_license(
+        installation_id, body.months, body.operation_id, source="ANDROID",
+        payment_confirmed=body.payment_confirmed, by_installation=True,
     )
 
 
