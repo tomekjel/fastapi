@@ -2,7 +2,7 @@ name: Embedded Multi-Guard CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/mg-pending-discovery-owner]
     paths:
       - "embedded-multiguard/**"
       - ".github/workflows/embedded-multiguard-ci.yml"
