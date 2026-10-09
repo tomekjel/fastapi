@@ -22,7 +22,8 @@ jobs:
             embedded-multiguard/app/routers/multiguard_remote.py \
             embedded-multiguard/app/routers/multiguard_updates.py \
             embedded-multiguard/app/routers/multiguard_service_panel.py \
-            embedded-multiguard/app/routers/multiguard_panel_settings.py
+            embedded-multiguard/app/routers/multiguard_panel_settings.py \
+            embedded-multiguard/app/routers/multiguard_panel_devices.py
       - name: Verify HTML routes and safe owner controls
         run: |
           python - <<'PY'
@@ -40,7 +41,16 @@ jobs:
           assert 'curl -fsSL "$RAW_BASE/app/routers/multiguard_service_panel.py"' in install
           runtime=(root/"app/routers/multiguard_runtime.py").read_text()
           config=(root/"app/routers/multiguard_panel_settings.py").read_text()
-          assert 'multiguard_panel_settings.router' in install
+          assert 'multiguard_panel_devices.router' in install
+          assert 'OWNER_DEVICE_FILE' in install
+          notes=(root/"app/routers/multiguard_panel_devices.py").read_text()
+          assert '@router.post("/multiguard/panel/device/{installation_id}/note")' in notes
+          assert 'guard.owner_device_notes_audit' in notes
+          assert '_token_valid(csrf_token)' in notes
+          assert 'MAX' not in notes  # no undocumented arbitrary app-version assumptions
+          assert 'owner_device_note_form' in runtime
+          assert "owner_notes.priority" in runtime
+                    assert 'multiguard_panel_settings.router' in install
           assert 'SETTINGS_PANEL_FILE' in install
           assert '@router.post("/multiguard/panel/settings")' in config
           assert '@router.get("/multiguard/panel/settings"' in config
