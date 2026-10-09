@@ -844,9 +844,26 @@ def _panel_html(body: str) -> str:
   <aside class="workspace-sidebar" aria-label="Nawigacja Multi-Servis">
     <a class="brand-home" href="/multiguard/panel/dashboard">
       <span class="brand-emblem" aria-hidden="true">
-        <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-          <path d="M13 4v7m-6 9v-7h12v7M7 8v5m12-5v5M5 20h4m8 0h4"/>
-          <circle cx="13" cy="4" r="2"/><circle cx="7" cy="20" r="2"/><circle cx="19" cy="20" r="2"/>
+        <svg viewBox="0 0 64 64" fill="none" aria-label="Symbol tranzystora Multi-Servis" role="img">
+          <defs>
+            <linearGradient id="ms-metal" x1="0" y1="0" x2="1" y2="1">
+              <stop stop-color="#ffffff"/><stop offset=".48" stop-color="#9cb8cb"/>
+              <stop offset="1" stop-color="#e9f3fa"/>
+            </linearGradient>
+            <linearGradient id="ms-blue" x1="0" y1="0" x2="1" y2="1">
+              <stop stop-color="#35e5ff"/><stop offset="1" stop-color="#087bdf"/>
+            </linearGradient>
+          </defs>
+          <path d="M35 8a24 24 0 0 0-25 22m.5 8A24 24 0 0 0 35 58"
+                stroke="url(#ms-metal)" stroke-width="5" stroke-linecap="round"/>
+          <path d="M46 12a24 24 0 0 1 9 19c0 11-5.5 19-13 23"
+                stroke="url(#ms-blue)" stroke-width="5.5" stroke-linecap="round"/>
+          <path d="M35 3v14m11-14v16M35 52v9m11-11v11"
+                stroke="url(#ms-metal)" stroke-width="5" stroke-linecap="round"/>
+          <path d="M4 34h20m0-10v22m0-17 20-14m-20 25 20 14"
+                stroke="url(#ms-metal)" stroke-width="5" stroke-linecap="round"
+                stroke-linejoin="round"/>
+          <path d="m38 48 7 6-2-10" fill="#d1eefb"/>
         </svg>
       </span>
       <span><span class="brand-name"><span class="brand-multi">Multi</span><span class="brand-servis">-Servis</span></span>
@@ -857,6 +874,7 @@ def _panel_html(body: str) -> str:
       <a href="/multiguard/panel/dashboard"><span class="nav-icon" aria-hidden="true">⌂</span>Pulpit</a>
       <a href="/multiguard/panel/computers"><span class="nav-icon" aria-hidden="true">▤</span>Komputery</a>
       <a href="/multiguard/panel/service"><span class="nav-icon" aria-hidden="true">◇</span>Zlecenia serwisowe</a>
+      <a href="/multiguard/panel/statistics"><span class="nav-icon" aria-hidden="true">▥</span>Statystyki</a>
       <a href="/multiguard/panel/telemetry"><span class="nav-icon" aria-hidden="true">⌁</span>Telemetria i błędy</a>
       <a href="/multiguard/panel/licenses"><span class="nav-icon" aria-hidden="true">▣</span>Licencje</a>
       <a href="/multiguard/panel/versions"><span class="nav-icon" aria-hidden="true">≡</span>Historia wersji</a>
