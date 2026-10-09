@@ -1853,7 +1853,8 @@ def multiguard_panel(
     return _panel_html(
         """
         <section class="card">
-          <h1>Multi-Servis — Multi-Guard</h1>
+          <div class="eyebrow">MULTI-SERVIS / AKTYWACJA PROGRAMU</div>
+          <h1>Nowa licencja Multi-Guard</h1>
           <p>Generowanie klucza i instalacja w serwisie nie uruchamiają okresu licencji.</p>
           <form method="post" action="/multiguard/panel/generate">
             <label>Numer zlecenia Multi-Servis
