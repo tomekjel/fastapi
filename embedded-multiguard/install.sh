@@ -17,6 +17,7 @@ REMOTE_ROUTER_FILE="$ROUTER_DIR/multiguard_remote.py"
 MESH_ADAPTER_FILE="$ROUTER_DIR/multiguard_meshcentral.py"
 UPDATES_ROUTER_FILE="$ROUTER_DIR/multiguard_updates.py"
 SERVICE_PANEL_FILE="$ROUTER_DIR/multiguard_service_panel.py"
+SETTINGS_PANEL_FILE="$ROUTER_DIR/multiguard_panel_settings.py"
 SCRIPT_DIR="$APP_ROOT/scripts"
 SYNC_SCRIPT_FILE="$SCRIPT_DIR/sync_multiguard_releases.py"
 RELEASE_ROOT="$APP_ROOT/releases/multiguard"
@@ -31,6 +32,7 @@ HAD_REMOTE=0
 HAD_MESH=0
 HAD_UPDATES=0
 HAD_SERVICE_PANEL=0
+HAD_SETTINGS_PANEL=0
 
 cleanup() {
   rm -f "$OPENAPI_TMP"
@@ -72,6 +74,11 @@ rollback() {
       cp -a "$BACKUP_DIR/multiguard_service_panel.py" "$SERVICE_PANEL_FILE"
     else
       rm -f "$SERVICE_PANEL_FILE"
+    fi
+    if [ "$HAD_SETTINGS_PANEL" -eq 1 ]; then
+      cp -a "$BACKUP_DIR/multiguard_panel_settings.py" "$SETTINGS_PANEL_FILE"
+    else
+      rm -f "$SETTINGS_PANEL_FILE"
     fi
     systemctl disable --now multiservis-multiguard-release-sync.timer >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/multiservis-multiguard-release-sync.service
@@ -123,6 +130,10 @@ if [ -f "$SERVICE_PANEL_FILE" ]; then
   HAD_SERVICE_PANEL=1
   cp -a "$SERVICE_PANEL_FILE" "$BACKUP_DIR/multiguard_service_panel.py"
 fi
+if [ -f "$SETTINGS_PANEL_FILE" ]; then
+  HAD_SETTINGS_PANEL=1
+  cp -a "$SETTINGS_PANEL_FILE" "$BACKUP_DIR/multiguard_panel_settings.py"
+fi
 
 DEPLOY_STARTED=1
 
@@ -132,8 +143,9 @@ curl -fsSL "$RAW_BASE/app/routers/multiguard_remote.py" -o "$REMOTE_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_meshcentral.py" -o "$MESH_ADAPTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_updates.py" -o "$UPDATES_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_service_panel.py" -o "$SERVICE_PANEL_FILE"
+curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_settings.py" -o "$SETTINGS_PANEL_FILE"
 curl -fsSL "$RAW_BASE/scripts/sync_multiguard_releases.py" -o "$SYNC_SCRIPT_FILE"
-chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE"
+chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE"
 chmod 0755 "$SYNC_SCRIPT_FILE"
 
 PYTHON="$APP_ROOT/.venv/bin/python"
@@ -162,6 +174,7 @@ import_lines = [
     "from app.routers import multiguard_remote",
     "from app.routers import multiguard_updates",
     "from app.routers import multiguard_service_panel",
+    "from app.routers import multiguard_panel_settings",
 ]
 include_lines = [
     "app.include_router(multiguard_license.router)",
@@ -169,6 +182,7 @@ include_lines = [
     "app.include_router(multiguard_remote.router)",
     "app.include_router(multiguard_updates.router)",
     "app.include_router(multiguard_service_panel.router)",
+    "app.include_router(multiguard_panel_settings.router)",
 ]
 
 for import_line in import_lines:
@@ -192,7 +206,7 @@ for include_line in include_lines:
 path.write_text(source, encoding="utf-8")
 PY
 
-"$PYTHON" -m py_compile "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SYNC_SCRIPT_FILE" "$MAIN_FILE"
+"$PYTHON" -m py_compile "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$SYNC_SCRIPT_FILE" "$MAIN_FILE"
 
 cat > /etc/systemd/system/multiservis-multiguard-release-sync.service <<EOF
 [Unit]
@@ -274,6 +288,8 @@ required = [
     "/multiguard/panel/telemetry",
     "/multiguard/panel/telemetry/detail",
     "/multiguard/panel/licenses",
+    "/multiguard/panel/versions",
+    "/multiguard/panel/settings",
     "/multiguard/agent/remote/poll",
     "/multiguard/agent/remote/decision",
     "/multiguard/agent/remote/end",
