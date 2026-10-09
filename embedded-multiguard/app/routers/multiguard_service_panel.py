@@ -1,12 +1,14 @@
-"""Read-only Multi-Servis service dashboard embedded in the Multi-Guard owner web panel.
+"""OWNER service orders and financial statistics in Multi-Servis web.
 
-Uses the same service PostgreSQL database and the existing panel owner credentials.
-Never creates/edits service orders: device intake remains on Android with camera/OCR.
+The interface uses the same PostgreSQL figures as Android. Intake and camera/OCR
+remain on Android. No customer data is sent to external dashboards.
 """
 from __future__ import annotations
 
 import html
 import uuid
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode
@@ -203,11 +205,11 @@ def owner_order_media(
 
 
 _STATUS = {
-    "all": ("Wszystkie zlecenia", ""),
     "active": ("W trakcie naprawy", "s.status='IN_SERVICE'"),
     "ready": ("Gotowe do odbioru", "s.status='READY_FOR_PICKUP'"),
     "completed": ("Wydane", "s.status='COMPLETED'"),
     "cancelled": ("Anulowane", "s.status='CANCELLED'"),
+    "all": ("Wszystkie zlecenia", ""),
 }
 
 def status_badge(status: object) -> str:
@@ -224,13 +226,16 @@ def status_badge(status: object) -> str:
 
 @router.get("/multiguard/panel/service", response_class=HTMLResponse)
 def service_orders(
-    status: str = Query("all"),
+    status: str = Query("active"),
     q: str = Query("", max_length=120),
     page_number: int = Query(1, ge=1, le=5000),
+    page_size: int = Query(20),
     _: None = Depends(_panel_auth),
 ):
     if status not in _STATUS:
         raise HTTPException(400, "Nieprawidłowy filtr zleceń.")
+    if page_size not in (20, 50):
+        raise HTTPException(400, "Dostępne rozmiary strony: 20 lub 50.")
     where = []
     params: dict[str, object] = {}
     if _STATUS[status][1]:
@@ -248,14 +253,11 @@ def service_orders(
     sql = f"""
         SELECT s.id,s.reception_number,s.status,s.received_at,s.completed_at,
                s.manufacturer,s.model,s.serial_number,s.device_type,
-               s.display_name,s.phone_e164,
-               COALESCE(f.service_amount,0) AS service_amount,
-               COALESCE(f.material_cost,0) AS material_cost
+               s.display_name,s.phone_e164
         FROM service.v_service_order_summary s
-        LEFT JOIN service.owner_finances f ON f.service_order_id=s.id
         {where_sql}
         ORDER BY s.received_at DESC
-        LIMIT 41 OFFSET :offset
+        LIMIT :limit OFFSET :offset
     """
     with engine.connect() as con:
         counts = con.execute(text("""
@@ -266,18 +268,10 @@ def service_orders(
                    count(*) FILTER (WHERE status='CANCELLED') AS cancelled
             FROM service.service_orders
         """)).mappings().one()
-        finance = con.execute(text("""
-            SELECT COALESCE(sum(f.service_amount),0) AS revenue,
-                   COALESCE(sum(f.material_cost),0) AS costs,
-                   COALESCE(sum(f.service_amount-f.material_cost),0) AS profit
-            FROM service.service_orders s
-            JOIN service.owner_finances f ON f.service_order_id=s.id
-            WHERE s.status='COMPLETED'
-              AND s.completed_at >= (date_trunc('month', now() AT TIME ZONE 'Europe/Warsaw') AT TIME ZONE 'Europe/Warsaw')
-        """)).mappings().one()
-        rows = con.execute(text(sql), {**params, "offset": (page_number-1)*40}).mappings().all()
-    has_more = len(rows) > 40
-    rows = rows[:40]
+        rows = con.execute(text(sql), {**params, "limit": page_size + 1,
+                                       "offset": (page_number-1)*page_size}).mappings().all()
+    has_more = len(rows) > page_size
+    rows = rows[:page_size]
     metrics = [
         ("Aktywne", counts["active"], "/multiguard/panel/service?status=active", "blue"),
         ("Do odbioru", counts["ready"], "/multiguard/panel/service?status=ready", "gold"),
@@ -288,16 +282,8 @@ def service_orders(
         f'<a class="metric metric-link accent-{tone}" href="{url}"><b>{esc(label)}</b><strong>{int(value or 0)}</strong><small>Przejdź do listy →</small></a>'
         for label,value,url,tone in metrics
     )
-    finance_cards = "".join(
-        f'<div class="metric accent-{tone}"><b>{esc(title)}</b><strong class="money">{money(value)}</strong></div>'
-        for title,value,tone in [
-            ("Przychód z wydań · miesiąc",finance["revenue"],"gold"),
-            ("Koszty wydanych · miesiąc",finance["costs"],"red"),
-            ("Wynik z wydanych · miesiąc",finance["profit"],"green"),
-        ]
-    )
     tab_html = "".join(
-        f'<a class="filter-tab {"selected" if status==key else ""}" href="/multiguard/panel/service?{urlencode({"status":key,"q":query})}">{esc(label)}</a>'
+        f'<a class="filter-tab {"selected" if status==key else ""}" href="/multiguard/panel/service?{urlencode({"status":key,"q":query,"page_size":page_size})}">{esc(label)}</a>'
         for key,(label,_) in _STATUS.items()
     )
     trs = []
@@ -311,35 +297,31 @@ def service_orders(
           <td>{esc(row['display_name'] or '—')}<small class="row-sub">{esc(row['phone_e164'] or '')}</small></td>
           <td class="numbers">{dt(row['received_at'])}</td>
           <td class="numbers">{dt(row['completed_at'])}</td>
-          <td class="numbers">{money(row['service_amount']) if row['status']=='COMPLETED' else '—'}</td>
           <td><a class="button-link compact" href="/multiguard/panel/service/{row['id']}">PODGLĄD</a></td>
         </tr>""")
-    table = "".join(trs) or '<tr><td colspan="8" class="muted">Brak zleceń dla wybranych filtrów.</td></tr>'
+    table = "".join(trs) or '<tr><td colspan="7" class="muted">Brak zleceń dla wybranych filtrów.</td></tr>'
     def link_for(n: int) -> str:
-        return "/multiguard/panel/service?" + urlencode({"status":status,"q":query,"page_number":n})
+        return "/multiguard/panel/service?" + urlencode({"status":status,"q":query,"page_number":n,"page_size":page_size})
     prev = f'<a class="button-link compact" href="{link_for(page_number-1)}">← Poprzednie</a>' if page_number>1 else ""
     nxt = f'<a class="button-link compact" href="{link_for(page_number+1)}">Następne →</a>' if has_more else ""
     return page(f"""
     <section class="card panel-hero service-hero">
       <div class="eyebrow">MULTI-SERVIS / SERWIS WŁAŚCICIELA</div>
-      <h1>Zlecenia i statystyki</h1>
-      <p>Podgląd rzeczywistych danych z tej samej bazy PostgreSQL co aplikacja Android. Bez modyfikowania zleceń.</p>
+      <h1>Zlecenia serwisowe</h1>
+      <p>Najpierw sprawy wymagające pracy. Finanse zbiorcze są wyłącznie w zakładce Statystyki.</p>
       <div class="metrics owner-kpis">{cards}</div>
     </section>
     <section class="card">
-      <div class="section-head"><div><div class="eyebrow">FINANSE</div><h2>Wydania w bieżącym miesiącu</h2><p>Przychód liczony wyłącznie po faktycznym wydaniu urządzenia klientowi. Koszty dotyczą tutaj wydanych zleceń, a nie wszystkich bieżących wydatków.</p></div></div>
-      <div class="metrics">{finance_cards}</div>
-    </section>
-    <section class="card">
-      <div class="section-head"><div><div class="eyebrow">ZLECENIA</div><h2>{esc(_STATUS[status][0])}</h2><p>Lista zleceń — 40 pozycji na stronę.</p></div></div>
+      <div class="section-head"><div><div class="eyebrow">ZLECENIA</div><h2>{esc(_STATUS[status][0])}</h2></div><div class="list-size-control"><a href="/multiguard/panel/service?{urlencode({"status":status,"q":query,"page_size":20})}" class="filter-tab {"selected" if page_size==20 else ""}">20</a><a href="/multiguard/panel/service?{urlencode({"status":status,"q":query,"page_size":50})}" class="filter-tab {"selected" if page_size==50 else ""}">50</a><span>na stronę</span></div></div>
       <div class="filter-tabs">{tab_html}</div>
       <form class="service-search" method="get" action="/multiguard/panel/service">
         <input type="hidden" name="status" value="{esc(status)}">
+        <input type="hidden" name="page_size" value="{page_size}">
         <label>Wyszukaj numer, klienta, telefon, model lub numer seryjny<input name="q" maxlength="120" value="{esc(query)}" placeholder="np. MS-2026-..., Lenovo, +48..."></label>
         <button type="submit">SZUKAJ</button>
       </form>
       <div class="table-wrap"><table>
-        <thead><tr><th>Numer</th><th>Status</th><th>Sprzęt</th><th>Klient</th><th>Przyjęto</th><th>Wydano</th><th>Przychód</th><th></th></tr></thead>
+        <thead><tr><th>Numer</th><th>Status</th><th>Sprzęt</th><th>Klient</th><th>Przyjęto</th><th>Wydano</th><th></th></tr></thead>
         <tbody>{table}</tbody>
       </table></div>
       <div class="pagination">{prev}<span>Strona {page_number}</span>{nxt}</div>
@@ -426,7 +408,11 @@ def service_order_detail(
                 f'<td><a{controls} href="{url}">'
                 f'{action}</a></td></tr>')
     media_rows="".join(media_row(x) for x in media)
-    fin=[("Kwota usługi",row["service_amount"]),("Koszt materiałów",row["material_cost"]),("Wartość dawcy",row["donor_material_value"]),("Wynik",row["actual_profit"])]
+    fin=[("Kwota usługi",row["service_amount"]),
+         ("Koszt materiałów",row["material_cost"]),
+         ("Wartość materiałów z dawcy",row["donor_material_value"]),
+         ("Zysk rzeczywisty",row["actual_profit"]),
+         ("Zysk ekonomiczny",(row["actual_profit"] or Decimal(0)) - (row["donor_material_value"] or Decimal(0)))]
     fin_cards="".join(f'<div class="metric"><b>{esc(k)}</b><strong class="money">{money(v)}</strong></div>' for k,v in fin)
     return page(f"""
     <section class="card panel-hero device-hero">
@@ -437,7 +423,7 @@ def service_order_detail(
       <div class="detail-facts">{facts}</div>
     </section>
     <section class="card"><h2>Opis i notatki</h2><div class="notes-grid">{notes}</div></section>
-    <section class="card"><h2>Finanse zlecenia</h2><div class="metrics">{fin_cards}</div><p>Przychód i wynik pojawiają się w statystykach zrealizowanych usług dopiero po statusie „Wydany”.</p></section>
+    <details class="card finance-disclosure"><summary><span>Finanse zlecenia</span><span class="finance-disclosure-hint">Dane właściciela · kliknij, aby rozwinąć ▾</span></summary><div class="metrics">{fin_cards}</div><p>Kwota usługi jest uwzględniana w zestawieniu wydanych zleceń dopiero po wydaniu sprzętu.</p></details>
     <section class="card"><h2>Historia statusów</h2><div class="table-wrap"><table><thead><tr><th>Data</th><th>Poprzedni</th><th></th><th>Nowy</th></tr></thead><tbody>{hist or '<tr><td colspan="4">Brak historii.</td></tr>'}</tbody></table></div></section>
     <section class="card"><h2>Zdjęcia i dokumenty ({len(media)})</h2><p>Chroniony podgląd właściciela: miniatury obrazów i pobieranie pozostałych plików. Materiały są odczytywane wyłącznie ze zlecenia, nie zapisujemy ich w publicznym katalogu WWW.</p><div class="table-wrap"><table><thead><tr><th>Podgląd</th><th>Rodzaj</th><th>Plik</th><th>Opis</th><th>Data</th><th>Otwórz</th></tr></thead><tbody>{media_rows or '<tr><td colspan="6">Brak plików.</td></tr>'}</tbody></table></div></section>
     {GALLERY_WIDGET_HTML if photo_positions else ""}
