@@ -1291,10 +1291,11 @@ def provision(req: ProvisionRequest):
 
     credential = secrets.token_urlsafe(48)
     credential_hash = _hash(credential)
+    issued = str(_reception(link["reception_id"])["status"]).upper() == "COMPLETED"
     lifecycle = (
         link["lifecycle"]
         if link.get("rebind_pending") and link["lifecycle"] != "UNASSIGNED"
-        else "SERVICE_TEST"
+        else ("PENDING_ACCEPTANCE" if issued else "SERVICE_TEST")
     )
 
     with engine.begin() as connection:
@@ -1350,7 +1351,9 @@ def provision(req: ProvisionRequest):
         "requestId": req.request_id,
         "signedLicense": _signed_envelope(link),
         "installationCredential": credential,
-        "requiredDocuments": [],
+        "requiredDocuments": (
+            _required_documents() if link["lifecycle"] == "PENDING_ACCEPTANCE" else []
+        ),
     }
 
 
@@ -1368,12 +1371,33 @@ def refresh(req: RefreshRequest):
     elif link.get("valid_until") and _utcnow() >= link["valid_until"]:
         lifecycle = "EXPIRED"
 
+    # Android's old status callback may fail after issuance. The canonical
+    # service order still forces client consent on the next signed refresh.
+    if lifecycle == "SERVICE_TEST" and str(
+        _reception(link["reception_id"])["status"]
+    ).upper() == "COMPLETED":
+        lifecycle = "PENDING_ACCEPTANCE"
+
     with engine.begin() as connection:
         row = connection.execute(
             text(
                 """
                 UPDATE guard.license_links
-                SET lifecycle=:lifecycle, app_version=:app_version, updated_at=now()
+                SET lifecycle=CASE
+                        WHEN lifecycle='REVOKED' THEN lifecycle
+                        WHEN lifecycle='EXPIRED' AND :lifecycle!='REVOKED'
+                            THEN lifecycle
+                        WHEN lifecycle IN ('PENDING_ACCEPTANCE','ACTIVE','EXPIRED','REVOKED')
+                             AND :lifecycle='SERVICE_TEST' THEN lifecycle
+                        WHEN lifecycle IN ('ACTIVE','EXPIRED','REVOKED')
+                             AND :lifecycle='PENDING_ACCEPTANCE' THEN lifecycle
+                        ELSE :lifecycle END,
+                    approved_at=COALESCE(
+                        approved_at,
+                        CASE WHEN :lifecycle='PENDING_ACCEPTANCE' THEN now() ELSE NULL END
+                    ),
+                    app_version=:app_version,
+                    updated_at=now()
                 WHERE id=:id
                 RETURNING *
                 """
@@ -1998,6 +2022,8 @@ def approve_reception_license(
         raise HTTPException(409, "Multi-Guard nie został jeszcze zainstalowany.")
     if link["lifecycle"] == "ACTIVE":
         return {"status": "already_active", **_public_status(link)}
+    if link["lifecycle"] == "PENDING_ACCEPTANCE":
+        return {"status": "PENDING_ACCEPTANCE", **_public_status(link)}
     if link["lifecycle"] in {"EXPIRED", "REVOKED"}:
         raise HTTPException(409, f"Licencja ma stan {link['lifecycle']}.")
 
@@ -2007,18 +2033,24 @@ def approve_reception_license(
                 """
                 UPDATE guard.license_links
                 SET lifecycle='PENDING_ACCEPTANCE',
-                    approved_at=now(),
+                    approved_at=COALESCE(approved_at,now()),
                     updated_at=now()
-                WHERE id=:id
+                WHERE id=:id AND lifecycle='SERVICE_TEST'
                 RETURNING *
                 """
             ),
             {"id": link["id"]},
-        ).mappings().one()
-        link = _normalize_link(dict(row))
-        _update_installation_mirror(connection, link)
+        ).mappings().first()
+        if row:
+            link = _normalize_link(dict(row))
+            _update_installation_mirror(connection, link)
+        else:
+            link = _normalize_link(dict(connection.execute(
+                text("SELECT * FROM guard.license_links WHERE id=:id"),
+                {"id": link["id"]}
+            ).mappings().one()))
 
-    return {"status": "PENDING_ACCEPTANCE", **_public_status(link)}
+    return {"status": link["lifecycle"], **_public_status(link)}
 
 
 @router.post("/multiguard/licenses/receptions/{reception_id}/release-channel")
