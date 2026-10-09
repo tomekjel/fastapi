@@ -28,7 +28,16 @@ jobs:
             embedded-multiguard/app/routers/multiguard_panel_triage.py \
             embedded-multiguard/app/routers/multiguard_panel_diagnostics.py
       - name: Validate reversible backend installer syntax
-        run: bash -n embedded-multiguard/install.sh
+        run: |
+          bash -n embedded-multiguard/install.sh
+          bash -n embedded-multiguard/deploy-owner-web-v12.sh
+          grep -q 'MULTISERVIS_OWNER_WEB_REF' embedded-multiguard/deploy-owner-web-v12.sh
+          grep -q 'ROLLBACK owner V12 panel files' embedded-multiguard/deploy-owner-web-v12.sh
+          grep -q 'PASS: existing non-panel API endpoints' embedded-multiguard/deploy-owner-web-v12.sh
+          if grep -q 'sync_multiguard_releases.py' embedded-multiguard/deploy-owner-web-v12.sh; then
+            echo 'BLOCKED: OWNER panel-only deployment would touch release synchronization'
+            exit 1
+          fi
       - name: Unit-test owner photo access boundaries and safe diagnostic licence drafts
         run: python embedded-multiguard/tests/test_owner_panel_security.py
       - name: Verify HTML routes and safe owner controls
