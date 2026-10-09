@@ -1381,7 +1381,7 @@ def multi_guard_panel_dashboard(
               <td class="mono">{_panel_h(short_id)}</td>
               <td><b>{_panel_h(device_label)}</b><br><span class="muted">{_panel_h(pending["serial_number"] or pending["hostname"] or "")}</span></td>
               <td>{_panel_h(pending["app_version"] or "—")}</td>
-              <td><span class="badge {"good" if online else "muted"}">{"ONLINE" if online else "offline"}</span></td>
+              <td><span class="badge {"good" if online else "muted"}">{"KONTAKT ≤5 MIN" if online else "BRAK ŚWIEŻEGO KONTAKTU"}</span></td>
               <td>{_panel_h(state_label)}</td>
               <td>{_panel_dt(last_seen)}</td>
               <td>{action}</td>
