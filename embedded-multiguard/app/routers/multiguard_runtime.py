@@ -17,6 +17,7 @@ from sqlalchemy import text
 
 from app.database import engine
 from app.security import CurrentUser, require_owner
+from app.routers.multiguard_panel_settings import owner_panel_config
 from app.routers.multiguard_license import (
     _ensure_schema as _ensure_license_schema,
     _panel_auth,
@@ -846,6 +847,7 @@ def agent_event(body: EventBody):
 @router.get("/overview")
 def overview(user: CurrentUser = Depends(require_owner)):
     _ensure_schema()
+    config = owner_panel_config()
     with engine.connect() as connection:
         counts = connection.execute(
             text(
@@ -926,9 +928,16 @@ def _device_label(row: Any) -> str:
     return label
 
 
-def _fetch_device_rows(limit: int = 250, presence_filter: str = "all"):
+def _fetch_device_rows(
+    limit: int = 250, presence_filter: str = "all", search: str = "",
+    offset: int = 0, silence_days: int = 7,
+):
+
     _ensure_schema()
     limit = min(max(int(limit), 1), 500)
+    offset = min(max(int(offset), 0), 500000)
+    silence_days = min(max(int(silence_days), 1), 90)
+    search_like = "%" + search.strip()[:120].replace("%", "\\%").replace("_", "\\_") + "%"
     with engine.connect() as connection:
         return connection.execute(
             text(
@@ -1020,7 +1029,17 @@ def _fetch_device_rows(limit: int = 250, presence_filter: str = "all"):
                     :presence_filter='all'
                     OR (:presence_filter='removed' AND au.installation_id IS NOT NULL)
                     OR (:presence_filter='silent' AND au.installation_id IS NULL
-                        AND (gi.last_seen_at IS NULL OR gi.last_seen_at < now()-interval '7 days'))
+                        AND gi.lifecycle='ACTIVE'
+                        AND (gi.last_seen_at IS NULL OR
+                          gi.last_seen_at < now() - :silence_days * interval '1 day'))
+                  )
+                  AND (
+                      :search_is_empty OR
+                      COALESCE(d.model,'') ILIKE :search_like OR
+                      COALESCE(d.manufacturer,'') ILIKE :search_like OR
+                      COALESCE(d.hostname,'') ILIKE :search_like OR
+                      COALESCE(d.serial_number,'') ILIKE :search_like OR
+                      COALESCE(ll.reception_number,'') ILIKE :search_like
                   )
                 ORDER BY
                     -- Client-initiated uninstalls stay accessible, at the
@@ -1036,10 +1055,16 @@ def _fetch_device_rows(limit: int = 250, presence_filter: str = "all"):
                     COALESCE(ev.important_30d,0) DESC,
                     COALESCE(ev.warning_30d,0) DESC,
                     gi.last_seen_at DESC NULLS LAST
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"limit": limit, "presence_filter": presence_filter},
+            {
+                "limit": limit, "offset": offset,
+                "presence_filter": presence_filter,
+                "silence_days": silence_days,
+                "search_is_empty": not search.strip(),
+                "search_like": search_like,
+            },
         ).mappings().all()
 
 
@@ -1180,8 +1205,13 @@ def multi_guard_telemetry(
     return [dict(row) for row in rows]
 
 
-def _presence_indicator(last_seen_at: Optional[datetime], uninstall_reported_at: Optional[datetime]):
-    """(CSS, label) — contact recency, never a claim the PC is logged in/online."""
+def _presence_indicator(
+    last_seen_at: Optional[datetime],
+    uninstall_reported_at: Optional[datetime],
+    recent_hours: int = 24,
+    delayed_days: int = 7,
+):
+    """Last *server-confirmed* contact, not Windows login, physical uptime or licence."""
     if uninstall_reported_at is not None:
         return "removed", "Odinstalowanie zgłoszone"
     if last_seen_at is None:
@@ -1190,20 +1220,24 @@ def _presence_indicator(last_seen_at: Optional[datetime], uninstall_reported_at:
         age_s = max(0, (datetime.now(timezone.utc) - last_seen_at).total_seconds())
     except (TypeError, ValueError):
         return "unknown", "Brak potwierdzonego kontaktu"
-    if age_s <= 24 * 3600:
-        return "recent", "Kontakt w ciągu 24 h"
-    if age_s <= 7 * 24 * 3600:
-        return "delayed", "Brak kontaktu 1–7 dni"
+    if age_s <= recent_hours * 3600:
+        return "recent", f"Kontakt w ciągu {recent_hours} h"
+    if age_s <= delayed_days * 24 * 3600:
+        return "delayed", f"Brak kontaktu do {delayed_days} dni"
     if age_s <= 30 * 24 * 3600:
-        return "stale", "Brak kontaktu 7–30 dni"
+        return "stale", f"Brak kontaktu {delayed_days}–30 dni"
     return "stale", "Brak kontaktu ponad 30 dni"
 
 
 @router.get("/panel/dashboard", response_class=HTMLResponse)
 def multi_guard_panel_dashboard(
     presence: str = "all",
+    q: str = "",
+    page_number: int = 1,
     _: None = Depends(_panel_auth),
 ):
+    if len(q) > 120 or not 1 <= page_number <= 5000:
+        raise HTTPException(400, "Nieprawidłowe parametry wyszukiwania.")
     if presence not in {"all", "silent", "removed"}:
         raise HTTPException(400, "Nieprawidłowy filtr kontaktu Multi-Guard.")
     _ensure_schema()
@@ -1280,7 +1314,40 @@ def multi_guard_panel_dashboard(
             )
         ).mappings().all()
 
-    devices = _fetch_device_rows(250, presence_filter=presence)
+    page_size = config["inventory_page_size"]
+    device_results = _fetch_device_rows(
+        page_size + 1,
+        presence_filter=presence,
+        search=q,
+        offset=(page_number - 1) * page_size,
+        silence_days=config["no_contact_filter_days"],
+    )
+    has_more_devices = len(device_results) > page_size
+    devices = device_results[:page_size]
+
+    def device_page_url(page: int) -> str:
+        return "/multiguard/panel/dashboard?" + urllib.parse.urlencode({
+            "presence": presence, "q": q, "page_number": page,
+        }) + "#devices"
+
+    device_search_form = f"""
+        <form class="service-search" method="get" action="/multiguard/panel/dashboard">
+          <input type="hidden" name="presence" value="{_panel_h(presence)}">
+          <label>Wyszukaj model, producenta, numer seryjny, hostname lub zlecenie
+            <input name="q" maxlength="120" value="{_panel_h(q)}"
+              placeholder="np. Lenovo, MG-2026, S/N">
+          </label>
+          <button type="submit">SZUKAJ</button>
+        </form>
+    """
+    device_paging = (
+        f'<a class="button-link compact" href="{device_page_url(page_number - 1)}">← POPRZEDNIA</a>'
+        if page_number > 1 else ""
+    ) + f'<span>Strona {page_number}</span>' + (
+        f'<a class="button-link compact" href="{device_page_url(page_number + 1)}">NASTĘPNA →</a>'
+        if has_more_devices else ""
+    )
+
 
     metrics = [
         ("Aktywne", counts["active"]),
@@ -1302,7 +1369,8 @@ def multi_guard_panel_dashboard(
     rows_html = []
     for row in devices:
         presence_style, presence_label = _presence_indicator(
-            row["last_seen_at"], row["uninstall_reported_at"]
+            row["last_seen_at"], row["uninstall_reported_at"],
+            config["contact_recent_hours"], config["contact_delayed_days"],
         )
         health = str(row["health_level"] or "GREEN").upper()
         health_class = {
@@ -1431,9 +1499,10 @@ def multi_guard_panel_dashboard(
           </div>
           <div class="filter-tabs">
             <a class="filter-tab {'selected' if presence=='all' else ''}" href="/multiguard/panel/dashboard?presence=all#devices">WSZYSTKIE</a>
-            <a class="filter-tab {'selected' if presence=='silent' else ''}" href="/multiguard/panel/dashboard?presence=silent#devices">BRAK KONTAKTU PONAD 7 DNI</a>
+            <a class="filter-tab {'selected' if presence=='silent' else ''}" href="/multiguard/panel/dashboard?presence=silent#devices">BRAK KONTAKTU PONAD {config['no_contact_filter_days']} DNI</a>
             <a class="filter-tab {'selected' if presence=='removed' else ''}" href="/multiguard/panel/dashboard?presence=removed#devices">ZGŁOSZONE ODINSTALOWANIE</a>
           </div>
+          {device_search_form}
           <div class="table-wrap">
             <table>
               <thead>
@@ -1445,6 +1514,7 @@ def multi_guard_panel_dashboard(
               <tbody>{''.join(rows_html)}</tbody>
             </table>
           </div>
+          <div class="pagination">{device_paging}</div>
         </section>
         """
     )
@@ -1536,8 +1606,10 @@ def multi_guard_panel_device(
             {"installation_id": iid},
         ).mappings().all()
 
+    settings = owner_panel_config()
     device_presence_style, device_presence_label = _presence_indicator(
-        row["last_seen_at"], row["uninstall_reported_at"]
+        row["last_seen_at"], row["uninstall_reported_at"],
+        settings["contact_recent_hours"], settings["contact_delayed_days"],
     )
     event_rows = []
     for event in events:
