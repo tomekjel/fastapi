@@ -213,9 +213,19 @@ def save_owner_installation_name(
               SET friendly_name=EXCLUDED.friendly_name, updated_at=now()
         """), {"id": installation_id, "name": clean})
     # Do not allow an arbitrary external redirect supplied by a form.
-    target = (
-        f"/multiguard/panel/pending/{installation_id}#owner-name"
-        if return_to == "pending" else
-        f"/multiguard/panel/computers#pending"
-    )
+    if return_to == "pending":
+        target = f"/multiguard/panel/pending/{installation_id}#owner-name"
+    elif return_to == "device":
+        with engine.connect() as con:
+            internal = con.execute(text("""
+                SELECT id FROM guard.installations
+                WHERE installation_external_id=:id AND is_current=TRUE
+                LIMIT 1
+            """), {"id": installation_id}).scalar_one_or_none()
+        target = (
+            f"/multiguard/panel/device/{internal}#owner-name"
+            if internal else "/multiguard/panel/computers#pending"
+        )
+    else:
+        target = "/multiguard/panel/computers#pending"
     return RedirectResponse(target, status_code=303)
