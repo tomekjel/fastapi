@@ -844,27 +844,7 @@ def _panel_html(body: str) -> str:
   <aside class="workspace-sidebar" aria-label="Nawigacja Multi-Servis">
     <a class="brand-home" href="/multiguard/panel/dashboard">
       <span class="brand-emblem" aria-hidden="true">
-        <svg viewBox="0 0 64 64" fill="none" aria-label="Symbol tranzystora Multi-Servis" role="img">
-          <defs>
-            <linearGradient id="ms-metal" x1="0" y1="0" x2="1" y2="1">
-              <stop stop-color="#ffffff"/><stop offset=".48" stop-color="#9cb8cb"/>
-              <stop offset="1" stop-color="#e9f3fa"/>
-            </linearGradient>
-            <linearGradient id="ms-blue" x1="0" y1="0" x2="1" y2="1">
-              <stop stop-color="#35e5ff"/><stop offset="1" stop-color="#087bdf"/>
-            </linearGradient>
-          </defs>
-          <path d="M35 8a24 24 0 0 0-25 22m.5 8A24 24 0 0 0 35 58"
-                stroke="url(#ms-metal)" stroke-width="5" stroke-linecap="round"/>
-          <path d="M46 12a24 24 0 0 1 9 19c0 11-5.5 19-13 23"
-                stroke="url(#ms-blue)" stroke-width="5.5" stroke-linecap="round"/>
-          <path d="M35 3v14m11-14v16M35 52v9m11-11v11"
-                stroke="url(#ms-metal)" stroke-width="5" stroke-linecap="round"/>
-          <path d="M4 34h20m0-10v22m0-17 20-14m-20 25 20 14"
-                stroke="url(#ms-metal)" stroke-width="5" stroke-linecap="round"
-                stroke-linejoin="round"/>
-          <path d="m38 48 7 6-2-10" fill="#d1eefb"/>
-        </svg>
+        <img alt="" width="42" height="42" style="display:block;object-fit:contain" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAAwFBMVEUWICuQm6jp7PIFovZTWF9oaWvt9PnN4vWlpal4iZultsgpMDje6/ciN0gCbtVaYmsjLzeXoaw7Q00cRV6vyuN3eaJ0kJaZo64Jsv9veoUAAP8Acv8DyP4zOkJIUF0GZ6Vkr/IUHSRLq+8zPEcvoPGx0d8aamo6QUoorPQA//+xseGtus4uddF/f/+wusUbH2EBPpMEkLd6pMlv4vy5ws1deo9qdoN7hJBYwve9xtL//wDp1L8AAAD7/f4OGiUBCRJAiCbdAAAAQHRSTlP1+yX4Vw1b5xn8+aqf+f39C19u+voSHJ0D/QEC/pSW+CJyXmmaHAONbAEOYKUCnBP+//4eZ3WxsUiEAQwACfz9/DHyFgAABEtJREFUeNrtl2t3m0YQhgcM1gJCoAtSJUW2G99qO3bSpvfuLv//X+Wd2UUCgVo7/dKek7EPkgzvs7NzW5n0vzT6BvjfAIy6uFB8ub81XwOIdZRTpK9zi2v89YAZ0ZsBsVKqqioTsTSit3lgHqv9e2jZg7cAzJIvt0/T6Wo1DQWAi30twDxqHf78kgZpGsCm3gN6LUBB/keaOjUDYpZeW0Rie/cKgMLq6YKXByEpinUUeYD9RevtPwFMrJ/SRRCAUOS2ZiNbcxqttZObv/R3fw9Aqa2wchqsSaTwmykSRKLJ2dlVh0B9fbiC42kAuaVsFkXLOIoyEg8EAML2NMA8G9YHBcsj1YpLxTGoGdAhHAMqLXpiuatFWImXjLeALTHgLNw8nAAoPfX6HWIRGx8UM7N1ptWecHMIAx3pVSB6Xr50+lIKGTFgIlGdM+H9ntAFPBvWz2vvvjSiVvcWDoVuBfgwfweC2W4GANiAxI9m8mm5VOw9Mpn5+i21QkrP3rVc6AAexAHeLlZezvM8h9Ps/f6JUke2zsWFhz5g74DSdwxA3dxj+Z3S7Q7KbP0jCJ/1sgdY6hVHkHbaeQDAwXtvd/BJotAkgto1qMQBqyAHICdy3nfnqEGOOQp6s2kBNrLoNEiCvM5MHOO3Yn3Xe2c7kj3cunLsBBGANbkUoCbZA6OPx3iJlqgvAfhdX7UAcfmxLMvfkgQ7iEL1eKvCKQPCHgB7c0H4wQWBmpnJxr1bUz6fcwZ5BwMAzCpXjR3Azund7MjzRj4EwKbyPiDOxL4Xi7yxP0OAIQ+am8aEqpkBahgg/TA/9BO144s6Soji+I6HQMWAx4EgxsiCAK6OAJUUIjrJyHMCMNzNRzZzgH4dVNIKxK3ksoW43oe9SjIocB4Jf26OS3npS5lCAUgMerUcczvOZShtB+YBAEktB6gAeKBbDMOLzOjN3gFLlzJYP/cAsevGmozEAKODFJqXMuu21RSyDDXzcWge+D1cYx4iBliLi1TOl53fCDYAByYnJlKseSLlNUnc8N0i5IkcYSt+ynHNIwKTCWaiPjkTMdPQxk36SpO5EuepDJboJ1f6+cRY5yisefMy1jlyJstkNOGkyXDJIZ+8P3UuxEbOhULOUnzcnz8m5EMFlDnrb04fba6YggJjKzsuIDleLqH/YDabUwATOkLC62VR2FQRTjWUA3byifUmNGYAYLgZ8SMEdqImyjL09WyHSrACoE+TD5r1Ym2A/1PI9iSEpJDoM8ZngQGXT+fyTNgF7MXnYuMgSZixLiT6bJZW57/i9WU8HruH8PQewD55Ne6PYM3XM/ZkvS5eplSvRgmGZsp3R55yALT08sBigW9Yyd6KRVrXAQPIATyhDRgg/CTiNaxIuwDvQHgiBi2GhyTsQToKEInFyMeA49hJo/HJcZTx2AejsSQZjUdBsvLSfhoPY7lJ5iEp5/IGJcKXlvbbv33/GcAX5BLEBL959iYAAAAASUVORK5CYII=">
       </span>
       <span><span class="brand-name"><span class="brand-multi">Multi</span><span class="brand-servis">-Servis</span></span>
       <span class="brand-caption">CENTRUM ZARZĄDZANIA</span></span>
