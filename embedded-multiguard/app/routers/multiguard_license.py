@@ -882,6 +882,20 @@ def _panel_html(body: str) -> str:
     <main id="content">{body}</main>
   </div>
 </div>
+<script>
+(() => {{
+  const path = window.location.pathname;
+  const links = document.querySelectorAll('.workspace-sidebar nav a');
+  for (const link of links) {{
+    const target = new URL(link.href, window.location.origin);
+    const chosen = target.pathname === path ||
+      (target.hash === '#devices' && path.startsWith('/multiguard/panel/device/')) ||
+      (target.pathname === '/multiguard/panel/service' && path.startsWith('/multiguard/panel/service/')) ||
+      (target.pathname === '/multiguard/panel/telemetry' && path.startsWith('/multiguard/panel/telemetry/'));
+    if (chosen) link.setAttribute('aria-current', 'page');
+  }}
+}})();
+</script>
 </body>
 </html>"""
 
