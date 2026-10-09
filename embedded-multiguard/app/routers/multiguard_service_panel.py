@@ -255,3 +255,94 @@ def service_order_detail(
     <section class="card"><h2>Historia statusów</h2><div class="table-wrap"><table><thead><tr><th>Data</th><th>Poprzedni</th><th></th><th>Nowy</th></tr></thead><tbody>{hist or '<tr><td colspan="4">Brak historii.</td></tr>'}</tbody></table></div></section>
     <section class="card"><h2>Dokumentacja multimedialna ({len(media)})</h2><p>Wykaz zdjęć i dokumentów — bez pobierania ich do przeglądarki. Podgląd pełnych obrazów pozostaje w aplikacji mobilnej do czasu przygotowania bezpiecznego dostępu WWW.</p><div class="table-wrap"><table><thead><tr><th>Typ</th><th>Plik</th><th>Opis</th><th>Data</th></tr></thead><tbody>{media_rows or '<tr><td colspan="4">Brak plików.</td></tr>'}</tbody></table></div></section>
     """)
+
+
+# Release log: only records committed to the Multi-Servis release catalog
+# are shown. No invented changelog entries based on version numbers.
+_RELEASE_CATEGORIES = {
+    "ADDED": ("Dodano", "mg-green"),
+    "FIXED": ("Naprawiono", "mg-blue"),
+    "CHANGED": ("Zmieniono", "mg-gold"),
+    "REMOVED": ("Usunięto", "mg-red"),
+    "SECURITY": ("Bezpieczeństwo", "mg-red"),
+    "DODANO": ("Dodano", "mg-green"),
+    "NAPRAWIONO": ("Naprawiono", "mg-blue"),
+    "ZMIENIONO": ("Zmieniono", "mg-gold"),
+    "USUNIĘTO": ("Usunięto", "mg-red"),
+}
+def _changelog(notes: object) -> str:
+    import re
+    value = str(notes or "").strip()
+    if not value:
+        return '<p class="muted">Dla tego wydania nie zapisano jeszcze opisu zmian.</p>'
+    lines = []
+    for line in value.splitlines()[:150]:
+        line = line.strip().lstrip("•*- ").strip()
+        if not line:
+            continue
+        match = re.match(r"^(ADDED|FIXED|CHANGED|REMOVED|SECURITY|DODANO|NAPRAWIONO|ZMIENIONO|USUNIĘTO)\\s*[:\\-]\\s*(.+)$", line, re.I)
+        if match:
+            label, css = _RELEASE_CATEGORIES[match.group(1).upper()]
+            lines.append(f'<li><span class="badge {css}">{label}</span> {esc(match.group(2))}</li>')
+        else:
+            lines.append(f'<li>{esc(line)}</li>')
+    return '<ul class="release-changes">' + "".join(lines) + "</ul>" if lines else '<p class="muted">Brak opisu zmian.</p>'
+
+
+@router.get("/multiguard/panel/versions", response_class=HTMLResponse)
+def multiguard_release_history(
+    _: None = Depends(_panel_auth),
+):
+    with engine.connect() as con:
+        exists = con.execute(text("SELECT to_regclass('guard.release_versions') IS NOT NULL")).scalar_one()
+        rows = []
+        if exists:
+            rows = con.execute(text("""
+                SELECT version,channel,status,notes,rollout_percent,
+                       rollback_safe,published_at,created_at
+                FROM guard.release_versions
+                WHERE channel IN ('PILOT','STABLE')
+                ORDER BY published_at DESC NULLS LAST,created_at DESC
+                LIMIT 100
+            """)).mappings().all()
+    entries=[]
+    for row in rows:
+        channel_label = "BETA" if row["channel"] == "PILOT" else "STABLE"
+        accent = "mg-gold" if row["channel"] == "PILOT" else "mg-green"
+        state = str(row["status"] or "DRAFT").upper()
+        state_label = {
+            "DRAFT": "Szkic — nieudostępniona",
+            "AVAILABLE": "Dostępna",
+            "PAUSED": "Wstrzymana",
+            "RETIRED": "Archiwalna",
+        }.get(state,state)
+        entries.append(f"""
+        <article class="release-card">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">{esc(channel_label)} · {esc(row['version'])}</div>
+              <h2>Multi-Guard {esc(row['version'])}</h2>
+              <p>{esc(state_label)} • publikacja: {dt(row['published_at'])}</p>
+            </div>
+            <span class="badge {accent}">{esc(channel_label)}</span>
+          </div>
+          {_changelog(row['notes'])}
+        </article>""")
+    if not exists:
+        notice = '<p class="muted">Katalog wydań nie istnieje jeszcze w bazie. Historia pojawi się po skonfigurowaniu serwera aktualizacji.</p>'
+    elif not entries:
+        notice = '<p class="muted">Nie zarejestrowano jeszcze wydań BETA/STABLE. Starsze wydania TEST nie są automatycznie przedstawiane jako STABLE.</p>'
+    else:
+        notice = "".join(entries)
+    return page(f"""
+    <section class="card panel-hero">
+      <div class="eyebrow">MULTI-GUARD / HISTORIA ROZWOJU</div>
+      <h1>Historia wersji BETA i STABLE</h1>
+      <p>Co dodano, poprawiono, zmieniono lub usunięto w kolejnych wydaniach. Informacje pochodzą z katalogu aktualizacji na serwerze — bez wymyślania opisów zmian.</p>
+    </section>
+    <section class="card">
+      <h2>Historia opublikowanych i przygotowywanych wersji</h2>
+      <p>Wersja BETA może być udostępniona wybranym komputerom. STABLE wymaga osobnego zatwierdzenia właściciela.</p>
+      <div class="release-timeline">{notice}</div>
+    </section>
+    """)
