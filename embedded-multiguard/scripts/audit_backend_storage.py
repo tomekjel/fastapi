@@ -65,3 +65,13 @@ with ZipFile(ARCHIVE) as z:
         for k,line in enumerate(lines[:38]):
             if "settings" in line or "FileResponse" in line or "Path" in line:
                 print(f"{k+1}: {line.strip()[:210]}")
+
+    schema_files=[n for n in z.namelist() if n.lower().endswith((".sql",".yml",".yaml","requirements.txt")) and not n.startswith("__MACOSX")]
+    print("BUNDLED_SCHEMA_AND_SETUP_PATHS",schema_files[:80])
+    for item in schema_files:
+        if item.endswith("requirements.txt"):
+            print("REQUIREMENTS_SOURCE",item)
+            print("REQUIREMENTS_PACKAGES",[
+                line.split("==")[0].strip() for line in z.read(item).decode("utf-8","replace").splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            ])
