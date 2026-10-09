@@ -15,16 +15,16 @@ PANEL_CSS = r"""
   --surface-soft: #101b2b;
   --line: rgba(154, 176, 196, .19);
   --line-light: rgba(195, 208, 221, .25);
-  --gold: #d8ba8a;
-  --gold-low: rgba(216,186,138,.13);
-  --crimson: #cd7883;
-  --crimson-low: rgba(205,120,131,.12);
+  --gold: #e6bc65;
+  --gold-low: rgba(230,188,101,.12);
+  --crimson: #ed4056;
+  --crimson-low: rgba(237,64,86,.12);
   --cyan: #9bc9d9;
   --text: #e9eef4;
   --muted: #b0bfce;
   --subtle: #91a5b8;
   --green: #77cfa6;
-  --focus: #e3c08d;
+  --focus: #e6bc65;
   font: 400 16px/1.55 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
@@ -32,8 +32,8 @@ PANEL_CSS = r"""
 * { box-sizing: border-box }
 html { scroll-behavior: smooth }
 body { margin: 0; min-height: 100vh; background:
-  radial-gradient(ellipse 50% 40% at 87% -10%, rgba(180,112,119,.08), transparent),
-  radial-gradient(ellipse 70% 50% at 19% 96%, rgba(171,137,91,.07), transparent), var(--bg) }
+  radial-gradient(ellipse 65% 50% at 92% 2%, rgba(41,90,145,.12), transparent 65%),
+  linear-gradient(145deg,#07101e,#080f1a 75%) }
 body, input, select, textarea, button { font-weight: 400 }
 a { color: var(--cyan); text-underline-offset: 4px }
 a:hover { color: #f0d9ad }
@@ -56,16 +56,17 @@ small, .muted, .row-sub { color: var(--subtle); font-size: 14px; line-height: 1.
   background: linear-gradient(170deg,#101e30,#0a1626 65%,#0b1422);
   border-right: 1px solid var(--line); padding: 30px 16px 22px; display: flex; flex-direction: column }
 .workspace-sidebar:before { content:""; position:absolute;left:0;top:0;bottom:0;width:2px;
-  background:linear-gradient(var(--gold),transparent 25%,var(--crimson) 72%,transparent);opacity:.6 }
+  background:linear-gradient(180deg,var(--crimson),rgba(237,64,86,.2) 45%,transparent 92%);opacity:.8 }
 .brand-home { text-decoration: none; color: inherit; display:flex;align-items:center;gap:12px;padding:6px 9px 30px }
 .brand-home:hover { color:inherit }
 .brand-emblem { flex:none;display:grid;place-items:center;width:43px;height:43px;border-radius:12px;
-  border:1px solid rgba(216,186,138,.52);color:var(--gold);font-size:22px;
+  border:1px solid rgba(237,64,86,.43);color:var(--crimson);font-size:22px;
   font-weight:400;letter-spacing:-.08em;
-  background:radial-gradient(circle at 35% 25%,rgba(216,186,138,.17),transparent 70%),#14253a;
+  background:radial-gradient(circle at 35% 25%,rgba(237,64,86,.1),transparent 70%),#14253a;
   box-shadow:inset 0 1px rgba(255,255,255,.12),0 3px 14px rgba(0,0,0,.18) }
 .brand-name { font-size:20px; letter-spacing:.015em;line-height:1.1;color:#e9edf3;white-space:nowrap }
-.brand-name em { font-style:normal; color:var(--gold) }
+.brand-multi {color:#ed4056}
+.brand-servis {color:#e6bc65}
 .brand-caption { font-size:12px; color:var(--subtle);letter-spacing:.07em;display:block;margin-top:5px }
 .nav-group-label { margin:0 13px 12px;color:#a9b6c4;font-size:12px;letter-spacing:.12em;text-transform:uppercase }
 nav { display:flex;flex-direction:column;gap:4px; margin:0 0 23px;padding:0;position:static }
@@ -73,10 +74,10 @@ nav a { display:flex;align-items:center;gap:12px;text-decoration:none;color:#c5d
   border:1px solid transparent;border-radius:10px;padding:11px 12px;
   min-height:45px;font-size:15px;letter-spacing:0; transition:background .16s,border-color .16s }
 nav a:hover { color:#f2f6fa;background:rgba(190,204,222,.07);border-color:rgba(190,204,222,.12) }
-nav a[aria-current="page"] {color:#f6f1e8; background:linear-gradient(90deg,rgba(216,186,138,.13),rgba(216,186,138,.03));
-  border-color:rgba(216,186,138,.24); box-shadow:inset 2px 0 var(--gold) }
+nav a[aria-current="page"] {color:#f5f8fd; background:#172c42;
+  border-color:rgba(237,64,86,.43); box-shadow:inset 3px 0 var(--crimson) }
 .nav-icon { width:21px;height:21px; flex:none;display:grid;place-items:center;color:#9eb2c6;font-size:19px;font-weight:400 }
-nav a[aria-current="page"] .nav-icon { color:var(--gold) }
+nav a[aria-current="page"] .nav-icon { color:var(--crimson) }
 .rail-bottom { margin-top:auto;border-top:1px solid var(--line);padding:19px 12px 0 }
 .rail-editions {display:flex;align-items:center;gap:9px; font-size:13px;color:#b5c3d0;letter-spacing:.02em}
 .rail-editions:before,.rail-editions:after {content:"";display:block;width:17px;height:2px;border-radius:2px}
@@ -87,7 +88,7 @@ nav a[aria-current="page"] .nav-icon { color:var(--gold) }
 .workspace-topbar {display:flex;align-items:center;justify-content:space-between;gap:20px;
   border-bottom:1px solid var(--line);padding:22px clamp(20px,3vw,42px);
   background:linear-gradient(90deg,rgba(16,30,47,.76),rgba(13,23,38,.28))}
-.topbar-kicker {display:block;color:var(--gold);letter-spacing:.14em;font-size:12px;margin-bottom:3px}
+.topbar-kicker {display:block;color:#e8bb69;letter-spacing:.14em;font-size:12px;margin-bottom:3px}
 .topbar-title {font-size:18px; color:#e3ebf2; letter-spacing:.01em}
 .topbar-owner {display:inline-flex;align-items:center;gap:9px;border:1px solid var(--line);
   border-radius:40px;padding:7px 14px;color:#c3d0da;background:rgba(255,255,255,.025);font-size:13px;white-space:nowrap}
@@ -99,11 +100,10 @@ main {width:min(1580px,100%);margin:0 auto;padding:30px clamp(20px,3vw,42px) 64p
   padding:25px clamp(20px,2vw,29px);margin-bottom:20px;
   box-shadow:0 12px 35px rgba(2,6,13,.17),inset 0 1px rgba(242,247,255,.065)}
 .card:before {content:"";position:absolute;left:26px;right:26px;top:0;height:1px;pointer-events:none;
-  background:linear-gradient(90deg,transparent,rgba(218,187,139,.2),rgba(205,120,131,.13),transparent)}
-.card.panel-hero {border-color:rgba(212,179,133,.31);padding:34px clamp(24px,3vw,38px);
-  background:radial-gradient(ellipse at 98% 6%,rgba(191,112,118,.105),transparent 40%),
-  radial-gradient(ellipse at 0% 100%,rgba(207,165,98,.085),transparent 55%),
-  linear-gradient(115deg,#1a3045,#122335 70%,#102031)}
+  background:linear-gradient(90deg,transparent,rgba(130,172,212,.23),transparent)}
+.card.panel-hero {border-color:rgba(117,155,196,.31);padding:34px clamp(24px,3vw,38px);
+  background:radial-gradient(ellipse at 95% 0%,rgba(54,105,167,.14),transparent 52%),
+  linear-gradient(115deg,#172b41,#102137 70%,#0d1e31)}
 .card.panel-hero h1 {max-width:840px}
 .card.panel-hero p {max-width:890px;margin-bottom:0}
 .eyebrow {font-size:13px;letter-spacing:.12em;color:var(--gold);font-weight:400;margin-bottom:12px}
@@ -121,7 +121,7 @@ main {width:min(1580px,100%);margin:0 auto;padding:30px clamp(20px,3vw,42px) 64p
 .metric small {display:block;color:#9fb2c5;font-size:13px;margin-top:8px}
 .metric .money {font-size:clamp(20px,2.25vw,29px);overflow-wrap:anywhere}
 .metric-link {text-decoration:none;color:inherit;transition:transform .16s,border-color .16s}
-.metric-link:hover {transform:translateY(-2px);border-color:rgba(216,186,138,.4);color:inherit}
+.metric-link:hover {transform:translateY(-2px);border-color:rgba(230,188,101,.4);color:inherit}
 .accent-blue {border-left:2px solid var(--cyan)}
 .accent-gold {border-left:2px solid var(--gold)}
 .accent-green {border-left:2px solid var(--green)}
@@ -133,7 +133,7 @@ main {width:min(1580px,100%);margin:0 auto;padding:30px clamp(20px,3vw,42px) 64p
 /* Service: records-first, operational data needs its own rhythm */
 .service-hero {background:linear-gradient(125deg,#203044,#14263c 62%,#152130)}
 .service-hero .owner-kpis {grid-template-columns:repeat(auto-fit,minmax(184px,1fr))}
-.service-hero .metric {border-top:2px solid rgba(216,186,138,.34)}
+.service-hero .metric {border-top:2px solid rgba(94,156,217,.38)}
 /* Telemetry: subdued cool diagnostics, severity colors only for findings */
 .telemetry-hero {border-color:rgba(148,193,213,.28)!important;
   background:radial-gradient(ellipse at 90% 10%,rgba(92,146,186,.12),transparent 55%),linear-gradient(125deg,#172c3e,#101e32)!important}
@@ -176,7 +176,7 @@ a:hover .media-thumb {border-color:var(--gold);transform:scale(1.02)}
   font-weight:400;font-size:13px;padding:5px 9px;line-height:1.3}
 .badge.good,.badge.mg-green {color:#a8e0c3;border-color:rgba(98,169,130,.38);background:rgba(98,169,130,.085)}
 .badge.warn,.badge.mg-gold {color:#e8c797;border-color:rgba(216,186,138,.42);background:var(--gold-low)}
-.badge.bad,.badge.critical,.badge.mg-red {color:#efb3b9;border-color:rgba(205,120,131,.47);background:var(--crimson-low)}
+.badge.bad,.badge.critical,.badge.mg-red {color:#efb3b9;border-color:rgba(237,64,86,.47);background:var(--crimson-low)}
 .badge.mg-blue {color:#a8d3e4;border-color:rgba(126,183,209,.38)}
 .presence-label {display:inline-flex;align-items:center;gap:9px;color:#cdd9e5;font-size:14px;line-height:1.5}
 .presence-dot {display:inline-block;width:9px;height:9px;border-radius:50%;background:#6c8499;flex:none}
@@ -192,8 +192,8 @@ a:hover .media-thumb {border-color:var(--gold);transform:scale(1.02)}
   border:1px solid rgba(171,193,210,.32);border-radius:10px;
   text-decoration:none;letter-spacing:.025em;font:400 15px/1.2 "Segoe UI Variable","Segoe UI",sans-serif;
   cursor:pointer;transition:filter .15s,border-color .15s}
-button {border-color:rgba(218,188,147,.36);background:linear-gradient(105deg,#725843,#65454a)}
-.button-link:hover,button:hover {filter:brightness(1.15);border-color:var(--gold);color:#fff}
+button {border-color:rgba(237,64,86,.38);background:linear-gradient(115deg,#832638,#611d2d)}
+.button-link:hover,button:hover {filter:brightness(1.15);border-color:var(--crimson);color:#fff}
 .button-link.compact {padding:9px 11px;min-height:37px;font-size:14px;white-space:nowrap}
 form {display:grid;gap:16px}
 label {display:grid;gap:7px;font-size:15px;color:#c9d6e2}
@@ -207,7 +207,7 @@ input[type=hidden] {display:none}
 .filter-tab {color:#b9cddd;font-size:14px;text-decoration:none;padding:9px 13px;
   background:rgba(25,42,59,.65);border:1px solid var(--line);border-radius:9px}
 .filter-tab:hover {border-color:rgba(216,186,138,.45)}
-.filter-tab.selected {color:#f4ddb5;border-color:rgba(216,186,138,.47);background:rgba(216,186,138,.11)}
+.filter-tab.selected {color:#f2f6fd;border-color:rgba(237,64,86,.48);background:rgba(237,64,86,.12)}
 .filter-bar {display:flex;flex-wrap:wrap;align-items:end;gap:12px}
 .filter-bar label {min-width:175px}
 .filter-bar .filter-grow {flex:1 1 320px}
