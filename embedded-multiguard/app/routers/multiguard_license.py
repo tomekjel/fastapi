@@ -2201,6 +2201,11 @@ def multiguard_panel_pending(
             + " · " + str(direct["duration_months"])
             + " miesięcy · " + _panel_escape(direct["lifecycle"])
             + "</p>"
+            + (
+                f'<p><a class="button-link" href="/multiguard/panel/license/installation/{installation_id}/extend">'
+                'PRZEDŁUŻ LICENCJĘ</a></p>'
+                if direct["lifecycle"]=="ACTIVE" else ""
+            )
         )
         direct_buttons = (
             f'<form method="post" action="/multiguard/panel/pending/{installation_id}/handover">'
@@ -2779,6 +2784,87 @@ def extend_direct_license_api(
         installation_id, body.months, body.operation_id, source="ANDROID",
         payment_confirmed=body.payment_confirmed, by_installation=True,
     )
+
+
+
+@router.get("/multiguard/panel/license/installation/{installation_id}/extend",
+            response_class=HTMLResponse)
+def panel_direct_extension(
+    installation_id: uuid.UUID,
+    _: None = Depends(_panel_auth),
+):
+    _ensure_schema()
+    with engine.connect() as con:
+        link = con.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE installation_id=:id AND sale_kind='DIRECT' LIMIT 1
+        """), {"id":installation_id}).mappings().first()
+    if not link:
+        raise HTTPException(404, "Nie znaleziono licencji tego komputera.")
+    link = _normalize_link(dict(link))
+    if link["lifecycle"] != "ACTIVE" or not link.get("valid_until"):
+        raise HTTPException(409, "Licencja nie jest aktywna.")
+    title = _panel_escape("Pro" if link["plan_code"] == "multi_guard_pro" else "Standard")
+    date = _panel_escape(link["valid_until"].strftime("%d.%m.%Y"))
+    return HTMLResponse(_panel_html(f"""
+      <section class="card">
+        <a href="/multiguard/panel/pending/{installation_id}">← Komputer</a>
+        <h1>Przedłuż licencję klienta — {title}</h1>
+        <p>Obecna ważność do: <strong>{date}</strong></p>
+        <p>Nowy okres doliczamy do obecnej daty wygaśnięcia, nie do dzisiaj.
+           Zachowujemy dotychczasową edycję i dokumenty klienta.</p>
+        <form method="post" action="/multiguard/panel/license/installation/{installation_id}/extend">
+          <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+          <input type="hidden" name="operation_id" value="{uuid.uuid4()}">
+          <label>Okres<select name="months">
+            <option value="3">+3 miesiące</option>
+            <option value="6">+6 miesięcy</option>
+            <option value="12" selected>+12 miesięcy</option>
+          </select></label>
+          <label><input type="checkbox" name="payment_confirmed" value="yes" required>
+            Potwierdzam otrzymanie płatności</label>
+          <button type="submit">POTWIERDŹ PRZEDŁUŻENIE</button>
+        </form>
+      </section>
+    """), headers={"Cache-Control":"private, no-store"})
+
+
+@router.post("/multiguard/panel/license/installation/{installation_id}/extend",
+             response_class=HTMLResponse)
+def panel_direct_extension_post(
+    installation_id: uuid.UUID,
+    operation_id: uuid.UUID = Form(...),
+    months: int = Form(...),
+    csrf_token: str = Form(...),
+    payment_confirmed: str = Form(""),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    if not _token_valid(csrf_token):
+        raise HTTPException(403,"Wygasły formularz.")
+    _ensure_schema()
+    with engine.connect() as con:
+        sale = con.execute(text("""
+            SELECT sale_kind FROM guard.license_links
+            WHERE installation_id=:id LIMIT 1
+        """), {"id":installation_id}).mappings().first()
+    if not sale or sale["sale_kind"] != "DIRECT":
+        raise HTTPException(404,"Nie znaleziono licencji bezpośredniej.")
+    result = _extend_active_license(
+        installation_id, months, operation_id, source="WEB",
+        payment_confirmed=(payment_confirmed=="yes"),by_installation=True,
+    )
+    new_date = _panel_escape(result["newValidUntil"][:10])
+    return HTMLResponse(_panel_html(f"""
+      <section class="card">
+        <h1>Przedłużenie zapisane</h1>
+        <p>Nowa ważność licencji: <strong>{new_date}</strong></p>
+        <p>Wersja {result["edition"]} · +{result["months"]} miesięcy.
+           Komputer pobierze zmieniony termin podczas kolejnego połączenia.</p>
+        <a class="button-link" href="/multiguard/panel/pending/{installation_id}">
+        WRÓĆ DO KOMPUTERA</a>
+      </section>
+    """), headers={"Cache-Control":"private, no-store"})
 
 
 @router.get(
