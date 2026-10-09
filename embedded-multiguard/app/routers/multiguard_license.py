@@ -1367,6 +1367,14 @@ def refresh(req: RefreshRequest):
                 """
                 UPDATE guard.license_links
                 SET lifecycle=CASE
+                        -- Signed refresh must never undo acceptance or handover
+                        -- when another request commits between read and update.
+                        WHEN lifecycle='REVOKED' THEN lifecycle
+                        WHEN lifecycle='EXPIRED' AND :lifecycle!='REVOKED'
+                            THEN lifecycle
+                        WHEN lifecycle IN (
+                            'PENDING_ACCEPTANCE','ACTIVE','EXPIRED','REVOKED'
+                        ) AND :lifecycle='SERVICE_TEST' THEN lifecycle
                         WHEN lifecycle IN ('ACTIVE','EXPIRED','REVOKED')
                              AND :lifecycle='PENDING_ACCEPTANCE'
                         THEN lifecycle
