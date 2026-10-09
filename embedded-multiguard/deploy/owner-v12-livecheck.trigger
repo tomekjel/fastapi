@@ -1,1 +1,1 @@
-External read-only post-deploy smoke requested after server reported SUCCESS on 2026-10-09. No server changes and no owner credentials are used.
+Read-only live smoke after confirmed owner-panel V12 production deploy at commit 892a8c66e1e3cae662136ddf1360bf880b785ba8 on 2026-10-09. Confirm health, dedicated /computers route, and anonymous access denied. This check never mutates the server.
