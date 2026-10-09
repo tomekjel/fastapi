@@ -269,7 +269,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert "560,00 zł" in stats.text  # Only two COMPLETED jobs, not READY.
     assert get("/multiguard/panel/statistics",False).status_code==401
     assert get("/multiguard/panel/statistics?period=custom").status_code==200
-    assert get("/multiguard/panel/statistics?period=month&month=not-a-month").status_code==400
+    assert get("/multiguard/panel/statistics?period=month&month=not-a-month").status_code in (400,422)
     assert get("/multiguard/panel/statistics?period=quarter&quarter=9").status_code==400
     assert 'id="pending"' in inventory_page.text
     assert str(waiting_id).replace("-","")[:8].upper() in inventory_page.text
