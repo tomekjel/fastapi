@@ -164,6 +164,11 @@ td b,td strong {font-weight:400;color:#f0f4f8}
 tr:hover td {background:rgba(159,194,219,.043)}
 tbody tr:last-child td {border-bottom:0}
 .telemetry-table td {vertical-align:middle}
+.media-thumb {display:block;max-width:115px;width:115px;height:76px;object-fit:cover;
+  border:1px solid var(--line-light);border-radius:8px;background:#0b1d2b;
+  transition:border-color .15s,transform .15s}
+a:hover .media-thumb {border-color:var(--gold);transform:scale(1.02)}
+
 .problem-title {font-size:16px;color:#e9eff6}
 .badge {display:inline-block;max-width:100%;vertical-align:middle;
   color:#bddcee;background:rgba(82,140,172,.11);
