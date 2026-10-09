@@ -1482,9 +1482,10 @@ def multi_guard_panel_dashboard(
 
     return _panel_html(
         f"""
-        <section class="card">
-          <h1>Multi-Guard — Centrum właściciela</h1>
-          <p>Widok komputerowy do zarządzania flotą, zgłoszeniami, telemetrią i licencjami.</p>
+        <section class="card panel-hero dashboard-hero">
+          <div class="eyebrow">MULTI-SERVIS / CENTRUM OPERACYJNE</div>
+          <h1>Centrum właściciela</h1>
+          <p>Komputery klientów, bezpieczeństwo, naprawy i zdarzenia Multi-Guard w jednym miejscu.</p>
           <div class="metrics">{metrics_html}</div>
         </section>
 
@@ -1512,7 +1513,7 @@ def multi_guard_panel_dashboard(
           <div class="section-head">
             <div>
               <h2>Urządzenia</h2>
-              <p>Zielona kropka oznacza kontakt w ciągu 24 godzin, nie aktywność użytkownika w tej chwili. Szary status „odinstalowanie zgłoszone” pojawia się tylko po otrzymaniu zdarzenia od instalatora Windows. Liczniki dotyczą 30 dni.</p>
+              <p>Ostatni kontakt jest potwierdzony przez serwer, nie oznacza pracy użytkownika w tej chwili. Odinstalowanie pokazujemy tylko po otrzymaniu zgłoszenia instalatora. Zdarzenia dotyczą ostatnich 30 dni.</p>
             </div>
           </div>
           <div class="filter-tabs">
@@ -1709,8 +1710,8 @@ def multi_guard_panel_device(
 
     return _panel_html(
         f"""
-        <section class="card">
-          <a href="/multiguard/panel/dashboard">← Wróć do urządzeń</a>
+        <section class="card panel-hero device-hero">
+          <a class="button-link compact" href="/multiguard/panel/dashboard#devices">← Wróć do komputerów</a>
           <h1>{_panel_h(_short_installation_id(row['installation_external_id']))} — {_panel_h(_device_label(row))}</h1>
           <div class="detail-grid">
             <div><b>Licencja</b><span>{_panel_h(row['plan_code'])} / {_panel_h(row['lifecycle'])}</span></div>
@@ -1891,7 +1892,7 @@ def multi_guard_panel_telemetry(
 
     return _panel_html(
         f"""
-        <section class="card telemetry-hero">
+        <section class="card panel-hero telemetry-hero">
           <div class="section-head">
             <div>
               <div class="eyebrow">MULTI-GUARD • ROZWÓJ</div>
@@ -2086,7 +2087,7 @@ def multi_guard_panel_telemetry_detail(
 
     return _panel_html(
         f"""
-        <section class="card telemetry-hero">
+        <section class="card panel-hero telemetry-hero">
           <a href="/multiguard/panel/telemetry?days={days}">← Wróć do telemetrii</a>
           <div class="eyebrow">SZCZEGÓŁY WZORCA</div>
           <h1>{_panel_h(code)}</h1>
@@ -2193,9 +2194,10 @@ def multi_guard_panel_licenses(
 
     return _panel_html(
         f"""
-        <section class="card">
+        <section class="card panel-hero license-hero">
           <div class="section-head">
             <div>
+              <div class="eyebrow">MULTI-SERVIS / UPRAWNIENIA KOMPUTERÓW</div>
               <h1>Licencje Multi-Guard</h1>
               <p>Przegląd wystawionych licencji, kanałów aktualizacji i terminów ważności.</p>
             </div>
