@@ -1349,6 +1349,8 @@ def multi_guard_panel_dashboard(
     """)
 
 
+# OWNER manual cleanup is a soft archive; only a new authenticated
+# discovery registration can bring a still-installed machine back to WAITING.
 @router.post("/panel/computers/pending/{installation_id}/archive")
 def owner_archive_pending_installation(
     installation_id: uuid.UUID,
