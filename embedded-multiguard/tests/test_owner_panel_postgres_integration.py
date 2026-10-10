@@ -280,6 +280,71 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert 'id="pending"' in inventory_page.text
     assert str(waiting_id).replace("-","")[:8].upper() in inventory_page.text
     assert f'/multiguard/panel/pending/{waiting_id}' in inventory_page.text
+
+    # The actual OWNER inventory HTML shows the full detected value in the
+    # edit dialog, while the main table restricts presentation to two lines.
+    assert 'class="pending-computers-table"' in inventory_page.text
+    assert f'id="pending-name-dialog-{waiting_id}"' in inventory_page.text
+    assert f'id="pending-archive-dialog-{waiting_id}"' in inventory_page.text
+    assert 'Czy jesteś pewien?' in inventory_page.text
+    assert 'TAK, USUŃ Z LISTY' in inventory_page.text
+    assert 'class="pending-actions-row"' in inventory_page.text
+    assert 'class="pending-archive-trigger"' in inventory_page.text
+    assert 'value="ASUS CI-Model"' in inventory_page.text
+    assert 'name="return_to" value="computers"' in inventory_page.text
+    pending_token=re.search(
+        r'name="csrf_token" value="([a-f0-9]{64})"',inventory_page.text
+    )
+    assert pending_token, "A pending-owner edit form must carry anti-CSRF"
+    rename_url=f"/multiguard/panel/installation/{waiting_id}/name"
+    desired="Multi-Servis ASUS CI test"
+    rename_params={
+        "csrf_token":pending_token.group(1),
+        "return_to":"computers","friendly_name":desired,
+    }
+    ensure(c.post(rename_url,data=rename_params).status_code,401,"Only owner may rename")
+    ensure(c.post(rename_url,auth=auth,data={**rename_params,"csrf_token":"wrong"}).status_code,
+           403,"Rename requires valid CSRF")
+    rename=c.post(rename_url,auth=auth,data=rename_params,follow_redirects=False)
+    ensure(rename.status_code,303,"OWNER inline pencil editor")
+    assert rename.headers["location"]=="/multiguard/panel/computers#pending"
+    with engine.connect() as db:
+        saved=db.execute(text("""
+            SELECT friendly_name FROM guard.owner_installation_labels
+            WHERE installation_external_id=:id
+        """),{"id":waiting_id}).scalar_one()
+        original=db.execute(text("""
+            SELECT manufacturer,model FROM guard.pending_installations
+            WHERE installation_id=:id
+        """),{"id":waiting_id}).one()
+    assert saved==desired
+    assert tuple(original)==("ASUS","CI-Model"),"Renaming cannot alter hardware metadata"
+    renamed_page=get("/multiguard/panel/computers")
+    assert f'title="{desired}"' in renamed_page.text
+    assert f'value="{desired}"' in renamed_page.text
+
+    # A visible archive button only OPENs confirmation; the separate modal
+    # carries the POST. Verify owner and anti-CSRF on the real endpoint,
+    # then check one soft-archive audit entry without hard deletion.
+    archive_url=f"/multiguard/panel/computers/pending/{waiting_id}/archive"
+    ensure(c.post(archive_url,data={"csrf_token":pending_token.group(1)}).status_code,
+           401,"Only owner may archive")
+    ensure(c.post(archive_url,auth=auth,data={"csrf_token":"bad"}).status_code,
+           403,"Archive requires CSRF")
+    archived=c.post(archive_url,auth=auth,
+                    data={"csrf_token":pending_token.group(1)},follow_redirects=False)
+    ensure(archived.status_code,303,"Confirmed owner soft archive")
+    with engine.connect() as db:
+        status=db.execute(text("""
+            SELECT status FROM guard.pending_installations
+            WHERE installation_id=:id
+        """),{"id":waiting_id}).scalar_one()
+        audit_count=db.execute(text("""
+            SELECT count(*) FROM guard.pending_archive_events
+            WHERE installation_id=:id
+        """),{"id":waiting_id}).scalar_one()
+    assert status=="ARCHIVED" and audit_count==1
+    assert f'/multiguard/panel/pending/{waiting_id}' not in get("/multiguard/panel/computers").text
     ensure(get(f"/multiguard/panel/service/{order_a}").status_code,200,"Service detail")
     d=get(f"/multiguard/panel/service/{order_a}").text
     assert '<details class="card finance-disclosure">' in d, "Financial card must be closed by default"
