@@ -1778,7 +1778,11 @@ def workshop_report(req: WorkshopReportRequest):
             con.execute(text("""
                 DELETE FROM guard.workshop_report_history
                 WHERE installation_id=:id
-                  AND reported_at < now() - interval '30 days'
+                  AND (reported_at < now() - interval '30 days'
+                   OR id NOT IN (
+                     SELECT id FROM guard.workshop_report_history
+                     WHERE installation_id=:id ORDER BY id DESC LIMIT 43200
+                   ))
             """), {"id":pending["installation_id"]})
     return {"saved":True,"serverTime":_iso(_utcnow())}
 
@@ -2673,16 +2677,23 @@ def _owner_workshop_manager_panel() -> str:
             options = "".join(
                 f'<option value="{value}" {"selected" if value==selected else ""}>{label}</option>'
                 for value,label in (
-                    ("OFF","Wyłączone"),("STANDARD","Standardowy"),
-                    ("OBSERVATION","Obserwacja"),("INTENSIVE","Intensywny"),
+                    ("STANDARD","Standardowy"),("OBSERVATION","Obserwacja"),
+                    ("INTENSIVE","Intensywny"),
                 )
             )
             controls = f"""
               <div class="owner-service-controls">
-                <form method="post" action="/multiguard/panel/workshop/{iid}/monitoring">
+                <form method="post" action="/multiguard/panel/workshop/{iid}/monitoring"
+                    data-owner-monitor-form>
                   <input type="hidden" name="csrf_token" value="{token}">
-                  <label>Monitorowanie rozszerzone
-                    <select name="profile" aria-label="Poziom monitorowania dla {display}">
+                  <label class="owner-monitor-toggle">
+                    <input type="checkbox" name="monitoring_enabled" value="yes"
+                      {"checked" if selected!="OFF" else ""} data-owner-monitor-toggle>
+                    Monitorowanie rozszerzone — WŁĄCZONE / WYŁĄCZONE
+                  </label>
+                  <label>Poziom monitorowania
+                    <select name="profile" aria-label="Poziom monitorowania dla {display}"
+                        data-owner-monitor-profile {"disabled" if selected=="OFF" else ""}>
                       {options}
                     </select>
                   </label>
@@ -2796,7 +2807,8 @@ def owner_workshop_reports(
 @router.post("/multiguard/panel/workshop/{installation_id}/monitoring")
 def owner_set_workshop_monitoring(
     installation_id: uuid.UUID,
-    profile: str = Form(...),
+    profile: str = Form("STANDARD"),
+    monitoring_enabled: str = Form(""),
     csrf_token: str = Form(...),
     _: None = Depends(_panel_auth),
 ):
@@ -2804,8 +2816,9 @@ def owner_set_workshop_monitoring(
     from fastapi.responses import RedirectResponse
     if not _token_valid(csrf_token):
         raise HTTPException(403, "Wygasły lub nieprawidłowy formularz.")
-    if profile not in {"OFF","STANDARD","OBSERVATION","INTENSIVE"}:
-        raise HTTPException(400, "Nieznany poziom monitorowania.")
+    if monitoring_enabled not in {"","yes"} or profile not in {"STANDARD","OBSERVATION","INTENSIVE"}:
+        raise HTTPException(400, "Nieprawidłowe ustawienia monitorowania.")
+    profile=profile if monitoring_enabled=="yes" else "OFF"
     _ensure_schema()
     with engine.begin() as con:
         grant = con.execute(text("""
