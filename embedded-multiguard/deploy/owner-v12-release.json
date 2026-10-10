@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 8,
-  "target_sha": "b398f83342359949ddcc41d4d9174682fad60c96",
-  "summary": "OWNER WEB: osobne bezpieczne menu USUŃ, a finanse statystyk domyślnie zwinięte; miesiąc rozliczany według rzeczywistej daty wydania (przychód i koszty), bez dat wrześniowych w październiku. PostgreSQL/Chromium/bezpieczeństwo PASS 38042505367."
+  "sequence": 9,
+  "target_sha": "6e10aac03927213d9121ac111745b6ae682b0c9d",
+  "summary": "OWNER web seq9: edytowalna nazwa komputera, osobne menu usuwania i domyslnie ukryte finanse. Kwoty wg dnia wydania. Odblokowanie po naprawie skryptu wdrozenia na PVE. PostgreSQL/Chromium/security PASS 38079270212."
 }
