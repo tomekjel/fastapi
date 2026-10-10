@@ -1199,6 +1199,64 @@ def _panel_html(body: str) -> str:
     if (chosen) link.setAttribute('aria-current', 'page');
   }}
 }})();
+  // SERVICE is deliberately two-step; changing the period must never
+  // silently grant an unmetered workshop entitlement.
+  for (const form of document.querySelectorAll('form[data-owner-service-form]')) {{
+    const period=form.querySelector('select[name="months"]');
+    const approval=form.querySelector('input[name="service_confirm"]');
+    const submit=form.querySelector('[data-owner-service-submit]');
+    const dialog=form.querySelector('.owner-service-confirm-dialog');
+    const normalLabel=submit.textContent.trim();
+    const refresh=()=>{{
+      approval.value='';
+      submit.textContent=period.value==='SERVICE' ? 'WŁĄCZ TRYB SERWISOWY' : normalLabel;
+    }};
+    period.addEventListener('change',refresh);
+    refresh();
+    form.addEventListener('submit',event=>{{
+      if(period.value==='SERVICE' && approval.value!=='CONFIRM_WORKSHOP'){{
+        event.preventDefault();
+        dialog.showModal();
+      }}
+    }});
+    dialog.querySelector('[data-service-approve]').addEventListener('click',()=>{{
+      approval.value='CONFIRM_WORKSHOP';
+      dialog.close();
+      form.requestSubmit();
+    }});
+  }}
+
+  // OWNER-only live suggestions (3 digits): no orders are revealed on the
+  // public discovery API. A chosen datalist value becomes the exact order ID.
+  for (const input of document.querySelectorAll('input[data-owner-order-suggest]')) {{
+    const list=document.getElementById(input.getAttribute('list'));
+    if(!list)continue;
+    let timer;
+    input.addEventListener('input',()=>{{
+      clearTimeout(timer);
+      list.replaceChildren();
+      const query=input.value.replace(/\D/g,'');
+      if(query.length<3)return;
+      timer=setTimeout(async()=>{{
+        try{{
+          const response=await fetch(
+            '/multiguard/panel/service-orders/suggest?q='+encodeURIComponent(query),
+            {{credentials:'same-origin',cache:'no-store'}}
+          );
+          if(!response.ok)return;
+          const result=await response.json();
+          if(input.value.replace(/\D/g,'')!==query)return;
+          for(const item of result.results||[]){{
+            const option=document.createElement('option');
+            option.value=item.number;
+            option.label=item.label;
+            list.appendChild(option);
+          }}
+        }}catch(_err){{ /* typing remains possible without connectivity */ }}
+      }},240);
+    }});
+  }}
+
 </script>
 </body>
 </html>"""
