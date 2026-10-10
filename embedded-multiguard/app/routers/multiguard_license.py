@@ -574,9 +574,13 @@ CREATE TABLE IF NOT EXISTS guard.workshop_grants (
     release_channel TEXT NOT NULL DEFAULT 'STABLE'
         CHECK (release_channel IN ('STABLE','PILOT')),
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    monitoring_profile TEXT NOT NULL DEFAULT 'OFF',
+    associated_reception_id UUID REFERENCES service.service_orders(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE guard.workshop_grants ADD COLUMN IF NOT EXISTS monitoring_profile TEXT NOT NULL DEFAULT 'OFF';
+ALTER TABLE guard.workshop_grants ADD COLUMN IF NOT EXISTS associated_reception_id UUID REFERENCES service.service_orders(id) ON DELETE SET NULL;
 CREATE TABLE IF NOT EXISTS guard.workshop_grant_audit (
     id BIGSERIAL PRIMARY KEY,
     installation_id UUID NOT NULL,
@@ -591,6 +595,15 @@ CREATE TABLE IF NOT EXISTS guard.workshop_reports (
     summary JSONB NOT NULL DEFAULT '{}'::jsonb,
     reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS guard.workshop_report_history (
+    id BIGSERIAL PRIMARY KEY,
+    installation_id UUID NOT NULL
+        REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+    summary JSONB NOT NULL,
+    reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guard_workshop_report_history_installation
+    ON guard.workshop_report_history(installation_id,reported_at DESC);
 
 CREATE TABLE IF NOT EXISTS guard.installations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
