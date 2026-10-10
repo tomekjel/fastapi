@@ -1552,10 +1552,6 @@ def discovery_register(req: DiscoveryRegisterRequest):
                         model=NULLIF(:model,''),
                         serial_number=NULLIF(:serial_number,''),
                         os_version=NULLIF(:os_version,''),
-                        status=CASE WHEN status IN ('UNINSTALLED','ARCHIVED')
-                          THEN CASE WHEN assigned_license_id IS NOT NULL
-                            THEN 'ASSIGNED' ELSE 'WAITING' END
-                          ELSE status END,
                         last_seen_at=:now,
                         updated_at=:now
                     WHERE installation_id=:installation_id
@@ -1690,20 +1686,21 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
         req.discovery_credential,
     )
 
-    if pending["status"] in {"UNINSTALLED", "ARCHIVED"}:
-        return {"assigned":False,"status":pending["status"],
-                "serverTime":_iso(_utcnow())}
+    # An archived/uninstalled device can only return to the worklist after
+    # an authenticated assignment request from the currently running app.
     with engine.begin() as connection:
-        connection.execute(
-            text(
-                """
-                UPDATE guard.pending_installations
-                SET last_seen_at=now(),updated_at=now()
-                WHERE installation_id=:installation_id
-                """
-            ),
-            {"installation_id": pending["installation_id"]},
-        )
+        current_status = connection.execute(text("""
+            UPDATE guard.pending_installations
+            SET status=CASE
+                WHEN status IN ('UNINSTALLED','ARCHIVED')
+                    THEN CASE WHEN assigned_license_id IS NOT NULL
+                         THEN 'ASSIGNED' ELSE 'WAITING' END
+                ELSE status END,
+                last_seen_at=now(),updated_at=now()
+            WHERE installation_id=:installation_id RETURNING status
+        """), {"installation_id":pending["installation_id"]}).scalar_one()
+    pending = dict(pending)
+    pending["status"] = current_status
 
     if pending["status"] == "UNINSTALLED":
         return {"assigned":False,"status":"UNINSTALLED",
@@ -1843,6 +1840,9 @@ def provision(req: ProvisionRequest):
     except ValueError as exc:
         raise HTTPException(400, "Nieprawidłowy installationId.") from exc
 
+    pending = _pending_installation(installation_id)
+    if pending and pending["status"] in {"ARCHIVED", "UNINSTALLED"}:
+        raise HTTPException(409, "Instalacja została wycofana. Uruchom program i poczekaj na ponowną rejestrację.")
     link = _link_by_key(license_key)
     if not link:
         raise HTTPException(
