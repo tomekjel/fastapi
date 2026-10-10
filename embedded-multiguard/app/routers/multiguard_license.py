@@ -1655,35 +1655,73 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
 
 @router.post("/v1/multi-guard/workshop/report")
 def workshop_report(req: WorkshopReportRequest):
-    """Store a bounded current workshop diagnostic summary, no core.devices required."""
+    """Receive only OWNER-enabled diagnostic metrics; never user file contents."""
     pending = _authenticate_pending(
         req.installation_id, req.device_id, req.discovery_credential,
     )
-    if len(json.dumps(req.summary, ensure_ascii=False)) > 16_384:
+    raw = json.dumps(req.summary, ensure_ascii=False, allow_nan=False)
+    if len(raw.encode("utf-8")) > 16_384:
         raise HTTPException(413, "Raport diagnostyczny jest zbyt duży.")
     allowed = {
         "defenderAvailable", "realtimeProtection", "activeThreatCount",
         "firewallProtected", "whea24h", "kernelPower7d",
         "diskProblemCount", "browserInstalledCount", "browserActiveCount",
         "browserNeedsAttentionCount", "capturedAt", "appVersion",
+        "monitoringProfile", "samples",
     }
-    if not set(req.summary).issubset(allowed):
+    if not isinstance(req.summary, dict) or not set(req.summary).issubset(allowed):
         raise HTTPException(400, "Raport zawiera nieobsługiwane pola.")
+    samples = req.summary.get("samples", [])
+    if not isinstance(samples, list) or len(samples) > 60:
+        raise HTTPException(400, "Nieprawidłowa liczba próbek diagnostycznych.")
+    numeric_keys = {
+        "cpuLoadPercent", "cpuTemperatureC", "ramUsedPercent",
+        "gpuLoadPercent", "gpuTemperatureC",
+    }
+    for sample in samples:
+        if not isinstance(sample, dict) or set(sample) != numeric_keys | {"capturedAt"}:
+            raise HTTPException(400, "Nieprawidłowa próbka diagnostyczna.")
+        if not isinstance(sample["capturedAt"], str) or len(sample["capturedAt"]) > 40:
+            raise HTTPException(400, "Nieprawidłowy czas próbki diagnostycznej.")
+        for key in numeric_keys:
+            value = sample[key]
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise HTTPException(400, "Nieprawidłowy pomiar diagnostyczny.")
+            if not (-50 <= value <= 200):
+                raise HTTPException(400, "Pomiar diagnostyczny poza zakresem.")
     _ensure_schema()
     with engine.begin() as con:
-        enabled = con.execute(text("""
-            SELECT enabled FROM guard.workshop_grants
+        grant = con.execute(text("""
+            SELECT enabled,monitoring_profile FROM guard.workshop_grants
             WHERE installation_id=:id FOR UPDATE
-        """), {"id":pending["installation_id"]}).scalar_one_or_none()
-        if enabled is not True:
-            raise HTTPException(403, "Tryb warsztatowy nie jest aktywny.")
+        """), {"id":pending["installation_id"]}).mappings().first()
+        if not grant or not grant["enabled"]:
+            raise HTTPException(403, "Tryb serwisowy nie jest aktywny.")
+        profile = grant["monitoring_profile"] or "OFF"
+        if samples and profile == "OFF":
+            raise HTTPException(409, "Rozszerzone monitorowanie nie jest włączone.")
+        if req.summary.get("monitoringProfile", profile) not in {profile, None}:
+            # A stale report after changing the profile must not impersonate
+            # a higher cadence setting chosen by the OWNER.
+            raise HTTPException(409, "Ustawienia monitorowania zmieniono. Odśwież je.")
         con.execute(text("""
             INSERT INTO guard.workshop_reports(installation_id,summary,reported_at)
             VALUES (:id,CAST(:data AS jsonb),now())
             ON CONFLICT(installation_id) DO UPDATE
               SET summary=EXCLUDED.summary,reported_at=now()
-        """), {"id":pending["installation_id"],
-                 "data":json.dumps(req.summary,ensure_ascii=False)})
+        """), {"id":pending["installation_id"],"data":raw})
+        if profile != "OFF":
+            con.execute(text("""
+                INSERT INTO guard.workshop_report_history(installation_id,summary)
+                VALUES (:id,CAST(:data AS jsonb))
+            """), {"id":pending["installation_id"],"data":raw})
+            con.execute(text("""
+                DELETE FROM guard.workshop_report_history
+                WHERE installation_id=:id
+                  AND reported_at < now() - interval '30 days'
+            """), {"id":pending["installation_id"]})
     return {"saved":True,"serverTime":_iso(_utcnow())}
 
 
