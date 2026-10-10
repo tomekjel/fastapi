@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 6,
-  "target_sha": "ed0f7506e926861d40294d2e7fdf9b6f376d9f48",
-  "summary": "OWNER: ręczne usuwanie oczekujących + archiwum, uwierzytelnione odinstalowanie Windows także bez licencji, bezpieczny powrót po ponownej rejestracji i blokada ponownej aktywacji starego wpisu. PG/Chromium/AST PASS 38036587050."
+  "sequence": 7,
+  "target_sha": "2001dcfb314a56f9f70146f63fc1767ab1c2b9ef",
+  "summary": "OWNER: jedna edytowalna nazwa komputera z automatycznie wypełnionego modelu i producenta, bez duplikatów; nazwa może mieć do 420 znaków, oryginalne dane sprzętu pozostają bez zmian. Testy PostgreSQL/Chromium/security PASS 38040890498. Bez zmian Android/Windows."
 }
