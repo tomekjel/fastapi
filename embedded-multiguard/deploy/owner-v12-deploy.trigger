@@ -1,6 +1,6 @@
-Multi-Servis OWNER WEB controlled release
-Authorised by owner in ChatGPT: deploy web panel to activate registered Multi-Guard 0.3.37, and prepare a second Standard installation.
-Scope: existing OWNER web interface only. Preserve Android API, service orders, and Windows binaries.
-Validated source commit: 0c04f4e16045397b5de8da2daecc5e0b6d789b4b
-Validation: GitHub Actions 37987538606 SUCCESS (isolated PostgreSQL, Chromium, security checks)
-Production path: backup + read-only schema preflight + guarded API compatibility check + restart/health verification + automatic rollback.
+Multi-Servis OWNER WEB controlled release — 2026-10-10
+Explicit owner authorization: provide manual removal of stale Multi-Guard WAITING entries before reinstalling Windows clients.
+Scope: OWNER web console, status ARCHIVED, audit records, reconnect recovery. No Android/client binaries.
+Web QA: workflow 38035835490 SUCCESS, Python syntax, existing security checks and audit invariants.
+Release process: backup + READ-ONLY preflight + strict non-owner API compatibility check + automatic rollback + health verification.
+Trigger: web-owner-pending-cleanup-rev1
