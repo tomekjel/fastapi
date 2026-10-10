@@ -825,7 +825,7 @@ def _set_workshop_grant(
         if str(pending["status"]) in ("ASSIGNED", "PROVISIONED"):
             raise HTTPException(409,
                 "Komputer ma już przypisaną licencję klienta. "
-                "Nie można równocześnie uruchomić trybu warsztatowego.")
+                "Nie można równocześnie uruchomić trybu serwisowego.")
         existing = con.execute(text("""
             SELECT edition,release_channel,enabled,monitoring_profile
             FROM guard.workshop_grants
@@ -2409,31 +2409,15 @@ def _owner_confirm_service_dialog(dialog_id: str) -> str:
         </dialog>"""
 
 
-@router.post("/multiguard/panel/pending/{installation_id}/workshop",
-             response_class=HTMLResponse)
-def panel_update_workshop(
+# The obsolete standalone "Tryb warsztatowy" OWNER action no longer
+# exists. All service grants now require a second confirmation in one
+# of the two customer forms. Revocation belongs to central OWNER only.
+@router.post("/multiguard/panel/pending/{installation_id}/workshop")
+def legacy_workshop_owner_endpoint_retired(
     installation_id: uuid.UUID,
-    edition: str = Form("STANDARD"),
-    release_channel: str = Form("STABLE"),
-    action: str = Form("enable"),
-    csrf_token: str = Form(...),
     _: None = Depends(_panel_auth),
 ):
-    # No alternate one-click enable/disable route. OWNER uses either
-    # client form with a second confirmation, then central management.
-    raise HTTPException(410, "Trybem serwisowym zarządzaj w aktualnym panelu Multi-Servis.")
-    result = _set_workshop_grant(
-        installation_id, edition, release_channel, action == "enable",
-    )
-    return HTMLResponse(_panel_html(
-        '<section class="card"><h1>Tryb warsztatowy zapisany</h1>'
-        '<p>Komputer pobierze zmienione uprawnienia po kolejnym kontakcie '
-        'z Multi-Servis. Nie uruchomiono żadnej licencji czasowej.</p>'
-        f'<p>Stan: {"WŁĄCZONY" if result["enabled"] else "ZAKOŃCZONY"} '
-        f'· {result["edition"]}</p>'
-        f'<a class="button-link" href="/multiguard/panel/pending/{installation_id}">'
-        'WRÓĆ DO KOMPUTERA</a></section>'
-    ), headers={"Cache-Control":"private, no-store"})
+    raise HTTPException(410,"Ten formularz został wycofany. Użyj Trybu serwisowego w formularzu licencji.")
 
 
 @router.get(
