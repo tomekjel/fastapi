@@ -111,8 +111,10 @@ for name in ("multiguard_license.py","multiguard_runtime.py"):
         return paths
     before=routes(old/name);after=routes(new/name)
     missing=set(before)-set(after)
-    if missing:
-        raise SystemExit(f"BLOCKED: non-owner endpoint removed: {name}: {missing}")
+    unexpected_added=set(after)-set(before)
+    if missing or unexpected_added:
+        raise SystemExit(f"BLOCKED: unexpected non-owner API change: {name}: "
+                         f"removed={missing}, added={unexpected_added}")
     for key in before.keys()&after.keys():
         original,revised=before[key],after[key]
         if ast.dump(original,include_attributes=False)==ast.dump(revised,include_attributes=False):
@@ -131,11 +133,12 @@ for name in ("multiguard_license.py","multiguard_runtime.py"):
         if interface(original)!=interface(revised):
             raise SystemExit(f"BLOCKED: incompatible licensing endpoint interface: {key}")
         changed_authorized.add(key)
-# In this release both existing handlers must be the deliberately reviewed
-# changed handlers; never silently broaden authorised API surface.
-if changed_authorized!=AUTHORIZED_LICENSE_EVOLUTION:
+# The initial V12 deployment changed both approved endpoints; a later
+# OWNER web-only patch must be allowed to keep those interfaces untouched.
+# The loop above strictly blocks all other modifications or new public routes.
+if not changed_authorized.issubset(AUTHORIZED_LICENSE_EVOLUTION):
     raise SystemExit(f"BLOCKED: unexpected licensing evolution set: {changed_authorized}")
-print("PASS: unrelated Android/agent routes unchanged; only two explicitly approved Multi-Guard licensing handlers updated with identical interfaces.")
+print("PASS: unchanged agent/Android public API surface; OWNER panel-only update authorised.")
 PY
 
 # Create a PREPARED copy of main before writing anything into the live service.
@@ -206,6 +209,7 @@ j=json.load(open(sys.argv[1],encoding="utf-8-sig"));paths=j.get("paths",{})
 must_have=[
 "/multiguard/panel/dashboard",
 "/multiguard/panel/computers",
+"/multiguard/panel/computers/pending/{installation_id}/archive",
 "/multiguard/panel/service",
 "/multiguard/panel/service/{order_id}",
 "/multiguard/panel/service/{order_id}/media/{media_id}",

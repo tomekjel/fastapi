@@ -522,7 +522,7 @@ CREATE TABLE IF NOT EXISTS guard.pending_installations (
     serial_number TEXT,
     os_version TEXT,
     status TEXT NOT NULL DEFAULT 'WAITING'
-        CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED')),
+        CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED','ARCHIVED')),
     assigned_reception_id UUID REFERENCES service.service_orders(id) ON DELETE SET NULL,
     assigned_license_id TEXT,
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -536,6 +536,20 @@ CREATE INDEX IF NOT EXISTS idx_guard_pending_installations_status_seen
 CREATE INDEX IF NOT EXISTS idx_guard_pending_installations_serial
     ON guard.pending_installations(serial_number)
     WHERE serial_number IS NOT NULL AND serial_number <> '';
+
+-- OWNER only removes pending installations from the working queue.
+-- Historical installation IDs stay in the database for audit/reinstall.
+CREATE TABLE IF NOT EXISTS guard.pending_archive_events (
+    id BIGSERIAL PRIMARY KEY,
+    installation_id UUID NOT NULL
+      REFERENCES guard.pending_installations(installation_id),
+    previous_status TEXT NOT NULL,
+    actor TEXT NOT NULL DEFAULT 'OWNER',
+    reason TEXT NOT NULL DEFAULT '',
+    archived_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guard_pending_archive_events_id
+    ON guard.pending_archive_events(installation_id,archived_at DESC);
 
 CREATE TABLE IF NOT EXISTS guard.workshop_grants (
     installation_id UUID PRIMARY KEY
@@ -612,6 +626,12 @@ ALTER TABLE guard.license_links
     ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
 ALTER TABLE guard.installations
     ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
+-- Migrate the CHECK constraint on existing PostgreSQL installations.
+ALTER TABLE guard.pending_installations
+    DROP CONSTRAINT IF EXISTS pending_installations_status_check;
+ALTER TABLE guard.pending_installations
+    ADD CONSTRAINT pending_installations_status_check
+    CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED','ARCHIVED'));
 """
 
 
@@ -1369,6 +1389,8 @@ def discovery_register(req: DiscoveryRegisterRequest):
                         model=NULLIF(:model,''),
                         serial_number=NULLIF(:serial_number,''),
                         os_version=NULLIF(:os_version,''),
+                        status=CASE WHEN status='ARCHIVED'
+                          THEN 'WAITING' ELSE status END,
                         last_seen_at=:now,
                         updated_at=:now
                     WHERE installation_id=:installation_id
