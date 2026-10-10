@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
                               capture_output=True,text=True,timeout=20)
     ok=run()
     assert ok.returncode==0,(ok.stdout,ok.stderr)
-    print("PASS: revised OWNER deployer accepts only two reviewed licensing handler bodies.")
+    print("PASS: OWNER deployer accepts the reviewed licensing and reconnect handlers.")
 
     # Any unrelated existing agent endpoint mutation must still be denied.
     path=new/"multiguard_runtime.py"
@@ -66,5 +66,26 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     assert reject.returncode!=0,(reject.stdout,reject.stderr)
     assert "interface" in (reject.stdout+reject.stderr)
     print("PASS: modified provision API signature is rejected.")
+    path.write_text(original,encoding="utf-8")
+
+    # An attacker cannot add an unauthenticated bypass to discovery/register,
+    # even though its internal status-revival logic is explicitly reviewed.
+    tag="def discovery_register(req: DiscoveryRegisterRequest):"
+    assert original.count(tag)==1
+    path.write_text(original.replace(
+        tag,"def discovery_register(req: DiscoveryRegisterRequest, bypass: bool = False):",1
+    ),encoding="utf-8")
+    reject=run()
+    assert reject.returncode!=0,(reject.stdout,reject.stderr)
+    assert "interface" in (reject.stdout+reject.stderr)
+    path.write_text(original,encoding="utf-8")
+    print("PASS: discovery/register authentication signature is protected.")
+
+    # New no-license uninstall messages must use a strict discovery secret.
+    assert "def discovery_uninstall(req: DiscoveryUninstallRequest):" in original
+    assert "_authenticate_pending(" in original
+    assert "UPDATE guard.pending_installations" in original
+    assert "status='UNINSTALLED'" in original
+    print("PASS: no-license uninstall uses authenticated, archived events.")
 
 print("PASS: approved narrow rollout guard is ready for immutable release.")
