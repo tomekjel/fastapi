@@ -21,6 +21,7 @@ start_marker='"$PY" - "$ROUTERS" "$STAGE" <<\'PY\'\n'
 assert script.count(start_marker)==1, "Ambiguous deployment security guard"
 body=script.split(start_marker,1)[1].split("\nPY",1)[0]
 assert "AUTHORIZED_LICENSE_EVOLUTION" in body, "Missing narrow API authorization"
+assert "changed_authorized.issubset(AUTHORIZED_LICENSE_EVOLUTION)" in body, "Web-only incremental releases must allow unchanged licensing APIs"
 assert "ast.dump" in body, "Must compare entire handler ASTs"
 
 with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
