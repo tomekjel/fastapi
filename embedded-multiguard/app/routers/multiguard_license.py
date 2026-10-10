@@ -2306,9 +2306,15 @@ def multiguard_panel_pending(
         raise HTTPException(404, "Nie znaleziono oczekującej instalacji.")
 
     public = _pending_public(pending)
-    from app.routers.multiguard_panel_devices import owner_friendly_name, owner_name_form
-    alias = owner_friendly_name(iid)
-    alias_form = owner_name_form(iid, alias, return_to="pending")
+    from app.routers.multiguard_panel_devices import (
+        owner_detected_name, owner_friendly_name, owner_name_form,
+    )
+    stored_name = owner_friendly_name(iid)
+    detected_name = owner_detected_name(pending)
+    display_name = stored_name or detected_name
+    name_form = owner_name_form(
+        iid, stored_name, return_to="pending", detected_name=detected_name,
+    )
     grant = _workshop_grant(iid)
     direct = None
     if pending.get("assigned_license_id"):
@@ -2386,29 +2392,21 @@ def multiguard_panel_pending(
         + _panel_escape(workshop_report_row["reported_at"]) + '</p>'
         if workshop_report_row else '<p class="muted">Komputer nie wysłał jeszcze raportu warsztatowego.</p>'
     )
-    device = " ".join(
-        part for part in [
-            public["manufacturer"].strip(),
-            public["model"].strip(),
-        ] if part
-    ) or public["hostname"] or "Nieznany komputer"
-
     return _panel_html(
         f"""
         <section class="card">
           <a href="/multiguard/panel/dashboard">← Wróć do pulpitu</a>
-          <h1>Przypisz {_panel_escape(public['shortId'])}</h1>
-          <p>Własna nazwa: <strong>{_panel_escape(alias or "Nie nadano")}</strong></p>
+          <h1>Komputer {_panel_escape(public['shortId'])}</h1>
+          <p>Nazwa komputera: <strong>{_panel_escape(display_name)}</strong></p>
           <p>
-            <b>{_panel_escape(device)}</b>
-            • wersja {_panel_escape(public['appVersion'] or '—')}
+            Wersja Multi-Guard: {_panel_escape(public['appVersion'] or '—')}
             • {'ONLINE' if public['online'] else 'offline'}
           </p>
           <p>
             Serial: {_panel_escape(public['serialNumber'] or '—')}
             • host: {_panel_escape(public['hostname'] or '—')}
           </p>
-          {alias_form}
+          {name_form}
           <section class="card" id="client-license">
             <div class="eyebrow">LICENCJA KOMERCYJNA</div>
             <h2>Licencja klienta bez zlecenia</h2>
