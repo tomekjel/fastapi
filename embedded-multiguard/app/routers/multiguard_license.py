@@ -2576,12 +2576,165 @@ def multiguard_panel_pending_assign(
     )
 
 
+def _owner_workshop_manager_panel() -> str:
+    """OWNER central controls; no remote customer API or Windows UI changes."""
+    _ensure_schema()
+    with engine.connect() as con:
+        rows = con.execute(text("""
+            SELECT w.installation_id,w.edition,w.release_channel,w.enabled,
+                   w.monitoring_profile,w.associated_reception_id,
+                   p.hostname,p.manufacturer,p.model,so.reception_number
+            FROM guard.workshop_grants w
+            JOIN guard.pending_installations p ON p.installation_id=w.installation_id
+            LEFT JOIN service.service_orders so ON so.id=w.associated_reception_id
+            ORDER BY w.enabled DESC,w.updated_at DESC LIMIT 80
+        """)).mappings().all()
+    from app.routers.multiguard_panel_devices import owner_detected_name,owner_friendly_name
+    token = _workshop_csrf()
+    trs = []
+    for row in rows:
+        iid = row["installation_id"]
+        display = _panel_escape(owner_friendly_name(iid) or owner_detected_name(row))
+        edition = _panel_escape(row["edition"])
+        status = "<span class='badge mg-gold'>AKTYWNY</span>" if row["enabled"] else "<span class='badge'>WYŁĄCZONY</span>"
+        selected = row["monitoring_profile"] if row["enabled"] else "OFF"
+        link = (
+            f'<span class="muted">Zlecenie {_panel_escape(row["reception_number"])}</span>'
+            if row["reception_number"] else '<span class="muted">Bez zlecenia</span>'
+        )
+        controls = '<span class="muted">Oczekuje na nowe uprawnienia</span>'
+        if row["enabled"]:
+            options = "".join(
+                f'<option value="{value}" {"selected" if value==selected else ""}>{label}</option>'
+                for value,label in (
+                    ("OFF","Wyłączone"),("STANDARD","Standardowy"),
+                    ("OBSERVATION","Obserwacja"),("INTENSIVE","Intensywny"),
+                )
+            )
+            controls = f"""
+              <div class="owner-service-controls">
+                <form method="post" action="/multiguard/panel/workshop/{iid}/monitoring">
+                  <input type="hidden" name="csrf_token" value="{token}">
+                  <label>Monitorowanie rozszerzone
+                    <select name="profile" aria-label="Poziom monitorowania dla {display}">
+                      {options}
+                    </select>
+                  </label>
+                  <button type="submit">ZAPISZ MONITOROWANIE</button>
+                </form>
+                <button type="button" class="pending-archive-trigger"
+                  onclick="document.getElementById('disable-workshop-{iid}').showModal()">
+                  WYŁĄCZ TRYB SERWISOWY
+                </button>
+                <dialog class="pending-owner-dialog" id="disable-workshop-{iid}"
+                  aria-labelledby="disable-workshop-title-{iid}">
+                  <h3 id="disable-workshop-title-{iid}">Wyłączyć tryb serwisowy?</h3>
+                  <p>Komputer {display} po kolejnym kontakcie z Multi-Servis
+                     wróci do stanu „Oczekuje na licencję Multi-Servis”.
+                     Bez Internetu zachowa dotychczasowe uprawnienia.</p>
+                  <div class="pending-dialog-buttons">
+                    <button type="button" class="pending-cancel-button"
+                      onclick="this.closest('dialog').close()">ANULUJ</button>
+                    <form method="post" action="/multiguard/panel/workshop/{iid}/disable">
+                      <input type="hidden" name="csrf_token" value="{token}">
+                      <input type="hidden" name="confirmation" value="CONFIRM_DISABLE">
+                      <button type="submit" class="pending-confirm-archive">
+                        TAK, WYŁĄCZ TRYB SERWISOWY
+                      </button>
+                    </form>
+                  </div>
+                </dialog>
+              </div>"""
+        trs.append(
+            f"<tr><td><a href='/multiguard/panel/pending/{iid}'>{display}</a><br>"
+            + link + "</td><td>" + edition + "</td><td>" + status
+            + "</td><td>" + controls + "</td></tr>"
+        )
+    return f"""
+      <section class="card" id="service-modes">
+        <div class="eyebrow">MULTI-GUARD / PANEL WŁAŚCICIELA</div>
+        <h2>Aktywne tryby serwisowe i monitorowanie</h2>
+        <p>Tryb serwisowy działa również bez Internetu. Rozszerzone
+           monitorowanie jest domyślnie wyłączone. Możesz wybrać
+           Standardowy, Obserwacja lub Intensywny dla każdego komputera.
+           Wyłączenie uprawnienia jest możliwe tylko tutaj.</p>
+        <div class="table-wrap"><table style="min-width:900px">
+          <thead><tr><th>Komputer / zlecenie</th><th>Edycja</th>
+            <th>Tryb serwisowy</th><th>Monitorowanie i sterowanie</th></tr></thead>
+          <tbody>{''.join(trs) or '<tr><td colspan="4">Brak komputerów z trybem serwisowym.</td></tr>'}</tbody>
+        </table></div>
+      </section>
+    """
+
+
+@router.post("/multiguard/panel/workshop/{installation_id}/monitoring")
+def owner_set_workshop_monitoring(
+    installation_id: uuid.UUID,
+    profile: str = Form(...),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Wygasły lub nieprawidłowy formularz.")
+    if profile not in {"OFF","STANDARD","OBSERVATION","INTENSIVE"}:
+        raise HTTPException(400, "Nieznany poziom monitorowania.")
+    _ensure_schema()
+    with engine.begin() as con:
+        grant = con.execute(text("""
+            SELECT edition,release_channel,monitoring_profile,enabled
+            FROM guard.workshop_grants WHERE installation_id=:id FOR UPDATE
+        """), {"id":installation_id}).mappings().first()
+        if not grant or not grant["enabled"]:
+            raise HTTPException(409, "Tryb serwisowy nie jest aktywny.")
+        if grant["monitoring_profile"] != profile:
+            con.execute(text("""
+                UPDATE guard.workshop_grants
+                SET monitoring_profile=:profile,updated_at=now()
+                WHERE installation_id=:id
+            """), {"profile":profile,"id":installation_id})
+            con.execute(text("""
+                INSERT INTO guard.workshop_grant_audit(
+                    installation_id,before_state,after_state
+                ) VALUES (:id,CAST(:before AS jsonb),CAST(:after AS jsonb))
+            """), {
+                "id":installation_id,
+                "before":json.dumps({"monitoring_profile":grant["monitoring_profile"]}),
+                "after":json.dumps({"monitoring_profile":profile}),
+            })
+    return RedirectResponse("/multiguard/panel#service-modes",status_code=303)
+
+
+@router.post("/multiguard/panel/workshop/{installation_id}/disable")
+def owner_disable_workshop(
+    installation_id: uuid.UUID,
+    confirmation: str = Form(...),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Wygasły lub nieprawidłowy formularz.")
+    if confirmation != "CONFIRM_DISABLE":
+        raise HTTPException(400, "Wyłączenie wymaga osobnego potwierdzenia.")
+    grant = _workshop_grant(installation_id)
+    if not grant or not grant["enabled"]:
+        raise HTTPException(409, "Tryb serwisowy nie jest aktywny.")
+    _set_workshop_grant(
+        installation_id,grant["edition"],grant["release_channel"],False,
+    )
+    return RedirectResponse("/multiguard/panel#service-modes",status_code=303)
+
+
 @router.get("/multiguard/panel", response_class=HTMLResponse)
 def multiguard_panel(
     _: None = Depends(_panel_auth),
 ):
     return _panel_html(
-        """
+        f"""
+        {_owner_workshop_manager_panel()}
         <section class="card">
           <div class="eyebrow">MULTI-SERVIS / AKTYWACJA PROGRAMU</div>
           <h1>Nowa licencja Multi-Guard</h1>
