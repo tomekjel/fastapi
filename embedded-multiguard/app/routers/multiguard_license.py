@@ -529,7 +529,7 @@ CREATE TABLE IF NOT EXISTS guard.pending_installations (
     serial_number TEXT,
     os_version TEXT,
     status TEXT NOT NULL DEFAULT 'WAITING'
-        CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED','UNINSTALLED')),
+        CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED','UNINSTALLED','ARCHIVED')),
     assigned_reception_id UUID REFERENCES service.service_orders(id) ON DELETE SET NULL,
     assigned_license_id TEXT,
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -554,6 +554,18 @@ CREATE TABLE IF NOT EXISTS guard.discovery_uninstalls (
 );
 CREATE INDEX IF NOT EXISTS idx_guard_discovery_uninstalls_id
     ON guard.discovery_uninstalls(installation_id,reported_at DESC);
+
+CREATE TABLE IF NOT EXISTS guard.pending_archive_events (
+    id BIGSERIAL PRIMARY KEY,
+    installation_id UUID NOT NULL
+        REFERENCES guard.pending_installations(installation_id),
+    previous_status TEXT NOT NULL,
+    actor TEXT NOT NULL DEFAULT 'OWNER',
+    reason TEXT NOT NULL DEFAULT '',
+    archived_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guard_pending_archive_events_id
+    ON guard.pending_archive_events(installation_id,archived_at DESC);
 
 CREATE TABLE IF NOT EXISTS guard.workshop_grants (
     installation_id UUID PRIMARY KEY
@@ -660,7 +672,7 @@ ALTER TABLE guard.pending_installations
     DROP CONSTRAINT IF EXISTS pending_installations_status_check;
 ALTER TABLE guard.pending_installations
     ADD CONSTRAINT pending_installations_status_check
-    CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED','UNINSTALLED'));
+    CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED','UNINSTALLED','ARCHIVED'));
 """
 
 
@@ -1540,7 +1552,7 @@ def discovery_register(req: DiscoveryRegisterRequest):
                         model=NULLIF(:model,''),
                         serial_number=NULLIF(:serial_number,''),
                         os_version=NULLIF(:os_version,''),
-                        status=CASE WHEN status='UNINSTALLED'
+                        status=CASE WHEN status IN ('UNINSTALLED','ARCHIVED')
                           THEN CASE WHEN assigned_license_id IS NOT NULL
                             THEN 'ASSIGNED' ELSE 'WAITING' END
                           ELSE status END,
@@ -1610,6 +1622,10 @@ def discovery_uninstall(req: DiscoveryUninstallRequest):
         req.installation_id, req.device_id, req.discovery_credential
     )
     _ensure_schema()
+    # Create the runtime uninstall ledger before opening this transaction:
+    # schema migrations must not run on a competing DB connection mid-write.
+    from app.routers.multiguard_runtime import _ensure_schema as runtime_schema
+    runtime_schema()
     with engine.begin() as connection:
         earlier = connection.execute(text("""
             SELECT installation_id FROM guard.discovery_uninstalls
@@ -1654,9 +1670,6 @@ def discovery_uninstall(req: DiscoveryUninstallRequest):
         """), {"iid":pending["installation_id"]}).scalar_one_or_none()
         if installation is not None:
             # Paid/provisioned installations are shown as removed as well.
-            # Imported lazily: the runtime router owns its uninstall ledger.
-            from app.routers.multiguard_runtime import _ensure_schema as runtime_schema
-            runtime_schema()
             connection.execute(text("""
                 INSERT INTO guard.agent_uninstalls
                   (installation_id,event_id,client_occurred_at)
@@ -1677,6 +1690,9 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
         req.discovery_credential,
     )
 
+    if pending["status"] in {"UNINSTALLED", "ARCHIVED"}:
+        return {"assigned":False,"status":pending["status"],
+                "serverTime":_iso(_utcnow())}
     with engine.begin() as connection:
         connection.execute(
             text(
