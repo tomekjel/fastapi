@@ -1,0 +1,32 @@
+name: Multi-Servis OWNER uninstall and archive — isolated syntax checks
+
+on:
+  push:
+    branches: [feature/owner-license-controls-20261010]
+    paths:
+      - embedded-multiguard/app/routers/multiguard_license.py
+      - embedded-multiguard/app/routers/multiguard_runtime.py
+      - embedded-multiguard/tests/**
+      - .github/workflows/owner-uninstall-backend-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  source-check:
+    name: Verify Python backend source, without deploy or database writes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Python routers (no imports, no server/database)
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            embedded-multiguard/app/routers/multiguard_license.py \
+            embedded-multiguard/app/routers/multiguard_runtime.py \
+            embedded-multiguard/app/routers/multiguard_panel_devices.py
+      - name: Existing OWNER panel security regression
+        run: python3 embedded-multiguard/tests/test_owner_panel_security.py
+      - name: Outcome
+        run: echo "Source checks only. No production deployment or migrations executed."
