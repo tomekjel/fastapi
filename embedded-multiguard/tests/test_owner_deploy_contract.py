@@ -68,8 +68,9 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     print("PASS: modified provision API signature is rejected.")
     path.write_text(original,encoding="utf-8")
 
-    # An attacker cannot add an unauthenticated bypass to discovery/register,
-    # even though its internal status-revival logic is explicitly reviewed.
+    # No change whatsoever is allowed to discovery/register, including
+    # an unsafe request-parameter bypass. Only assignment can revive archived
+    # installations under the existing authenticated discovery handshake.
     tag="def discovery_register(req: DiscoveryRegisterRequest):"
     assert original.count(tag)==1
     path.write_text(original.replace(
@@ -77,9 +78,9 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     ),encoding="utf-8")
     reject=run()
     assert reject.returncode!=0,(reject.stdout,reject.stderr)
-    assert "interface" in (reject.stdout+reject.stderr)
+    assert "unrelated" in (reject.stdout+reject.stderr)
     path.write_text(original,encoding="utf-8")
-    print("PASS: discovery/register authentication signature is protected.")
+    print("PASS: discovery/register API body and signature are unchanged.")
 
     # New no-license uninstall messages must use a strict discovery secret.
     assert "def discovery_uninstall(req: DiscoveryUninstallRequest):" in original
