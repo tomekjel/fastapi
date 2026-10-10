@@ -166,6 +166,12 @@ class DiscoveryAssignmentRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class DiscoveryUninstallRequest(DiscoveryAssignmentRequest):
+    """An unlicensed device can report removal using its discovery credential."""
+    uninstall_event_id: uuid.UUID = Field(alias="uninstallEventId")
+    app_version: str = Field(default="", alias="appVersion", max_length=80)
+
+
 class WorkshopReportRequest(DiscoveryAssignmentRequest):
     """Explicit minimal workshop diagnostics, authenticated with discovery credential."""
     summary: dict[str, Any] = Field(default_factory=dict)
@@ -522,7 +528,7 @@ CREATE TABLE IF NOT EXISTS guard.pending_installations (
     serial_number TEXT,
     os_version TEXT,
     status TEXT NOT NULL DEFAULT 'WAITING'
-        CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED','ARCHIVED')),
+        CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED','ARCHIVED','UNINSTALLED')),
     assigned_reception_id UUID REFERENCES service.service_orders(id) ON DELETE SET NULL,
     assigned_license_id TEXT,
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -539,6 +545,16 @@ CREATE INDEX IF NOT EXISTS idx_guard_pending_installations_serial
 
 -- OWNER only removes pending installations from the working queue.
 -- Historical installation IDs stay in the database for audit/reinstall.
+CREATE TABLE IF NOT EXISTS guard.discovery_uninstalls (
+    event_id UUID PRIMARY KEY,
+    installation_id UUID NOT NULL REFERENCES guard.pending_installations(installation_id),
+    previously_assigned BOOLEAN NOT NULL DEFAULT FALSE,
+    app_version TEXT NOT NULL DEFAULT '',
+    reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guard_discovery_uninstalls_id
+    ON guard.discovery_uninstalls(installation_id,reported_at DESC);
+
 CREATE TABLE IF NOT EXISTS guard.pending_archive_events (
     id BIGSERIAL PRIMARY KEY,
     installation_id UUID NOT NULL
@@ -631,7 +647,7 @@ ALTER TABLE guard.pending_installations
     DROP CONSTRAINT IF EXISTS pending_installations_status_check;
 ALTER TABLE guard.pending_installations
     ADD CONSTRAINT pending_installations_status_check
-    CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED','ARCHIVED'));
+    CHECK (status IN ('WAITING','ASSIGNED','PROVISIONED','IGNORED','ARCHIVED','UNINSTALLED'));
 """
 
 
@@ -1389,7 +1405,7 @@ def discovery_register(req: DiscoveryRegisterRequest):
                         model=NULLIF(:model,''),
                         serial_number=NULLIF(:serial_number,''),
                         os_version=NULLIF(:os_version,''),
-                        status=CASE WHEN status='ARCHIVED'
+                        status=CASE WHEN status IN ('ARCHIVED','UNINSTALLED')
                           THEN 'WAITING' ELSE status END,
                         last_seen_at=:now,
                         updated_at=:now
@@ -1444,6 +1460,77 @@ def discovery_register(req: DiscoveryRegisterRequest):
         **_pending_public(dict(row)),
         "serverTime": _iso(now),
     }
+
+
+@router.post("/v1/multi-guard/discovery/uninstall")
+def discovery_uninstall(req: DiscoveryUninstallRequest):
+    """One authenticated positive uninstall receipt, including NO-LICENSE apps.
+
+    A missing heartbeat is not proof of removal. Preserve the device, license,
+    payment history and event IDs; only remove it from the pending queue.
+    """
+    pending = _authenticate_pending(
+        req.installation_id, req.device_id, req.discovery_credential
+    )
+    _ensure_schema()
+    # Create the runtime uninstall ledger before opening this transaction:
+    # schema migrations must not run on a competing DB connection mid-write.
+    from app.routers.multiguard_runtime import _ensure_schema as runtime_schema
+    runtime_schema()
+    with engine.begin() as connection:
+        earlier = connection.execute(text("""
+            SELECT installation_id FROM guard.discovery_uninstalls
+            WHERE event_id=:event_id
+        """), {"event_id":req.uninstall_event_id}).scalar_one_or_none()
+        if earlier is not None:
+            if earlier != pending["installation_id"]:
+                raise HTTPException(409, "Identyfikator odinstalowania został już użyty.")
+            return {"accepted":True, "duplicate":True, "status":"UNINSTALLED"}
+        current = connection.execute(text("""
+            SELECT status,assigned_license_id FROM guard.pending_installations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid":pending["installation_id"]}).mappings().first()
+        if current is None:
+            raise HTTPException(404, "Instalacja nie istnieje.")
+        # This can also happen after an earlier successful uninstall under
+        # a different event UUID. Keep an audit trail but never reinterpret
+        # an old install as newly licensed.
+        connection.execute(text("""
+            INSERT INTO guard.discovery_uninstalls
+              (event_id,installation_id,previously_assigned,app_version)
+            VALUES (:event_id,:iid,:assigned,:version)
+        """), {"event_id":req.uninstall_event_id,
+                "iid":pending["installation_id"],
+                "assigned":bool(current["assigned_license_id"]),
+                "version":req.app_version.strip()})
+        connection.execute(text("""
+            UPDATE guard.pending_installations
+            SET status='UNINSTALLED',updated_at=now()
+            WHERE installation_id=:iid
+        """), {"iid":pending["installation_id"]})
+        # A previously prepared, server-granted SERVICE permission must not
+        # linger on an uninstalled device. It is NOT a paid cancellation.
+        connection.execute(text("""
+            UPDATE guard.workshop_grants
+            SET enabled=FALSE,updated_at=now()
+            WHERE installation_id=:iid AND enabled=TRUE
+        """), {"iid":pending["installation_id"]})
+        installation = connection.execute(text("""
+            SELECT id FROM guard.installations
+            WHERE installation_external_id=:iid AND is_current=TRUE LIMIT 1
+        """), {"iid":pending["installation_id"]}).scalar_one_or_none()
+        if installation is not None:
+            # Paid/provisioned installations are shown as removed as well.
+            connection.execute(text("""
+                INSERT INTO guard.agent_uninstalls
+                  (installation_id,event_id,client_occurred_at)
+                VALUES (:internal_id,:event_id,now())
+                ON CONFLICT (installation_id) DO UPDATE SET
+                    event_id=EXCLUDED.event_id,
+                    client_occurred_at=EXCLUDED.client_occurred_at,
+                    reported_at=now()
+            """), {"internal_id":installation,"event_id":req.uninstall_event_id})
+    return {"accepted":True,"duplicate":False,"status":"UNINSTALLED"}
 
 
 @router.post("/v1/multi-guard/discovery/assignment")
