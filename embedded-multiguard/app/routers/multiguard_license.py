@@ -555,6 +555,17 @@ CREATE TABLE IF NOT EXISTS guard.workshop_grant_audit (
     changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS guard.license_expiry_adjustments (
+    id BIGSERIAL PRIMARY KEY,
+    license_link_id UUID NOT NULL REFERENCES guard.license_links(id),
+    installation_id UUID NOT NULL,
+    previous_valid_until TIMESTAMPTZ NOT NULL,
+    new_valid_until TIMESTAMPTZ NOT NULL,
+    reason TEXT NOT NULL,
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (new_valid_until < previous_valid_until)
+);
+
 CREATE TABLE IF NOT EXISTS guard.owner_license_actions (
     id BIGSERIAL PRIMARY KEY,
     installation_id UUID NOT NULL,
@@ -1040,7 +1051,7 @@ def _assign_direct_customer_license(
         """), {"id": installation_id}).mappings().first()
         if pending is None:
             raise HTTPException(404, "Komputer nie został zarejestrowany.")
-        if pending["status"] != "WAITING" or pending["assigned_license_id"]:
+        if pending["status"] not in {"WAITING", "IGNORED"} or pending["assigned_license_id"]:
             raise HTTPException(409, "Komputer ma już przypisaną licencję.")
         existing = con.execute(text("""
             SELECT id FROM guard.license_links
@@ -1539,12 +1550,21 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
             {"installation_id": pending["installation_id"]},
         )
 
-    if pending["status"] == "IGNORED":
-        return {
-            "assigned":False, "status":"NO_LICENSE",
-            "workshopLease":_signed_unlicensed_state(pending),
-            "serverTime":_iso(_utcnow()),
-        }
+    if pending["status"] in {"IGNORED", "WAITING"}:
+        grant = _workshop_grant(pending["installation_id"])
+        if grant and grant["enabled"]:
+            return {
+                "assigned": False, "status": "SERVICE",
+                "releaseChannel": grant["release_channel"],
+                "workshopLease": _signed_workshop_grant(pending, grant),
+                "serverTime": _iso(_utcnow()),
+            }
+        if pending["status"] == "IGNORED":
+            return {
+                "assigned":False, "status":"NO_LICENSE",
+                "workshopLease":_signed_unlicensed_state(pending),
+                "serverTime":_iso(_utcnow()),
+            }
 
     reception_id = pending.get("assigned_reception_id")
     # Direct client licences have no reception_id. Use the stored KeyGate
@@ -1572,15 +1592,6 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
             }
         raise HTTPException(409, "Nie znaleziono powiązanej licencji klienta.")
     if not reception_id or pending["status"] == "WAITING":
-        grant = _workshop_grant(pending["installation_id"])
-        if grant and grant["enabled"]:
-            return {
-                "assigned": False,
-                "status": "WORKSHOP",
-                "releaseChannel": grant["release_channel"],
-                "workshopLease": _signed_workshop_grant(pending, grant),
-                "serverTime": _iso(_utcnow()),
-            }
         return {
             "assigned": False,
             "status": pending["status"],
@@ -2266,6 +2277,76 @@ def panel_update_workshop(
     ), headers={"Cache-Control":"private, no-store"})
 
 
+def _shorten_active_license(
+    installation_id: uuid.UUID, new_date: str, reason: str
+) -> dict[str, Any]:
+    """OWNER-only shortening, with absolute-date KeyGate update and audit.
+
+    Refunds are NOT processed by this mutation.
+    """
+    reason = reason.strip()
+    if not reason or len(reason) > 500:
+        raise HTTPException(400, "Podaj uzasadnienie zmiany daty (maks. 500 znaków).")
+    try:
+        new_day = datetime.strptime(new_date, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(400, "Data musi mieć format RRRR-MM-DD.") from exc
+    _ensure_schema()
+    with engine.begin() as con:
+        link = con.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid":installation_id}).mappings().first()
+        if not link or link["lifecycle"] != "ACTIVE" or not link["valid_until"]:
+            raise HTTPException(409, "Skrócić można wyłącznie aktywną licencję.")
+        previous = link["valid_until"]
+        new_end = previous.replace(year=new_day.year,month=new_day.month,day=new_day.day)
+        if not (_utcnow() < new_end < previous):
+            raise HTTPException(400, "Nowa data musi być po dziś i przed aktualnym końcem.")
+        _keygate_set_valid_until(link["keygate_license_id"], new_end)
+        updated = con.execute(text("""
+            UPDATE guard.license_links
+            SET valid_until=:end,updated_at=now()
+            WHERE id=:id RETURNING *
+        """), {"id":link["id"],"end":new_end}).mappings().one()
+        _update_installation_mirror(con,_normalize_link(dict(updated)))
+        con.execute(text("""
+            INSERT INTO guard.license_expiry_adjustments
+              (license_link_id,installation_id,previous_valid_until,new_valid_until,reason)
+            VALUES (:link_id,:iid,:old,:new,:reason)
+        """), {"link_id":link["id"],"iid":installation_id,
+               "old":previous,"new":new_end,"reason":reason})
+    return {"installationId":str(installation_id),
+            "oldValidUntil":_iso(previous),"newValidUntil":_iso(new_end),
+            "refundProcessed":False}
+
+
+@router.post("/multiguard/installations/{installation_id}/shorten")
+def owner_shorten_license_api(
+    installation_id: uuid.UUID, new_date: str = Form(...),
+    reason: str = Form(...), user: CurrentUser = Depends(require_owner),
+):
+    return _shorten_active_license(installation_id,new_date,reason)
+
+
+@router.post("/multiguard/panel/pending/{installation_id}/shorten")
+def owner_shorten_license_web(
+    installation_id: uuid.UUID,
+    new_date: str = Form(...), reason: str = Form(...),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403,"Nieprawidłowy formularz.")
+    _shorten_active_license(installation_id,new_date,reason)
+    return RedirectResponse(
+        f"/multiguard/panel/pending/{installation_id}#owner-license-controls",
+        status_code=303,headers={"Cache-Control":"private, no-store"},
+    )
+
+
 @router.post("/multiguard/installations/{installation_id}/no-license")
 def owner_no_license_api(
     installation_id: uuid.UUID,
@@ -2434,6 +2515,13 @@ def multiguard_panel_pending(
               <button type="submit">BRAK LICENCJI — WYŁĄCZ</button>
             </form>
             {('<a class="button-link" href="/multiguard/panel/license/' + str(current_link['reception_id']) + '/extend">PRZEDŁUŻ +3 / +6 / +12 MIESIĘCY</a>') if current_link and current_link.get('reception_id') and current_link['lifecycle']=='ACTIVE' else ''}
+            {('''<h3>Skróć aktywną licencję</h3>
+              <form method="post" action="/multiguard/panel/pending/'''+str(installation_id)+'''/shorten">
+                <input type="hidden" name="csrf_token" value="'''+_workshop_csrf()+'''">
+                <label>Nowa data ważności <input type="date" name="new_date" required></label>
+                <label>Uzasadnienie <input name="reason" maxlength="500" required></label>
+                <button type="submit">ZAPISZ SKRÓCENIE</button>
+              </form>''') if current_link and current_link['lifecycle']=='ACTIVE' else ''}
           </section>
           <section class="card" id="client-license">
             <div class="eyebrow">LICENCJA KOMERCYJNA</div>
