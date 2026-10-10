@@ -3,3 +3,5 @@ Verify owner-approved release 0c04f4e16045397b5de8da2daecc5e0b6d789b4b (statisti
 Read-only verification after user successfully installed outbound OWNER agent in Proxmox CT103; check private Statistics and issue routes in public OpenAPI.
 Confirm live release after owner console reported OWNER-WEB AGENT: DEPLOYED at 20:57:02, target d4a665f501ad769bbb89bb21da9cc73011da21f7. Public API routes + private auth only; no edits to running server.
 Read-only verification after owner console confirmed OWNER-WEB AGENT: DEPLOYED seq=4 sha bee1dc9ccfc998dd26bce356aaac05b007f23b34, health check and unchanged Android/agent routes PASS. Re-run public GitHub smoke to confirm production owner HTTP routes stay protected. No production mutations.
+
+Postrelease OWNER uninstall/archive route verification — 2026-10-10 rev5
