@@ -21,6 +21,7 @@ start_marker='"$PY" - "$ROUTERS" "$STAGE" <<\'PY\'\n'
 assert script.count(start_marker)==1, "Ambiguous deployment security guard"
 body=script.split(start_marker,1)[1].split("\nPY",1)[0]
 assert "AUTHORIZED_LICENSE_EVOLUTION" in body, "Missing narrow API authorization"
+assert "changed_authorized.issubset(AUTHORIZED_LICENSE_EVOLUTION)" in body, "Web-only incremental releases must allow unchanged licensing APIs"
 assert "ast.dump" in body, "Must compare entire handler ASTs"
 
 with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
@@ -40,6 +41,18 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     ok=run()
     assert ok.returncode==0,(ok.stdout,ok.stderr)
     print("PASS: OWNER deployer accepts the reviewed licensing and reconnect handlers.")
+    # Production uses sequence 6. Compare against that exact installed revision:
+    # an OWNER-only update must pass without requiring changes to public routes.
+    last_deployed="ed0f7506e926861d40294d2e7fdf9b6f376d9f48"
+    for name in NAMES:
+        url=f"https://raw.githubusercontent.com/tomekjel/fastapi/{last_deployed}/embedded-multiguard/app/routers/{name}"
+        request=urllib.request.Request(url,headers={"User-Agent":"Multi-Servis-licence-CI"})
+        with urllib.request.urlopen(request,timeout=25) as source:
+            (old/name).write_bytes(source.read())
+    increment=run()
+    assert increment.returncode==0,(increment.stdout,increment.stderr)
+    print("PASS: seq6 to OWNER-only update without changing unrelated endpoints.")
+
 
     # Any unrelated existing agent endpoint mutation must still be denied.
     path=new/"multiguard_runtime.py"
