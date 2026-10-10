@@ -2422,6 +2422,55 @@ def owner_no_license_web(
     )
 
 
+@router.post("/multiguard/panel/pending/{installation_id}/select")
+def owner_select_mode_web(
+    installation_id: uuid.UUID,
+    period: str = Form(...),
+    edition: str = Form("STANDARD"),
+    release_channel: str = Form("STABLE"),
+    reception_number: str = Form(""),
+    reason: str = Form(""),
+    paid_amount: str = Form(""),
+    confirmed: str = Form(""),
+    period_override: str = Form(""),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """One OWNER decision control: no licence / service / 3, 6 or 12 months.
+
+    Paid time does not begin here; customer handover and document acceptance
+    remain separate, mandatory server-side operations.
+    """
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowy formularz.")
+    if confirmed != "yes":
+        raise HTTPException(400, "Potwierdź decyzję o uprawnieniach.")
+    mode = "NO_LICENSE" if period_override == "NO_LICENSE" else period.strip().upper()
+    if mode == "NO_LICENSE":
+        _set_owner_no_license(installation_id, reason, paid_amount)
+    elif mode == "SERVICE":
+        _set_workshop_grant(installation_id, edition, release_channel, True)
+    elif mode in {"3", "6", "12"}:
+        months = int(mode)
+        if reception_number.strip():
+            reception = _reception_by_number(reception_number.strip())
+            _assign_pending_to_reception(
+                installation_id, reception["id"], edition, months, release_channel
+            )
+        else:
+            _assign_direct_customer_license(
+                installation_id, edition, months, release_channel
+            )
+    else:
+        raise HTTPException(400, "Wybierz brak licencji, serwisowy lub 3/6/12 miesięcy.")
+    return RedirectResponse(
+        f"/multiguard/panel/pending/{installation_id}#owner-license-controls",
+        status_code=303,headers={"Cache-Control":"private, no-store"},
+    )
+
+
 @router.get(
     "/multiguard/panel/pending/{installation_id}",
     response_class=HTMLResponse,
@@ -2474,26 +2523,8 @@ def multiguard_panel_pending(
             '<p class="muted">Przekazanie zarejestrowane; komputer pobierze status po synchronizacji.</p>'
         )
     elif pending["status"] in {"WAITING", "IGNORED"}:
-        direct_info = '<p>Sprzedaż bez przyjęcia sprzętu do warsztatu i bez numeru zlecenia.</p>'
-        direct_buttons = f"""
-            <form method="post" action="/multiguard/panel/pending/{installation_id}/direct">
-              <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
-              <label>Edycja<select name="edition">
-                <option value="STANDARD">Standard</option>
-                <option value="PRO">Pro</option>
-              </select></label>
-              <label>Okres<select name="months">
-                <option value="3">3 miesiące</option>
-                <option value="6">6 miesięcy</option>
-                <option value="12" selected>12 miesięcy</option>
-              </select></label>
-              <label>Kanał<select name="release_channel">
-                <option value="STABLE">Stabilna</option>
-                <option value="PILOT">Beta</option>
-              </select></label>
-              <button type="submit">PRZYPISZ LICENCJĘ KLIENTA</button>
-            </form>
-        """
+        direct_info = '<p>Możesz przygotować licencję bez zlecenia — wybierz okres w karcie „Licencja i tryb pracy”.</p>'
+        direct_buttons = ""
     else:
         direct_info = '<p>Ta instalacja ma już powiązanie ze zleceniem serwisowym.</p>'
         direct_buttons = ''
@@ -2569,17 +2600,40 @@ def multiguard_panel_pending(
             <p>Wyłączenie nie usuwa Multi-Guard, identyfikatora instalacji ani historii.
             Program zablokuje funkcje po synchronizacji z serwerem.
             Zwrot niewykorzystanej opłaty ustalasz i wykonujesz oddzielnie.</p>
-            <form method="post" action="/multiguard/panel/pending/{installation_id}/no-license">
+            <form method="post" action="/multiguard/panel/pending/{installation_id}/select">
               <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
-              <label>Powód (wpis wewnętrzny / historia)
-                <input name="reason" maxlength="500" placeholder="np. rezygnacja klienta, zwrot uzgodniony telefonicznie"></label>
-              <label>Łączna opłata za licencję (zł) — opcjonalnie do szacunku zwrotu
+              <div class="grid">
+                <label>Edycja programu<select name="edition">
+                  <option value="STANDARD">Standard</option>
+                  <option value="PRO">Pro</option>
+                </select></label>
+                <label>Okres / tryb<select name="period">
+                  <option value="NO_LICENSE">Brak licencji</option>
+                  <option value="SERVICE">Serwisowy — bezterminowo</option>
+                  <option value="3">3 miesiące</option>
+                  <option value="6">6 miesięcy</option>
+                  <option value="12">12 miesięcy</option>
+                </select></label>
+                <label>Kanał<select name="release_channel">
+                  <option value="STABLE">Stabilna</option>
+                  <option value="PILOT">Beta</option>
+                </select></label>
+              </div>
+              <label>Numer zlecenia Multi-Servis (opcjonalny, wyłącznie przy licencji płatnej)
+                <input name="reception_number" maxlength="80" placeholder="Puste = sprzedaż bez zlecenia"></label>
+              <label>Powód decyzji / rezygnacji
+                <input name="reason" maxlength="500" placeholder="np. zwrot uzgodniony telefonicznie"></label>
+              <label>Opłata za licencję (zł) — opcjonalnie przy zwrocie
                 <input name="paid_amount" inputmode="decimal" placeholder="np. 199,00"></label>
-              <small>Przy aktywnej licencji zostanie zapisany orientacyjny zwrot proporcjonalny
-              do niewykorzystanego czasu. Nie powoduje automatycznego zwrotu pieniędzy.</small>
+              <small>Przy „Brak licencji” system tylko blokuje uprawnienia i zapisuje
+              ewentualny szacunek niewykorzystanej części opłaty. Nie zwraca pieniędzy.
+              Przy 3/6/12 mies. płatny okres zaczyna się dopiero po wydaniu
+              i zaakceptowaniu wymaganych dokumentów.</small>
               <label><input type="checkbox" name="confirmed" value="yes" required>
-                Potwierdzam wyłączenie uprawnień tego komputera</label>
-              <button type="submit">BRAK LICENCJI — WYŁĄCZ</button>
+                Potwierdzam decyzję i jej zapis w historii</label>
+              <button type="submit">ZAPISZ WYBRANY TRYB / LICENCJĘ</button>
+              <button type="submit" name="period_override" value="NO_LICENSE">
+                BRAK LICENCJI — WYŁĄCZ</button>
             </form>
             {('<a class="button-link" href="/multiguard/panel/license/' + str(current_link['reception_id']) + '/extend">PRZEDŁUŻ +3 / +6 / +12 MIESIĘCY</a>') if current_link and current_link.get('reception_id') and current_link['lifecycle']=='ACTIVE' else ''}
             <h3>Historia decyzji właściciela</h3>
@@ -2608,51 +2662,9 @@ def multiguard_panel_pending(
             <p>Może działać na komputerze warsztatowym albo u klienta.
                Nie wymaga zlecenia i nie nalicza 3/6/12 miesięcy.
                Dostęp wymaga odnawiania potwierdzenia przez serwer.</p>
-            <form method="post" action="/multiguard/panel/pending/{installation_id}/workshop">
-              <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
-              <label>Edycja <select name="edition">
-                <option value="STANDARD">Standard</option>
-                <option value="PRO">Pro</option>
-              </select></label>
-              <label>Kanał <select name="release_channel">
-                <option value="STABLE">Stabilna</option>
-                <option value="PILOT">Beta</option>
-              </select></label>
-              <label>Akcja <select name="action">
-                <option value="enable">Włącz / zmień edycję</option>
-                <option value="disable">Zakończ tryb serwisowy</option>
-              </select></label>
-              <button type="submit">ZAPISZ TRYB SERWISOWY</button>
-            </form>
+            <p class="muted">Tryb serwisowy wybierasz w karcie „Licencja i tryb pracy” powyżej.</p>
           </section>
-          <section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>
-          <form method="post" action="/multiguard/panel/pending/{installation_id}/assign">
-            <label>Numer zlecenia Multi-Servis
-              <input name="reception_number" placeholder="np. MS-2026-00123" required>
-            </label>
-            <div class="grid">
-              <label>Wersja
-                <select name="edition">
-                  <option value="STANDARD">Multi-Guard Standard</option>
-                  <option value="PRO">Multi-Guard Pro</option>
-                </select>
-              </label>
-              <label>Okres
-                <select name="months">
-                  <option value="3">3 miesiące</option>
-                  <option value="6">6 miesięcy</option>
-                  <option value="12" selected>12 miesięcy</option>
-                </select>
-              </label>
-              <label>Kanał
-                <select name="release_channel">
-                  <option value="STABLE" selected>Stabilna</option>
-                  <option value="PILOT">Beta</option>
-                </select>
-              </label>
-            </div>
-            <button type="submit">PRZYPISZ I PRZYGOTUJ LICENCJĘ</button>
-          </form></section>
+
         </section>
         """
     )
