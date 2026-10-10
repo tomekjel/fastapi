@@ -3,7 +3,7 @@ on:
   # Owner code changes do not burn hosted CI time on each push.
   # Full browser + PostgreSQL regression tests execute only for deliberate release-gate triggers.
   push:
-    branches: [feature/multiservis-web-compact-stats-20261009, multiservis-panel-multiguard-gold-crimson-v1, feature/guard-license-model-owner-renew-20261009, fix/owner-pending-row-inline-editor-side-by-side-20261010]
+    branches: [feature/multiservis-web-compact-stats-20261009, multiservis-panel-multiguard-gold-crimson-v1, feature/guard-license-model-owner-renew-20261009]
     paths:
       - 'embedded-multiguard/app/routers/**'
       - 'embedded-multiguard/tests/**'
