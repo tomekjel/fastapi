@@ -2704,6 +2704,9 @@ def _owner_workshop_manager_panel() -> str:
                   </label>
                   <button type="submit">ZAPISZ MONITOROWANIE</button>
                 </form>
+                <a class="button-link compact" href="/multiguard/panel/workshop/{iid}/reports">
+                  HISTORIA RAPORTÓW
+                </a>
                 <button type="button" class="pending-archive-trigger"
                   onclick="document.getElementById('disable-workshop-{iid}').showModal()">
                   WYŁĄCZ TRYB SERWISOWY
@@ -2747,6 +2750,63 @@ def _owner_workshop_manager_panel() -> str:
         </table></div>
       </section>
     """
+
+
+@router.get("/multiguard/panel/workshop/{installation_id}/reports",
+            response_class=HTMLResponse)
+def owner_workshop_reports(
+    installation_id: uuid.UUID,
+    _: None = Depends(_panel_auth),
+):
+    """OWNER-only recent time series; no raw private files, no public URL."""
+    _ensure_schema()
+    with engine.connect() as con:
+        grant=con.execute(text("""
+            SELECT edition,enabled,monitoring_profile FROM guard.workshop_grants
+            WHERE installation_id=:id
+        """),{"id":installation_id}).mappings().first()
+        if grant is None:
+            raise HTTPException(404,"Brak trybu serwisowego tej instalacji.")
+        logs=con.execute(text("""
+            SELECT reported_at,summary FROM guard.workshop_report_history
+            WHERE installation_id=:id ORDER BY reported_at DESC LIMIT 60
+        """),{"id":installation_id}).mappings().all()
+    trs=[]
+    for row in logs:
+        summary=row["summary"] or {}
+        sample_list=summary.get("samples",[])
+        if not isinstance(sample_list,list):
+            sample_list=[]
+        if not isinstance(summary,dict):
+            summary={}
+        cpu_values=[v["cpuLoadPercent"] for v in sample_list
+                    if isinstance(v,dict) and isinstance(v.get("cpuLoadPercent"),(float,int))]
+        avg_cpu=f"{sum(cpu_values)/len(cpu_values):.1f}%" if cpu_values else "—"
+        trs.append(
+            "<tr><td>"+_panel_escape(row["reported_at"])+"</td>"
+            "<td>"+_panel_escape(summary.get("monitoringProfile","—"))+"</td>"
+            "<td>"+_panel_escape(len(sample_list))+"</td>"
+            "<td>"+_panel_escape(avg_cpu)+"</td>"
+            "<td>"+_panel_escape(summary.get("whea24h","—"))+"</td>"
+            "<td>"+_panel_escape(summary.get("kernelPower7d","—"))+"</td></tr>"
+        )
+    return HTMLResponse(_panel_html(f"""
+      <section class="card">
+        <a href="/multiguard/panel#service-modes">← Tryby serwisowe</a>
+        <h1>Historia raportów diagnostycznych</h1>
+        <p>Instalacja {_panel_escape(installation_id)} ·
+           edycja {_panel_escape(grant["edition"])} ·
+           monitorowanie {_panel_escape(grant["monitoring_profile"])}.</p>
+        <p>Ostatnie 60 raportów (retencja maksymalnie 30 dni).
+           Raportowanie wyłączone nie usuwa starszej historii.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Otrzymano</th><th>Profil</th><th>Próbki</th>
+          <th>Średnie użycie CPU</th><th>Błędy WHEA 24h</th>
+          <th>Kernel-Power 7 dni</th></tr></thead>
+          <tbody>{''.join(trs) or '<tr><td colspan="6">Brak raportów.</td></tr>'}</tbody>
+        </table></div>
+      </section>
+    """),headers={"Cache-Control":"private, no-store"})
 
 
 @router.post("/multiguard/panel/workshop/{installation_id}/monitoring")
