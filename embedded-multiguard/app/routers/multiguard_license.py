@@ -1685,6 +1685,16 @@ def provision(req: ProvisionRequest):
     except ValueError as exc:
         raise HTTPException(400, "Nieprawidłowy installationId.") from exc
 
+    # Never bind a previously prepared licence to an installation that
+    # OWNER archived or whose removal the installer already confirmed.
+    # A real subsequent discovery handshake restores a valid waiting state.
+    pending = _pending_installation(installation_id)
+    if pending and pending["status"] in {"ARCHIVED", "UNINSTALLED"}:
+        raise HTTPException(
+            409, "Instalacja została wycofana. Uruchom Multi-Guard ponownie "
+                 "i poczekaj na ponowną rejestrację przed aktywacją."
+        )
+
     link = _link_by_key(license_key)
     if not link:
         raise HTTPException(
