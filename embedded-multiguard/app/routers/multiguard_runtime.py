@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -1352,7 +1352,7 @@ def multi_guard_panel_dashboard(
 @router.post("/panel/computers/pending/{installation_id}/archive")
 def owner_archive_pending_installation(
     installation_id: uuid.UUID,
-    csrf_token: str = __import__("fastapi").Form(...),
+    csrf_token: str = Form(...),
     _: None = Depends(_panel_auth),
 ):
     """OWNER can clear the waiting list without claiming an uninstall happened.
@@ -1479,6 +1479,15 @@ def multi_guard_panel_computers(
                         ) or pending["hostname"] or "Komputer bez nazwy"
         alias = owner_friendly_name(iid)
         status_label = "OCZEKUJE NA LICENCJĘ" if pending["status"]=="WAITING" else "PRZYPISANA — POBIERANIE"
+        archive_form = ""
+        if pending["status"] == "WAITING":
+            archive_form = (
+                '<form method="post" action="/multiguard/panel/computers/pending/'
+                + str(iid) + '/archive" '
+                + 'onsubmit="return confirm(&quot;Usunąć tę instalację z oczekujących?&quot;);">'
+                + '<input type="hidden" name="csrf_token" value="' + archive_csrf + '">'
+                + '<button type="submit">USUŃ Z OCZEKUJĄCYCH</button></form>'
+            )
         pending_trs.append(f"""
             <tr><td><strong>{_panel_h('MG-'+str(iid).replace('-','')[:8].upper())}</strong></td>
                 <td><b>{_panel_h(alias or name)}</b><small class="row-sub">{_panel_h(name)} · {_panel_h(pending["serial_number"] or pending["hostname"] or "")}</small></td>
@@ -1487,13 +1496,7 @@ def multi_guard_panel_computers(
                 <td>{_panel_dt(pending["last_seen_at"])}</td>
                 <td><a class="button-link compact" href="/multiguard/panel/pending/{iid}">
                   {'PRZYPISZ LICENCJĘ' if pending["status"]=='WAITING' else 'SZCZEGÓŁY'}</a>
-                  {(
-                    '<form method="post" action="/multiguard/panel/computers/pending/'+str(iid)+'/archive" '
-                    'onsubmit="return confirm(\'Ukryć instalację z oczekujących? Jeżeli program nadal działa, '
-                    'po następnym kontakcie ponownie pojawi się na liście.\');">'
-                    '<input type="hidden" name="csrf_token" value="'+archive_csrf+'">'
-                    '<button type="submit">USUŃ Z OCZEKUJĄCYCH</button></form>'
-                  ) if pending["status"]=="WAITING" else ""}
+                  {archive_form}
                 </td>
             </tr>
         """)
