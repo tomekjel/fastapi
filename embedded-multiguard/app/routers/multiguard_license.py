@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import datetime, timezone
 from typing import Any
 
@@ -573,6 +574,8 @@ CREATE TABLE IF NOT EXISTS guard.owner_license_actions (
     previous_lifecycle TEXT,
     reason TEXT NOT NULL DEFAULT '',
     previous_valid_until TIMESTAMPTZ,
+    paid_amount_pln NUMERIC(12,2),
+    estimated_refund_pln NUMERIC(12,2),
     changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_owner_license_actions_installation
@@ -801,7 +804,9 @@ def _signed_unlicensed_state(pending: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _set_owner_no_license(installation_id: uuid.UUID, reason: str) -> dict[str, Any]:
+def _set_owner_no_license(
+    installation_id: uuid.UUID, reason: str, paid_amount: str = ""
+) -> dict[str, Any]:
     """Revoke rights without uninstalling or erasing the installation identity.
 
     This does NOT issue a monetary refund or silently create a new KeyGate license.
@@ -812,6 +817,15 @@ def _set_owner_no_license(installation_id: uuid.UUID, reason: str) -> dict[str, 
     reason = reason.strip()
     if len(reason) > 500:
         raise HTTPException(400, "Uzasadnienie nie może przekraczać 500 znaków.")
+    amount = None
+    if paid_amount.strip():
+        try:
+            amount = Decimal(paid_amount.strip().replace(",", "."))
+        except InvalidOperation as exc:
+            raise HTTPException(400, "Niepoprawna kwota zapłaty.") from exc
+        if not amount.is_finite() or amount < 0 or amount > 100000:
+            raise HTTPException(400, "Kwota musi być z przedziału 0–100000 zł.")
+        amount = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     with engine.begin() as con:
         pending = con.execute(text("""
             SELECT * FROM guard.pending_installations
@@ -847,16 +861,30 @@ def _set_owner_no_license(installation_id: uuid.UUID, reason: str) -> dict[str, 
             SET status='IGNORED', updated_at=now()
             WHERE installation_id=:iid
         """), {"iid":installation_id})
+        estimate = None
+        if (amount is not None and link and
+            link["lifecycle"] == "ACTIVE" and
+            link.get("valid_from") and link.get("valid_until")):
+            entire = (link["valid_until"] - link["valid_from"]).total_seconds()
+            remaining = (link["valid_until"] - _utcnow()).total_seconds()
+            ratio = (max(0, min(1, remaining / entire))
+                     if entire > 0 else 0)
+            estimate = (amount * Decimal(str(ratio))).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
         if modified:
             con.execute(text("""
                 INSERT INTO guard.owner_license_actions
-                    (installation_id,action,previous_lifecycle,reason,previous_valid_until)
-                VALUES (:iid,'NO_LICENSE',:previous,:reason,:previous_valid_until)
+                    (installation_id,action,previous_lifecycle,reason,
+                     previous_valid_until,paid_amount_pln,estimated_refund_pln)
+                VALUES (:iid,'NO_LICENSE',:previous,:reason,:previous_valid_until,
+                        :amount,:estimate)
             """), {"iid":installation_id, "previous":previous,
-                   "reason":reason,
+                   "reason":reason, "amount":amount, "estimate":estimate,
                    "previous_valid_until":link["valid_until"] if link else None})
     return {"installationId":str(installation_id),"status":"NO_LICENSE",
-            "licenseRevoked":bool(link),"refundProcessed":False}
+            "licenseRevoked":bool(link),"refundProcessed":False,
+            "estimatedRefundPLN":str(estimate) if estimate is not None else None}
 
 
 def _set_workshop_grant(
@@ -2361,6 +2389,7 @@ def owner_no_license_web(
     installation_id: uuid.UUID,
     csrf_token: str = Form(...),
     reason: str = Form(""),
+    paid_amount: str = Form(""),
     confirmed: str = Form(""),
     _: None = Depends(_panel_auth),
 ):
@@ -2370,7 +2399,7 @@ def owner_no_license_web(
         raise HTTPException(403, "Nieprawidłowy formularz.")
     if confirmed != "yes":
         raise HTTPException(400, "Potwierdź cofnięcie uprawnień.")
-    _set_owner_no_license(installation_id, reason)
+    _set_owner_no_license(installation_id, reason, paid_amount)
     return RedirectResponse(
         f"/multiguard/panel/pending/{installation_id}#owner-license-controls",
         status_code=303, headers={"Cache-Control":"private, no-store"},
@@ -2510,6 +2539,10 @@ def multiguard_panel_pending(
               <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
               <label>Powód (wpis wewnętrzny / historia)
                 <input name="reason" maxlength="500" placeholder="np. rezygnacja klienta, zwrot uzgodniony telefonicznie"></label>
+              <label>Łączna opłata za licencję (zł) — opcjonalnie do szacunku zwrotu
+                <input name="paid_amount" inputmode="decimal" placeholder="np. 199,00"></label>
+              <small>Przy aktywnej licencji zostanie zapisany orientacyjny zwrot proporcjonalny
+              do niewykorzystanego czasu. Nie powoduje automatycznego zwrotu pieniędzy.</small>
               <label><input type="checkbox" name="confirmed" value="yes" required>
                 Potwierdzam wyłączenie uprawnień tego komputera</label>
               <button type="submit">BRAK LICENCJI — WYŁĄCZ</button>
