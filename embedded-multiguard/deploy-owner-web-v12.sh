@@ -87,6 +87,9 @@ old,new=map(Path,sys.argv[1:])
 AUTHORIZED_LICENSE_EVOLUTION=frozenset({
     ("post","/v1/multi-guard/provision"),
     ("post","/v1/multi-guard/discovery/assignment"),
+    # OWNER-approved reconnection recovery: manual archive or a confirmed
+    # uninstall must not suppress a running client that registers again.
+    ("post","/v1/multi-guard/discovery/register"),
 })
 changed_authorized=set()
 for name in ("multiguard_license.py","multiguard_runtime.py"):
@@ -135,6 +138,10 @@ for name in ("multiguard_license.py","multiguard_runtime.py"):
         if interface(original)!=interface(revised):
             raise SystemExit(f"BLOCKED: incompatible licensing endpoint interface: {key}")
         changed_authorized.add(key)
+# The original V12 deploy altered two licensing handlers. An explicitly
+# approved owner clean-up also changes authenticated discovery/register to
+# revive a returning computer. Subsequent panel-only patches may leave any
+# of these unchanged, while all other public handlers remain protected.
 # The initial V12 deployment changed both approved endpoints; a later
 # OWNER web-only patch must be allowed to keep those interfaces untouched.
 # The loop above strictly blocks all other modifications or new public routes.
