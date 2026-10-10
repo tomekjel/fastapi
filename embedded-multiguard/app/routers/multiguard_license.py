@@ -2303,9 +2303,13 @@ def panel_update_workshop(
         raise HTTPException(403, "Nieprawidłowy formularz.")
     if action not in {"enable", "disable"}:
         raise HTTPException(400, "Nieprawidłowa operacja.")
-    result = _set_workshop_grant(
-        installation_id, edition, release_channel, action == "enable",
-    )
+    if action == "disable":
+        _set_owner_no_license(installation_id, "Zakończenie trybu serwisowego")
+        result = {"enabled":False,"edition":edition}
+    else:
+        result = _set_workshop_grant(
+            installation_id, edition, release_channel, True,
+        )
     return HTMLResponse(_panel_html(
         '<section class="card"><h1>Tryb serwisowy zapisany</h1>'
         '<p>Komputer pobierze zmienione uprawnienia po kolejnym kontakcie '
@@ -2517,6 +2521,24 @@ def multiguard_panel_pending(
         + _panel_escape(workshop_report_row["reported_at"]) + '</p>'
         if workshop_report_row else '<p class="muted">Komputer nie wysłał jeszcze raportu warsztatowego.</p>'
     )
+    with engine.connect() as history_con:
+        actions = history_con.execute(text("""
+            SELECT action,previous_lifecycle,reason,estimated_refund_pln,changed_at
+            FROM guard.owner_license_actions
+            WHERE installation_id=:iid
+            ORDER BY changed_at DESC LIMIT 20
+        """), {"iid":iid}).mappings().all()
+    action_history_html = "".join(
+        "<tr><td>" + _panel_escape(action["changed_at"]) +
+        "</td><td>" + _panel_escape(
+          "Brak licencji" if action["action"]=="NO_LICENSE" else action["action"]
+        ) + "</td><td>" + _panel_escape(action["reason"]) +
+        "</td><td>" + _panel_escape(
+          (str(action["estimated_refund_pln"])+" zł (szacunek, bez wypłaty)")
+          if action["estimated_refund_pln"] is not None else "—"
+        ) + "</td></tr>"
+        for action in actions
+    )
     device = " ".join(
         part for part in [
             public["manufacturer"].strip(),
@@ -2543,7 +2565,7 @@ def multiguard_panel_pending(
           <section class="card" id="owner-license-controls">
             <div class="eyebrow">UPRAWNIENIA / TYLKO WŁAŚCICIEL</div>
             <h2>Licencja i tryb pracy</h2>
-            <p>Stan: <strong>{'BRAK LICENCJI' if pending['status']=='IGNORED' else ('SERWISOWY' if grant and grant['enabled'] else _panel_escape((current_link or dict()).get('lifecycle','BRAK LICENCJI')))}</strong></p>
+            <p>Stan: <strong>{'SERWISOWY' if grant and grant['enabled'] else ('BRAK LICENCJI' if pending['status']=='IGNORED' else _panel_escape((current_link or dict()).get('lifecycle','BRAK LICENCJI')))}</strong></p>
             <p>Wyłączenie nie usuwa Multi-Guard, identyfikatora instalacji ani historii.
             Program zablokuje funkcje po synchronizacji z serwerem.
             Zwrot niewykorzystanej opłaty ustalasz i wykonujesz oddzielnie.</p>
@@ -2560,6 +2582,10 @@ def multiguard_panel_pending(
               <button type="submit">BRAK LICENCJI — WYŁĄCZ</button>
             </form>
             {('<a class="button-link" href="/multiguard/panel/license/' + str(current_link['reception_id']) + '/extend">PRZEDŁUŻ +3 / +6 / +12 MIESIĘCY</a>') if current_link and current_link.get('reception_id') and current_link['lifecycle']=='ACTIVE' else ''}
+            <h3>Historia decyzji właściciela</h3>
+            <div class="table-wrap"><table><thead>
+              <tr><th>Data</th><th>Operacja</th><th>Powód</th><th>Szacowany zwrot</th></tr>
+            </thead><tbody>{action_history_html or '<tr><td colspan="4">Brak zmian.</td></tr>'}</tbody></table></div>
             {('''<h3>Skróć aktywną licencję</h3>
               <form method="post" action="/multiguard/panel/pending/'''+str(installation_id)+'''/shorten">
                 <input type="hidden" name="csrf_token" value="'''+_workshop_csrf()+'''">
