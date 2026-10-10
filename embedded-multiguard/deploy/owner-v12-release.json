@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 7,
-  "target_sha": "2001dcfb314a56f9f70146f63fc1767ab1c2b9ef",
-  "summary": "OWNER: jedna edytowalna nazwa komputera z automatycznie wypełnionego modelu i producenta, bez duplikatów; nazwa może mieć do 420 znaków, oryginalne dane sprzętu pozostają bez zmian. Testy PostgreSQL/Chromium/security PASS 38040890498. Bez zmian Android/Windows."
+  "sequence": 8,
+  "target_sha": "b398f83342359949ddcc41d4d9174682fad60c96",
+  "summary": "OWNER WEB: osobne bezpieczne menu USUŃ, a finanse statystyk domyślnie zwinięte; miesiąc rozliczany według rzeczywistej daty wydania (przychód i koszty), bez dat wrześniowych w październiku. PostgreSQL/Chromium/bezpieczeństwo PASS 38042505367."
 }
