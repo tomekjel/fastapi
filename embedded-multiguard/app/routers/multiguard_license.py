@@ -2810,6 +2810,32 @@ def owner_disable_workshop(
     return RedirectResponse("/multiguard/panel#service-modes",status_code=303)
 
 
+@router.get("/multiguard/panel/service-orders/suggest")
+def owner_suggest_service_orders(q: str = "", _: None = Depends(_panel_auth)):
+    """Authenticated number fragments only: max 8 matching real service orders."""
+    if len(q)>40:
+        raise HTTPException(400,"Zbyt długi fragment numeru zlecenia.")
+    digits = "".join(ch for ch in q if "0" <= ch <= "9")
+    if len(digits)<3:
+        return {"results":[]}
+    with engine.connect() as con:
+        rows=con.execute(text("""
+            SELECT so.reception_number,d.manufacturer,d.model
+            FROM service.service_orders so
+            LEFT JOIN core.devices d ON d.id=so.device_id
+            WHERE regexp_replace(so.reception_number,'[^0-9]','','g') LIKE :query
+            ORDER BY so.received_at DESC NULLS LAST,so.reception_number DESC
+            LIMIT 8
+        """),{"query":"%"+digits+"%"}).mappings().all()
+    return {"results":[{
+        "number":str(row["reception_number"]),
+        "label":str(row["reception_number"]) + " — "
+                 + " ".join(x for x in (
+                     str(row["manufacturer"] or "").strip(),
+                     str(row["model"] or "").strip()) if x),
+    } for row in rows]}
+
+
 @router.get("/multiguard/panel", response_class=HTMLResponse)
 def multiguard_panel(
     _: None = Depends(_panel_auth),
