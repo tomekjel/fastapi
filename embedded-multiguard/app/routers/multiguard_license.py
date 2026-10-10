@@ -1405,8 +1405,6 @@ def discovery_register(req: DiscoveryRegisterRequest):
                         model=NULLIF(:model,''),
                         serial_number=NULLIF(:serial_number,''),
                         os_version=NULLIF(:os_version,''),
-                        status=CASE WHEN status IN ('ARCHIVED','UNINSTALLED')
-                          THEN 'WAITING' ELSE status END,
                         last_seen_at=:now,
                         updated_at=:now
                     WHERE installation_id=:installation_id
@@ -1541,17 +1539,24 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
         req.discovery_credential,
     )
 
+    # This is a trusted, authenticated contact from the installed program.
+    # Revival happens in the previously approved discovery/assignment route,
+    # not in registration: archived or removed computers return to the OWNER
+    # queue only when the client actually asks for its assignment again.
     with engine.begin() as connection:
-        connection.execute(
-            text(
-                """
-                UPDATE guard.pending_installations
-                SET last_seen_at=now(),updated_at=now()
-                WHERE installation_id=:installation_id
-                """
-            ),
-            {"installation_id": pending["installation_id"]},
-        )
+        current_status = connection.execute(text("""
+            UPDATE guard.pending_installations
+            SET status=CASE
+                WHEN status IN ('ARCHIVED','UNINSTALLED')
+                    THEN CASE WHEN assigned_license_id IS NOT NULL
+                         THEN 'ASSIGNED' ELSE 'WAITING' END
+                ELSE status END,
+                last_seen_at=now(),updated_at=now()
+            WHERE installation_id=:installation_id
+            RETURNING status
+        """), {"installation_id":pending["installation_id"]}).scalar_one()
+    pending = dict(pending)
+    pending["status"] = current_status
 
     reception_id = pending.get("assigned_reception_id")
     # Direct client licences have no reception_id. Use the stored KeyGate
