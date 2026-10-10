@@ -555,6 +555,18 @@ CREATE TABLE IF NOT EXISTS guard.workshop_grant_audit (
     changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS guard.owner_license_actions (
+    id BIGSERIAL PRIMARY KEY,
+    installation_id UUID NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('NO_LICENSE','SERVICE_ENABLED','SERVICE_DISABLED')),
+    previous_lifecycle TEXT,
+    reason TEXT NOT NULL DEFAULT '',
+    previous_valid_until TIMESTAMPTZ,
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_owner_license_actions_installation
+    ON guard.owner_license_actions(installation_id,changed_at DESC);
+
 CREATE TABLE IF NOT EXISTS guard.workshop_reports (
     installation_id UUID PRIMARY KEY
         REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
@@ -753,6 +765,89 @@ def _signed_workshop_grant(pending: dict[str, Any],
     }
 
 
+def _signed_unlicensed_state(pending: dict[str, Any]) -> dict[str, str]:
+    """An OWNER-selected no-license state, signed for this exact installation."""
+    payload = json.dumps({
+        "schemaVersion": 1,
+        "licenseId": "NONE-" + str(pending["installation_id"]),
+        "serviceDeviceId": None,
+        "installationId": str(pending["installation_id"]),
+        "deviceId": str(pending["device_id"]),
+        "planCode": "unknown",
+        "releaseChannel": "STABLE",
+        "lifecycle": "UNKNOWN",
+        "validFrom": None,
+        "validUntil": None,
+        "acceptedAt": None,
+        "acceptedDocuments": [],
+        "serverTime": _iso(_utcnow()),
+    }, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return {
+        "payload": payload,
+        "signatureB64": base64.b64encode(
+            _signing_key().sign(payload.encode("utf-8"))
+        ).decode("ascii"),
+    }
+
+
+def _set_owner_no_license(installation_id: uuid.UUID, reason: str) -> dict[str, Any]:
+    """Revoke rights without uninstalling or erasing the installation identity.
+
+    This does NOT issue a monetary refund or silently create a new KeyGate license.
+    Existing authenticated clients receive signed REVOKED via /refresh;
+    discovery-only clients receive signed UNKNOWN from /discovery/assignment.
+    """
+    _ensure_schema()
+    reason = reason.strip()
+    if len(reason) > 500:
+        raise HTTPException(400, "Uzasadnienie nie może przekraczać 500 znaków.")
+    with engine.begin() as con:
+        pending = con.execute(text("""
+            SELECT * FROM guard.pending_installations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid":installation_id}).mappings().first()
+        if not pending:
+            raise HTTPException(404, "Komputer nie zgłosił instalacji Multi-Guard.")
+        link = con.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE installation_id=:iid
+            ORDER BY created_at DESC LIMIT 1 FOR UPDATE
+        """), {"iid":installation_id}).mappings().first()
+        grant = con.execute(text("""
+            SELECT enabled FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid":installation_id}).mappings().first()
+        previous = str(link["lifecycle"]) if link else (
+            "SERVICE" if grant and grant["enabled"] else "NO_LICENSE"
+        )
+        modified = previous not in {"NO_LICENSE", "REVOKED"} or str(pending["status"]) != "IGNORED"
+        if link and link["lifecycle"] != "REVOKED":
+            updated = con.execute(text("""
+                UPDATE guard.license_links SET lifecycle='REVOKED',updated_at=now()
+                WHERE id=:link_id RETURNING *
+            """), {"link_id":link["id"]}).mappings().one()
+            _update_installation_mirror(con, _normalize_link(dict(updated)))
+        con.execute(text("""
+            UPDATE guard.workshop_grants SET enabled=FALSE,updated_at=now()
+            WHERE installation_id=:iid AND enabled=TRUE
+        """), {"iid":installation_id})
+        con.execute(text("""
+            UPDATE guard.pending_installations
+            SET status='IGNORED', updated_at=now()
+            WHERE installation_id=:iid
+        """), {"iid":installation_id})
+        if modified:
+            con.execute(text("""
+                INSERT INTO guard.owner_license_actions
+                    (installation_id,action,previous_lifecycle,reason,previous_valid_until)
+                VALUES (:iid,'NO_LICENSE',:previous,:reason,:previous_valid_until)
+            """), {"iid":installation_id, "previous":previous,
+                   "reason":reason,
+                   "previous_valid_until":link["valid_until"] if link else None})
+    return {"installationId":str(installation_id),"status":"NO_LICENSE",
+            "licenseRevoked":bool(link),"refundProcessed":False}
+
+
 def _set_workshop_grant(
     installation_id: uuid.UUID,
     edition: str,
@@ -776,7 +871,7 @@ def _set_workshop_grant(
         if str(pending["status"]) in ("ASSIGNED", "PROVISIONED"):
             raise HTTPException(409,
                 "Komputer ma już przypisaną licencję klienta. "
-                "Nie można równocześnie uruchomić trybu warsztatowego.")
+                "Nie można równocześnie uruchomić trybu serwisowego.")
         existing = con.execute(text("""
             SELECT edition,release_channel,enabled FROM guard.workshop_grants
             WHERE installation_id=:id FOR UPDATE
@@ -1444,6 +1539,13 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
             {"installation_id": pending["installation_id"]},
         )
 
+    if pending["status"] == "IGNORED":
+        return {
+            "assigned":False, "status":"NO_LICENSE",
+            "workshopLease":_signed_unlicensed_state(pending),
+            "serverTime":_iso(_utcnow()),
+        }
+
     reception_id = pending.get("assigned_reception_id")
     # Direct client licences have no reception_id. Use the stored KeyGate
     # licence identity, never a fabricated repair order.
@@ -1541,7 +1643,7 @@ def workshop_report(req: WorkshopReportRequest):
             WHERE installation_id=:id FOR UPDATE
         """), {"id":pending["installation_id"]}).scalar_one_or_none()
         if enabled is not True:
-            raise HTTPException(403, "Tryb warsztatowy nie jest aktywny.")
+            raise HTTPException(403, "Tryb serwisowy nie jest aktywny.")
         con.execute(text("""
             INSERT INTO guard.workshop_reports(installation_id,summary,reported_at)
             VALUES (:id,CAST(:data AS jsonb),now())
@@ -2154,7 +2256,7 @@ def panel_update_workshop(
         installation_id, edition, release_channel, action == "enable",
     )
     return HTMLResponse(_panel_html(
-        '<section class="card"><h1>Tryb warsztatowy zapisany</h1>'
+        '<section class="card"><h1>Tryb serwisowy zapisany</h1>'
         '<p>Komputer pobierze zmienione uprawnienia po kolejnym kontakcie '
         'z Multi-Servis. Nie uruchomiono żadnej licencji czasowej.</p>'
         f'<p>Stan: {"WŁĄCZONY" if result["enabled"] else "ZAKOŃCZONY"} '
@@ -2162,6 +2264,36 @@ def panel_update_workshop(
         f'<a class="button-link" href="/multiguard/panel/pending/{installation_id}">'
         'WRÓĆ DO KOMPUTERA</a></section>'
     ), headers={"Cache-Control":"private, no-store"})
+
+
+@router.post("/multiguard/installations/{installation_id}/no-license")
+def owner_no_license_api(
+    installation_id: uuid.UUID,
+    user: CurrentUser = Depends(require_owner),
+):
+    """OWNER only. Does not refund or delete customer data."""
+    return _set_owner_no_license(installation_id, reason="Zmiana właściciela przez API")
+
+
+@router.post("/multiguard/panel/pending/{installation_id}/no-license")
+def owner_no_license_web(
+    installation_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    reason: str = Form(""),
+    confirmed: str = Form(""),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowy formularz.")
+    if confirmed != "yes":
+        raise HTTPException(400, "Potwierdź cofnięcie uprawnień.")
+    _set_owner_no_license(installation_id, reason)
+    return RedirectResponse(
+        f"/multiguard/panel/pending/{installation_id}#owner-license-controls",
+        status_code=303, headers={"Cache-Control":"private, no-store"},
+    )
 
 
 @router.get(
@@ -2186,6 +2318,7 @@ def multiguard_panel_pending(
     alias = owner_friendly_name(iid)
     alias_form = owner_name_form(iid, alias, return_to="pending")
     grant = _workshop_grant(iid)
+    current_link = _link_by_installation(iid)
     direct = None
     if pending.get("assigned_license_id"):
         with engine.connect() as direct_con:
@@ -2214,7 +2347,7 @@ def multiguard_panel_pending(
             if direct["lifecycle"] in {"UNASSIGNED","SERVICE_TEST"} else
             '<p class="muted">Przekazanie zarejestrowane; komputer pobierze status po synchronizacji.</p>'
         )
-    elif pending["status"] == "WAITING":
+    elif pending["status"] in {"WAITING", "IGNORED"}:
         direct_info = '<p>Sprzedaż bez przyjęcia sprzętu do warsztatu i bez numeru zlecenia.</p>'
         direct_buttons = f"""
             <form method="post" action="/multiguard/panel/pending/{installation_id}/direct">
@@ -2245,12 +2378,12 @@ def multiguard_panel_pending(
         """), {"id":iid}).mappings().first()
     if grant and grant["enabled"]:
         workshop_state_html = (
-            '<p class="ok">TRYB WARSZTATOWY AKTYWNY — '
+            '<p class="ok">TRYB SERWISOWY AKTYWNY — '
             + _panel_escape(grant["edition"]) + ' / '
             + _panel_escape(grant["release_channel"]) + '</p>'
         )
     else:
-        workshop_state_html = '<p>Tryb warsztatowy nie jest aktywny.</p>'
+        workshop_state_html = '<p>Tryb serwisowy nie jest aktywny.</p>'
     report_html = (
         '<div class="detail-facts">'
         + "".join(
@@ -2285,6 +2418,23 @@ def multiguard_panel_pending(
             • host: {_panel_escape(public['hostname'] or '—')}
           </p>
           {alias_form}
+          <section class="card" id="owner-license-controls">
+            <div class="eyebrow">UPRAWNIENIA / TYLKO WŁAŚCICIEL</div>
+            <h2>Licencja i tryb pracy</h2>
+            <p>Stan: <strong>{'BRAK LICENCJI' if pending['status']=='IGNORED' else ('SERWISOWY' if grant and grant['enabled'] else _panel_escape((current_link or dict()).get('lifecycle','BRAK LICENCJI')))}</strong></p>
+            <p>Wyłączenie nie usuwa Multi-Guard, identyfikatora instalacji ani historii.
+            Program zablokuje funkcje po synchronizacji z serwerem.
+            Zwrot niewykorzystanej opłaty ustalasz i wykonujesz oddzielnie.</p>
+            <form method="post" action="/multiguard/panel/pending/{installation_id}/no-license">
+              <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+              <label>Powód (wpis wewnętrzny / historia)
+                <input name="reason" maxlength="500" placeholder="np. rezygnacja klienta, zwrot uzgodniony telefonicznie"></label>
+              <label><input type="checkbox" name="confirmed" value="yes" required>
+                Potwierdzam wyłączenie uprawnień tego komputera</label>
+              <button type="submit">BRAK LICENCJI — WYŁĄCZ</button>
+            </form>
+            {('<a class="button-link" href="/multiguard/panel/license/' + str(current_link['reception_id']) + '/extend">PRZEDŁUŻ +3 / +6 / +12 MIESIĘCY</a>') if current_link and current_link.get('reception_id') and current_link['lifecycle']=='ACTIVE' else ''}
+          </section>
           <section class="card" id="client-license">
             <div class="eyebrow">LICENCJA KOMERCYJNA</div>
             <h2>Licencja klienta bez zlecenia</h2>
@@ -2295,7 +2445,7 @@ def multiguard_panel_pending(
             {workshop_state_html}
             {report_html}
             <div class="eyebrow">BEZ LICENCJI CZASOWEJ</div>
-            <h2>Tryb warsztatowy</h2>
+            <h2>Tryb serwisowy</h2>
             <p>Może działać na komputerze warsztatowym albo u klienta.
                Nie wymaga zlecenia i nie nalicza 3/6/12 miesięcy.
                Dostęp wymaga odnawiania potwierdzenia przez serwer.</p>
@@ -2311,9 +2461,9 @@ def multiguard_panel_pending(
               </select></label>
               <label>Akcja <select name="action">
                 <option value="enable">Włącz / zmień edycję</option>
-                <option value="disable">Zakończ tryb warsztatowy</option>
+                <option value="disable">Zakończ tryb serwisowy</option>
               </select></label>
-              <button type="submit">ZAPISZ TRYB WARSZTATOWY</button>
+              <button type="submit">ZAPISZ TRYB SERWISOWY</button>
             </form>
           </section>
           <section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>
