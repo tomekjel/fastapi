@@ -408,6 +408,21 @@ table th,table td {padding:8px 11px}
 .finance-disclosure[open]>summary {border-bottom:1px solid var(--line)}
 .finance-disclosure>.metrics,.finance-disclosure>p {margin:15px 20px}
 .finance-disclosure-hint {font-size:13px;color:var(--subtle)}
+/* The entire monetary report is closed by default; only handover count stays visible. */
+.statistics-finance-disclosure {padding:0}
+.statistics-finance-disclosure>summary {cursor:pointer;display:flex;align-items:center;
+  justify-content:space-between;gap:14px;min-height:62px;padding:17px 21px;
+  font-size:18px;color:var(--text);list-style:none}
+.statistics-finance-disclosure>summary::-webkit-details-marker {display:none}
+.statistics-finance-disclosure>summary:focus-visible {outline:2px solid var(--focus);outline-offset:-3px}
+.statistics-finance-disclosure[open]>summary {border-bottom:1px solid var(--line)}
+.statistics-finance-disclosure .statistics-finance-hint {font-size:13px;color:var(--subtle)}
+.statistics-finance-content {padding:17px 21px 22px}
+.statistics-finance-content>p {margin:0 0 12px;font-size:14px}
+.statistics-finance-content .statistics-trend {margin-top:24px;margin-bottom:21px}
+.statistics-finance-content .statistics-table-disclosure {border:1px solid var(--line);
+  border-radius:10px;background:rgba(4,13,24,.2);margin-bottom:15px}
+.statistics-finance-content .statistics-footnote {margin:15px 0 0}
 .statistics-hero {display:block}
 .statistics-filter-tabs {margin:11px 0 0}
 .statistics-period-controls {display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin:10px 0 0}
@@ -447,6 +462,8 @@ table th,table td {padding:8px 11px}
   .finance-trend-row {grid-template-columns:55px minmax(0,1fr) 92px;gap:8px}
   .finance-trend-row b {font-size:12px}
   .finance-disclosure>summary {align-items:start;flex-direction:column;gap:3px}
+  .statistics-finance-disclosure>summary {align-items:start;flex-direction:column;gap:3px}
+  .statistics-finance-content {padding:15px}
 }
 
 """

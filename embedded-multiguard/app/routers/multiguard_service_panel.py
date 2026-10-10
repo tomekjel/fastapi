@@ -348,7 +348,9 @@ def _statistics_range(period: str, month: str, year: int, quarter: int,
         first = month_date
         last = date(first.year + (first.month == 12), first.month % 12 + 1, 1)
         label = first.strftime("%m.%Y")
-        grouping = "week"
+        # Monthly reports use the actual Warsaw handover day, not ISO
+        # week starts (e.g. October's first week starts on 28 September).
+        grouping = "day"
     elif period in ("quarter", "year"):
         y = year or now.year
         if not 2000 <= y <= 2100:
@@ -384,7 +386,8 @@ def _statistics_range(period: str, month: str, year: int, quarter: int,
             raise HTTPException(400, "Nieprawidłowy okres (maksymalnie 5 lat).")
         last = last_inclusive + timedelta(days=1)
         label = f"{first:%d.%m.%Y} – {last_inclusive:%d.%m.%Y}"
-        grouping = "month" if (last-first).days > 90 else "week"
+        duration_days = (last-first).days
+        grouping = "month" if duration_days > 90 else ("week" if duration_days > 62 else "day")
     else:
         raise HTTPException(400, "Nieprawidłowy okres statystyk.")
     return (
@@ -392,6 +395,31 @@ def _statistics_range(period: str, month: str, year: int, quarter: int,
         datetime.combine(last, datetime.min.time(), tzinfo=_WARSAW),
         label, grouping
     )
+
+
+def _statistics_bucket_label(
+    bucket: datetime, start: datetime, end: datetime,
+    grouping: str, *, compact: bool = False,
+) -> str:
+    """Only display dates inside the OWNER-selected Warsaw reporting range.
+
+    PostgreSQL's date_trunc('week') returns Monday even when it belongs to
+    a previous month. The underlying SQL already filters issued orders by
+    completed_at; the label must not imply that September was counted in an
+    October report.
+    """
+    if grouping == "month":
+        return bucket.strftime("%m.%Y")
+    if grouping == "day":
+        return bucket.strftime("%d.%m" if compact else "%d.%m.%Y")
+    first = max(bucket.date(), start.date())
+    last = min(bucket.date() + timedelta(days=6), end.date() - timedelta(days=1))
+    fmt = "%d.%m" if compact else "%d.%m.%Y"
+    if last <= first:
+        return first.strftime(fmt)
+    if first.month == last.month and first.year == last.year:
+        return first.strftime("%d") + "–" + last.strftime(fmt)
+    return first.strftime("%d.%m") + "–" + last.strftime(fmt)
 
 
 @router.get("/multiguard/panel/statistics", response_class=HTMLResponse)
@@ -439,18 +467,23 @@ def service_statistics(
             GROUP BY bucket ORDER BY bucket
         """), {**query_params, "grouping": grouping}).mappings().all()
 
-    summary_items = [
-        ("Wydane zlecenia", str(int(total["orders"] or 0)), "blue"),
+    # The number of issued orders is operational data and may be visible.
+    # All monetary data below lives inside a closed <details> element.
+    public_metrics = (
+        '<div class="metric accent-blue"><b>Wydane zlecenia</b>'
+        f'<strong>{int(total["orders"] or 0)}</strong></div>'
+    )
+    finance_items = [
         ("Przychód z usług", money(total["revenue"]), "green"),
         ("Koszt materiałów", money(total["material_cost"]), "red"),
         ("Materiał z dawcy", money(total["donor_material_value"]), "gold"),
         ("Zysk rzeczywisty", money(total["actual_profit"]), "blue"),
         ("Zysk ekonomiczny", money(total["economic_profit"]), "green"),
     ]
-    metrics = "".join(
+    finance_metrics = "".join(
         f'<div class="metric accent-{tone}"><b>{esc(label)}</b>'
-        f'<strong class="{"money" if i else ""}">{esc(value)}</strong></div>'
-        for i,(label,value,tone) in enumerate(summary_items)
+        f'<strong class="money">{esc(value)}</strong></div>'
+        for label,value,tone in finance_items
     )
     max_scale = max(
         [float(row["revenue"] or 0) for row in breakdown]
@@ -458,7 +491,7 @@ def service_statistics(
     )
     trend_rows = "".join(
         '<div class="finance-trend-row">'
-        f'<span>{esc(row["bucket"].strftime("%d.%m") if grouping=="week" else row["bucket"].strftime("%m.%Y"))}</span>'
+        f'<span>{esc(_statistics_bucket_label(row["bucket"], start, end, grouping, compact=True))}</span>'
         '<div class="finance-trend-bars">'
         f'<i class="finance-trend-revenue" style="width:{max(0, float(row["revenue"] or 0))*100/max_scale:.1f}%"></i>'
         f'<i class="finance-trend-cost" style="width:{max(0, float(row["material_cost"] or 0))*100/max_scale:.1f}%"></i>'
@@ -468,7 +501,7 @@ def service_statistics(
     ) or '<p class="muted">W tym okresie nie ma wydanych zleceń. Nie pokazujemy fikcyjnych danych.</p>'
     report_rows = "".join(
         '<tr>'
-        f'<td>{esc(row["bucket"].strftime("%d.%m.%Y") if grouping=="week" else row["bucket"].strftime("%m.%Y"))}</td>'
+        f'<td>{esc(_statistics_bucket_label(row["bucket"], start, end, grouping))}</td>'
         f'<td class="numbers">{int(row["orders"] or 0)}</td>'
         f'<td class="numbers">{money(row["revenue"])}</td>'
         f'<td class="numbers">{money(row["material_cost"])}</td>'
@@ -527,24 +560,37 @@ def service_statistics(
       </section>
       <section class="card">
         <div class="section-head"><div><h2>Podsumowanie okresu</h2>
-          <p>Osobno pokazujemy koszt zakupionych części i wartość materiału z dawcy.</p></div></div>
-        <div class="metrics statistics-metrics">{metrics}</div>
+          <p>Wydania sprzętu są widoczne bez odsłaniania kwot.</p></div></div>
+        <div class="metrics statistics-metrics">{public_metrics}</div>
       </section>
-      <section class="card statistics-trend">
-        <div class="section-head"><div><h2>Przychody i koszty w czasie</h2>
-          <p>Jasny pasek: przychód · czerwony: koszt zakupionych materiałów.</p></div></div>
-        {trend_rows}
-      </section>
-      <details class="card statistics-table-disclosure"><summary>Pełne zestawienie okresów ▾</summary>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Okres</th><th>Zlecenia</th><th>Przychód</th><th>Materiały</th>
-            <th>Dawca</th><th>Zysk rzeczywisty</th><th>Zysk ekonomiczny</th></tr></thead>
-          <tbody>{report_rows}</tbody>
-        </table></div>
+      <details class="card statistics-finance-disclosure" id="statistics-finances">
+        <summary>
+          <span>Finanse wybranego okresu</span>
+          <span class="statistics-finance-hint">Poufne dane właściciela · rozwiń ▾</span>
+        </summary>
+        <div class="statistics-finance-content">
+          <p>Przychody, koszty materiałów oraz zyski są księgowane w statystykach
+             wyłącznie w dniu faktycznego wydania sprzętu klientowi.</p>
+          <div class="metrics statistics-metrics">{finance_metrics}</div>
+          <section class="statistics-trend">
+            <div class="section-head"><div><h2>Przychody i koszty w czasie</h2>
+              <p>Jasny pasek: przychód · czerwony: koszt zakupionych materiałów.</p></div></div>
+            {trend_rows}
+          </section>
+          <details class="statistics-table-disclosure">
+            <summary>Pełne zestawienie okresów ▾</summary>
+            <div class="table-wrap"><table>
+              <thead><tr><th>Okres</th><th>Zlecenia</th><th>Przychód</th><th>Materiały</th>
+                <th>Dawca</th><th>Zysk rzeczywisty</th><th>Zysk ekonomiczny</th></tr></thead>
+              <tbody>{report_rows}</tbody>
+            </table></div>
+          </details>
+          <p class="statistics-footnote">W statystykach finansowych przychody i koszty
+          są przypisane do daty faktycznego wydania sprzętu (status Wydane).
+          To zestawienie operacyjne nie zastępuje ewidencji księgowej,
+          która może uwzględniać wcześniejszą datę poniesienia wydatku.</p>
+        </div>
       </details>
-      <p class="statistics-footnote">Przychody i koszty są przypisane do okresu wydania sprzętu,
-      tak jak w aktualnym raporcie Android. Ten raport nie zastępuje ewidencji księgowej.
-      Wydatek na część poniesiony wcześniej może wymagać oddzielnej analizy daty zakupu.</p>
     """)
 
 

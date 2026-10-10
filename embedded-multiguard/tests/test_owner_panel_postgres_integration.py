@@ -563,6 +563,57 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert contract["result"]=="PASS",contract
     assert contract["database_mutated"] is False
     assert contract["production_data_accessed"] is False
+    # Owner privacy and accounting-period regression: September must not
+    # appear in an October report merely because PostgreSQL weeks start on
+    # Monday 28 September. October sums must contain BOTH revenue and costs
+    # only for orders marked COMPLETED, using the handover timestamp.
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZoneInfo
+    _waw = _ZoneInfo("Europe/Warsaw")
+    fixture_rows = [
+        ("SEP", "2030-09-28T10:00:00+02:00", "COMPLETED", 940, 333),
+        ("OCT", "2030-10-01T11:00:00+02:00", "COMPLETED", 270, 70),
+        ("READY", "2030-10-02T09:00:00+02:00", "READY_FOR_PICKUP", 9999, 9999),
+        ("NOV", "2030-11-01T10:00:00+01:00", "COMPLETED", 500, 100),
+    ]
+    with engine.begin() as db:
+        for tag,issued_time,st,amount,cost in fixture_rows:
+            order_id = uuid.uuid4()
+            db.execute(text("""
+                INSERT INTO service.service_orders (
+                    id,device_id,reception_number,status,received_at,completed_at
+                ) VALUES (:id,:device_id,:number,:status,:received,:completed)
+            """), {
+                "id":order_id,"device_id":pc_a,
+                "number":"STAT-"+tag+"-"+str(order_id)[:8],"status":st,
+                "received":_dt(2030,9,15,tzinfo=_waw),
+                "completed":_dt.fromisoformat(issued_time) if st=="COMPLETED" else None,
+            })
+            db.execute(text("""
+                INSERT INTO service.owner_finances (
+                    service_order_id,service_amount,material_cost,donor_material_value
+                ) VALUES (:id,:revenue,:cost,0)
+            """),{"id":order_id,"revenue":amount,"cost":cost})
+    oct_html = get("/multiguard/panel/statistics?period=month&month=2030-10")
+    ensure(oct_html.status_code,200,"October 2030 month handover")
+    assert 'Finanse wybranego okresu' in oct_html.text
+    assert '<details class="card statistics-finance-disclosure"' in oct_html.text
+    assert '<details class="card statistics-finance-disclosure" open' not in oct_html.text
+    # The number of issued orders is visible while all financial figures
+    # belong to a closed element (not painted until OWNER expands it).
+    assert 'Wydane zlecenia</b><strong>1</strong>' in oct_html.text
+    money_section = oct_html.text.split('<details class="card statistics-finance-disclosure"',1)[1]
+    outside = oct_html.text.split('<details class="card statistics-finance-disclosure"',1)[0]
+    assert "270,00 zł" in money_section and "70,00 zł" in money_section
+    assert "270,00 zł" not in outside and "70,00 zł" not in outside
+    assert "940,00 zł" not in oct_html.text and "333,00 zł" not in oct_html.text
+    assert "9999,00 zł" not in oct_html.text and "500,00 zł" not in oct_html.text
+    assert "01.10.2030" in money_section
+    assert "28.09.2030" not in money_section
+    assert "28.09" not in money_section, "No September labels in October report"
+    print("PASS: month=October uses Warsaw handover day and excludes September/READY/November.")
+    print("PASS: OWNER's financial sums, costs and trend are collapsed by default.")
+
     print("PASS: read-only owner-panel schema and media-root preflight.")
     print("PASS: PostgreSQL + actual FastAPI owner routes, private media, device links,")
     print("      CSRF forms, configurable status, audited inactive diagnostic renewals.")
