@@ -1,0 +1,40 @@
+name: OWNER finance privacy and Warsaw issue date — isolated static checks
+on:
+  push:
+    branches: [feature/owner-stats-hidden-finances-issue-date-20261010]
+    paths:
+      - embedded-multiguard/app/routers/multiguard_service_panel.py
+      - embedded-multiguard/app/routers/multiguard_panel_theme.py
+      - embedded-multiguard/tests/test_owner_panel_postgres_integration.py
+      - .github/workflows/owner-stats-privacy-check.yml
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile production OWNER modules and PostgreSQL test
+        run: |
+          python3 -m py_compile \
+            embedded-multiguard/app/routers/multiguard_service_panel.py \
+            embedded-multiguard/app/routers/multiguard_panel_theme.py \
+            embedded-multiguard/tests/test_owner_panel_postgres_integration.py
+      - name: Verify OWNER confidentiality and handover date source
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('embedded-multiguard/app/routers/multiguard_service_panel.py').read_text()
+          t=Path('embedded-multiguard/tests/test_owner_panel_postgres_integration.py').read_text()
+          assert 'grouping = "day"' in p
+          assert '_statistics_bucket_label(' in p
+          assert '<details class="card statistics-finance-disclosure" id="statistics-finances">' in p
+          assert 'finance_metrics' in p
+          assert "WHERE s.status='COMPLETED'" in p
+          assert 'AND s.completed_at >= :start_at AND s.completed_at < :end_at' in p
+          assert "month=2030-10" in t and "940,00 zł" in t and "270,00 zł" in t
+          print('PASS: closed finance section, true issue date and a September/October fixture.')
+          PY
+      - name: Existing isolated owner security tests
+        run: python3 embedded-multiguard/tests/test_owner_panel_security.py
