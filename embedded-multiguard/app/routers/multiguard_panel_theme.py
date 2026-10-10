@@ -278,21 +278,49 @@ input[type=hidden] {display:none}
 .row-sub {display:block;margin-top:5px;font-size:13px}
 /* User-edited computer names stay readable even when the detected name is long. */
 .owner-machine-display {display:block;max-width:460px;white-space:normal;overflow-wrap:anywhere;line-height:1.45}
-/* Protect the OWNER from confusing licence assignment with removing a device. */
-.pending-primary-actions {min-width:205px}
-.pending-primary-actions>.button-link {display:inline-flex;align-items:center}
-.pending-extra-actions {width:max-content;max-width:100%;margin-top:16px}
-.pending-extra-actions>summary {display:inline-flex;align-items:center;gap:7px;
-  cursor:pointer;list-style:none;font-size:13px;color:var(--subtle);
-  border:1px solid var(--line);border-radius:8px;padding:7px 11px;
-  background:rgba(13,29,44,.76)}
-.pending-extra-actions>summary::-webkit-details-marker {display:none}
-.pending-extra-actions>summary:hover {color:var(--text);border-color:var(--line-light)}
-.pending-extra-actions>summary:focus-visible {outline:2px solid var(--focus);outline-offset:3px}
-.pending-extra-content {margin-top:13px;padding:14px 15px;border:1px solid rgba(237,64,86,.22);
-  border-radius:10px;background:rgba(53,22,34,.14);min-width:240px;max-width:320px}
-.pending-extra-content p {font-size:13px;line-height:1.5;margin:0 0 12px}
-.pending-extra-content .pending-archive-button {min-height:42px;font-size:13px;width:100%}
+/* OWNER pending queue: name wraps to two lines, all main actions fit side-by-side. */
+.pending-computers-table {min-width:1220px;table-layout:fixed}
+.pending-computers-table th,.pending-computers-table td {padding:13px 10px}
+.pending-computers-table td:first-child strong {white-space:nowrap}
+.pending-computers-table td:nth-child(5) {font-size:14px;white-space:nowrap}
+.pending-name-column {min-width:0}
+.pending-name-head {display:grid;grid-template-columns:minmax(0,1fr) 33px;
+  align-items:center;gap:8px;min-width:0}
+.pending-name-text {display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  max-width:none;max-height:2.9em;line-height:1.4;overflow:hidden;
+  white-space:normal;overflow-wrap:anywhere}
+.pending-edit-name {width:33px;min-height:33px;padding:0;flex:none;
+  border:1px solid rgba(136,184,213,.43);border-radius:8px;
+  background:rgba(33,69,96,.5);color:#bee2fc;font-size:18px}
+.pending-edit-name:hover {border-color:#81c6f3}
+.pending-primary-actions {min-width:375px}
+.pending-actions-row {display:flex;align-items:center;justify-content:flex-start;
+  gap:9px;white-space:nowrap}
+.pending-actions-row>.button-link.compact,.pending-archive-trigger {min-height:40px;
+  padding:9px 11px;font-size:13px;line-height:1.2;letter-spacing:0;white-space:nowrap}
+.pending-archive-trigger {border-color:rgba(237,64,86,.55);
+  background:linear-gradient(115deg,rgba(124,37,53,.58),rgba(82,29,42,.53))}
+.pending-edit-name:focus-visible,.pending-archive-trigger:focus-visible {
+  outline:2px solid var(--focus);outline-offset:3px}
+.pending-owner-dialog {box-sizing:border-box;width:min(500px,calc(100vw - 30px));
+  max-width:calc(100vw - 30px);max-height:85vh;overflow:auto;
+  padding:26px 28px;background:#102337;color:#e5edf5;
+  border:1px solid rgba(148,181,204,.52);border-radius:15px;
+  box-shadow:0 25px 70px rgba(0,0,0,.6)}
+.pending-owner-dialog::backdrop {background:rgba(2,8,16,.78);backdrop-filter:blur(3px)}
+.pending-owner-dialog h3 {font-size:23px;line-height:1.25;margin:0 0 13px;font-weight:500}
+.pending-owner-dialog p {font-size:14px;line-height:1.55;color:#bfcedc;margin:0 0 18px;
+  overflow-wrap:anywhere;white-space:normal}
+.pending-owner-dialog label {font-size:14px}
+.pending-owner-dialog .pending-name-reset-hint {margin:-5px 0 0;font-size:12px}
+.pending-dialog-buttons {display:flex;align-items:center;justify-content:flex-end;
+  gap:10px;flex-wrap:wrap;margin-top:18px}
+.pending-dialog-buttons form {display:block;margin:0}
+.pending-dialog-buttons button {min-height:41px;padding:10px 14px;font-size:13px}
+.pending-dialog-buttons .pending-cancel-button {
+  background:linear-gradient(115deg,#294255,#1b3046);border-color:rgba(171,193,210,.35)}
+.pending-dialog-buttons .pending-confirm-archive {background:linear-gradient(115deg,#9c3248,#692539);
+  border-color:rgba(237,64,86,.65)}
 .settings-hero {border-color:rgba(133,174,199,.3)!important}
 footer {font-size:14px;color:#8fa3b5}
 @media(max-width:1190px) {

@@ -1480,36 +1480,79 @@ def multi_guard_panel_computers(
         iid = pending["installation_id"]
         detected_name = owner_detected_name(pending)
         display_name = owner_friendly_name(iid) or detected_name
-        status_label = "OCZEKUJE NA LICENCJĘ" if pending["status"]=="WAITING" else "PRZYPISANA — POBIERANIE"
-        archive_menu = ""
+        safe_name = _panel_h(display_name)
+        safe_id = str(iid)
+        short_id = "MG-" + safe_id.replace("-", "")[:8].upper()
+        status_label = "OCZEKUJE NA LICENCJĘ" if pending["status"] == "WAITING" else "PRZYPISANA — POBIERANIE"
+
+        # Keep only the first two visual lines in the grid; the full name
+        # remains available in the tooltip and in the owner's edit dialog.
+        name_editor = f"""
+            <div class="pending-name-cell">
+              <div class="pending-name-head">
+                <b class="owner-machine-display pending-name-text" title="{safe_name}">{safe_name}</b>
+                <button type="button" class="pending-edit-name"
+                  aria-label="Edytuj nazwę komputera {short_id}"
+                  title="Edytuj nazwę"
+                  onclick="document.getElementById('pending-name-dialog-{safe_id}').showModal()">✎</button>
+              </div>
+              <dialog id="pending-name-dialog-{safe_id}" class="pending-owner-dialog pending-name-dialog"
+                aria-labelledby="pending-name-heading-{safe_id}">
+                <form method="post" action="/multiguard/panel/installation/{safe_id}/name">
+                  <h3 id="pending-name-heading-{safe_id}">Edytuj nazwę komputera</h3>
+                  <p>Zmienia się tylko nazwa widoczna w panelu. Dane sprzętowe pozostają bez zmian.</p>
+                  <input type="hidden" name="csrf_token" value="{archive_csrf}">
+                  <input type="hidden" name="return_to" value="computers">
+                  <label for="pending-friendly-name-{safe_id}">Nazwa komputera (maks. 420 znaków)
+                    <input id="pending-friendly-name-{safe_id}" name="friendly_name"
+                      maxlength="420" value="{safe_name}" autocomplete="off">
+                  </label>
+                  <p class="pending-name-reset-hint">Puste pole przywraca nazwę automatyczną.</p>
+                  <div class="pending-dialog-buttons">
+                    <button type="button" class="pending-cancel-button"
+                      onclick="this.closest('dialog').close()">ANULUJ</button>
+                    <button type="submit">ZAPISZ NAZWĘ</button>
+                  </div>
+                </form>
+              </dialog>
+            </div>"""
+
+        # The OWNER explicitly asked for two visible SIDE-BY-SIDE actions.
+        # Archive remains a guarded soft delete, now with a distinct second
+        # step in an accessible confirmation dialog, not an immediate POST.
+        archive_action = ""
         if pending["status"] == "WAITING":
-            # A destructive-looking action must never sit next to the primary
-            # licence button. Reveal it only through a separate options menu,
-            # then require another explicit confirmation before the POST.
-            archive_menu = (
-                '<details class="pending-extra-actions">'
-                '<summary aria-label="Dodatkowe działania dla '
-                + _panel_h(display_name) + '">⋯ WIĘCEJ</summary>'
-                '<div class="pending-extra-content">'
-                '<p>Usuń komputer z oczekujących bez kasowania historii.</p>'
-                '<form method="post" action="/multiguard/panel/computers/pending/'
-                + str(iid) + '/archive" '
-                + 'onsubmit="return confirm(&quot;Na pewno usunąć ten komputer '
-                  'z listy oczekujących? Historia zostanie zachowana.&quot;);">'
-                + '<input type="hidden" name="csrf_token" value="' + archive_csrf + '">'
-                + '<button type="submit" class="pending-archive-button">'
-                  'USUŃ Z OCZEKUJĄCYCH</button></form></div></details>'
-            )
+            archive_action = f"""
+              <button type="button" class="pending-archive-trigger"
+                onclick="document.getElementById('pending-archive-dialog-{safe_id}').showModal()">
+                USUŃ Z OCZEKUJĄCYCH
+              </button>
+              <dialog id="pending-archive-dialog-{safe_id}" class="pending-owner-dialog pending-archive-dialog"
+                aria-labelledby="pending-archive-heading-{safe_id}">
+                <h3 id="pending-archive-heading-{safe_id}">Czy jesteś pewien?</h3>
+                <p>Usunąć komputer <strong>{safe_name}</strong> z oczekujących?
+                  Historia zostanie zachowana. Nie oznacza to odinstalowania programu.</p>
+                <div class="pending-dialog-buttons">
+                  <button type="button" class="pending-cancel-button"
+                    onclick="this.closest('dialog').close()">ANULUJ</button>
+                  <form method="post" action="/multiguard/panel/computers/pending/{safe_id}/archive">
+                    <input type="hidden" name="csrf_token" value="{archive_csrf}">
+                    <button type="submit" class="pending-confirm-archive">TAK, USUŃ Z LISTY</button>
+                  </form>
+                </div>
+              </dialog>"""
         pending_trs.append(f"""
-            <tr><td><strong>{_panel_h('MG-'+str(iid).replace('-','')[:8].upper())}</strong></td>
-                <td><b class="owner-machine-display">{_panel_h(display_name)}</b></td>
+            <tr><td><strong>{short_id}</strong></td>
+                <td class="pending-name-column">{name_editor}</td>
                 <td>{_panel_h(pending["app_version"] or "—")}</td>
                 <td><span class="badge {'mg-gold' if pending["status"]=='WAITING' else 'mg-blue'}">{status_label}</span></td>
                 <td>{_panel_dt(pending["last_seen_at"])}</td>
                 <td class="pending-primary-actions">
-                  <a class="button-link compact" href="/multiguard/panel/pending/{iid}">
-                    {'PRZYPISZ LICENCJĘ' if pending["status"]=='WAITING' else 'SZCZEGÓŁY'}</a>
-                  {archive_menu}
+                  <div class="pending-actions-row">
+                    <a class="button-link compact" href="/multiguard/panel/pending/{iid}">
+                      {'PRZYPISZ LICENCJĘ' if pending["status"]=='WAITING' else 'SZCZEGÓŁY'}</a>
+                    {archive_action}
+                  </div>
                 </td>
             </tr>
         """)
@@ -1522,8 +1565,11 @@ def multi_guard_panel_computers(
             Jeśli instalacja jest już usunięta albo nie będzie kupowana,
             właściciel może usunąć ją z tej listy bez kasowania historii.
             Brak kontaktu sam w sobie nie oznacza odinstalowania.</p></div></div>
-          <div class="table-wrap"><table><thead><tr><th>ID</th><th>Komputer</th><th>Wersja</th>
-            <th>Stan</th><th>Ostatni kontakt</th><th>Akcja</th></tr></thead>
+          <div class="table-wrap"><table class="pending-computers-table"><colgroup>
+              <col style="width:11%"><col style="width:24%"><col style="width:7%">
+              <col style="width:15%"><col style="width:12%"><col style="width:31%">
+            </colgroup><thead><tr><th>ID</th><th>Komputer</th><th>Wersja</th>
+            <th>Stan</th><th>Ostatni kontakt</th><th>Akcje</th></tr></thead>
             <tbody>{''.join(pending_trs) or '<tr><td colspan="6" class="muted">Brak oczekujących instalacji.</td></tr>'}</tbody>
           </table></div>
         </section>
