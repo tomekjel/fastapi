@@ -788,7 +788,7 @@ def _signed_workshop_grant(pending: dict[str, Any],
         "deviceId": str(pending["device_id"]),
         "planCode": plan,
         "releaseChannel": grant["release_channel"],
-        "lifecycle": "WORKSHOP",
+        "lifecycle": "WORKSHOP" if grant["enabled"] else "UNKNOWN",
         "validFrom": None,
         "validUntil": None,
         "acceptedAt": None,
@@ -827,7 +827,8 @@ def _set_workshop_grant(
                 "Komputer ma już przypisaną licencję klienta. "
                 "Nie można równocześnie uruchomić trybu warsztatowego.")
         existing = con.execute(text("""
-            SELECT edition,release_channel,enabled FROM guard.workshop_grants
+            SELECT edition,release_channel,enabled,monitoring_profile
+            FROM guard.workshop_grants
             WHERE installation_id=:id FOR UPDATE
         """), {"id": installation_id}).mappings().first()
         previous = dict(existing) if existing else None
@@ -840,6 +841,7 @@ def _set_workshop_grant(
               SET edition=EXCLUDED.edition,
                   release_channel=EXCLUDED.release_channel,
                   enabled=EXCLUDED.enabled,
+                  monitoring_profile='OFF',
                   updated_at=now()
         """), {"id":installation_id,"edition":edition,"channel":channel,"enabled":enabled})
         if previous != current:
@@ -1598,12 +1600,18 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
         raise HTTPException(409, "Nie znaleziono powiązanej licencji klienta.")
     if not reception_id or pending["status"] == "WAITING":
         grant = _workshop_grant(pending["installation_id"])
-        if grant and grant["enabled"]:
+        if grant is not None:
+            # Even revocation is a signed UNKNOWN envelope. The Windows app
+            # must never infer revocation from lost Internet or missing JSON.
             return {
                 "assigned": False,
-                "status": "WORKSHOP",
-                "releaseChannel": grant["release_channel"],
+                "status": "WORKSHOP" if grant["enabled"] else "WAITING",
+                "releaseChannel": grant["release_channel"] if grant["enabled"] else None,
                 "workshopLease": _signed_workshop_grant(pending, grant),
+                "workshopMonitoring": {
+                    "enabled": grant["enabled"] and grant.get("monitoring_profile","OFF") != "OFF",
+                    "profile": grant.get("monitoring_profile") if grant["enabled"] else "OFF",
+                },
                 "serverTime": _iso(_utcnow()),
             }
         return {
