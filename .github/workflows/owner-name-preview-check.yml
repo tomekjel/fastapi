@@ -1,0 +1,29 @@
+name: OWNER editable computer name — isolated pre-merge check
+
+on:
+  push:
+    branches: [feature/owner-edit-detected-machine-name-20261010]
+    paths:
+      - embedded-multiguard/app/routers/multiguard_panel_devices.py
+      - embedded-multiguard/app/routers/multiguard_runtime.py
+      - embedded-multiguard/app/routers/multiguard_license.py
+      - embedded-multiguard/app/routers/multiguard_panel_theme.py
+      - embedded-multiguard/tests/test_owner_editable_machine_name.py
+      - .github/workflows/owner-name-preview-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  owner-name-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile actual OWNER backend modules without importing production
+        run: |
+          set -e
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_panel_devices.py embedded-multiguard/app/routers/multiguard_runtime.py embedded-multiguard/app/routers/multiguard_license.py
+      - name: Run focused user-display-name regression
+        run: python3 embedded-multiguard/tests/test_owner_editable_machine_name.py
+      - name: Existing OWNER security regression
+        run: python3 embedded-multiguard/tests/test_owner_panel_security.py
