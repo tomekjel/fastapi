@@ -23,6 +23,8 @@ jobs:
           expected=[
             '/multiguard/panel/dashboard',
             '/multiguard/panel/computers',
+            '/multiguard/panel/computers/pending/{installation_id}/archive',
+            '/v1/multi-guard/discovery/uninstall',
             '/multiguard/panel/service',
             '/multiguard/panel/statistics',
             '/multiguard/panel/service/{order_id}',
