@@ -776,8 +776,9 @@ def _signed_workshop_grant(pending: dict[str, Any],
                            grant: dict[str, Any]) -> dict[str, str]:
     """Ephemeral, installation-bound entitlement; never touches KeyGate.
 
-    Workshop permission is open-ended on the server, but each client lease
-    is only trusted for a short offline grace period and must be refreshed.
+    Workshop permission is unlimited while offline. The client must adopt a
+    separately signed UNKNOWN payload after a successful server revocation
+    check; loss of Internet is never treated as a revocation.
     """
     plan = ("multi_guard_pro" if grant["edition"] == "PRO" else "multi_guard")
     payload = json.dumps({
@@ -973,6 +974,15 @@ def _assign_pending_to_reception(
                 "installation_id": installation_id,
             },
         )
+
+    # A paid service-order licence must always supersede temporary service
+    # rights; no second entitlement can remain enabled on this installation.
+    with engine.begin() as connection:
+        connection.execute(text("""
+            UPDATE guard.workshop_grants
+               SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
+             WHERE installation_id=:iid AND enabled=TRUE
+        """),{"iid":installation_id})
 
     return link
 
@@ -1224,6 +1234,22 @@ def _panel_html(body: str) -> str:
       dialog.close();
       form.requestSubmit();
     }});
+  }}
+
+  // The profile selector only becomes active after explicit opt-in.
+  // OFF is the default even if the owner leaves all fields untouched.
+  for (const form of document.querySelectorAll('form[data-owner-monitor-form]')) {{
+    const toggle=form.querySelector('[data-owner-monitor-toggle]');
+    const profile=form.querySelector('[data-owner-monitor-profile]');
+    if (!toggle || !profile) continue;
+    const update=()=>{{
+      profile.disabled=!toggle.checked;
+      if(toggle.checked && !['STANDARD','OBSERVATION','INTENSIVE'].includes(profile.value)){{
+        profile.value='STANDARD';
+      }}
+    }};
+    toggle.addEventListener('change',update);
+    update();
   }}
 
   // OWNER-only live suggestions (3 digits): no orders are revealed on the
@@ -2768,12 +2794,10 @@ def owner_workshop_reports(
         """),{"id":installation_id}).mappings().all()
     trs=[]
     for row in logs:
-        summary=row["summary"] or {}
+        summary=row["summary"] if isinstance(row["summary"],dict) else {}
         sample_list=summary.get("samples",[])
         if not isinstance(sample_list,list):
             sample_list=[]
-        if not isinstance(summary,dict):
-            summary={}
         cpu_values=[v["cpuLoadPercent"] for v in sample_list
                     if isinstance(v,dict) and isinstance(v.get("cpuLoadPercent"),(float,int))]
         avg_cpu=f"{sum(cpu_values)/len(cpu_values):.1f}%" if cpu_values else "—"
