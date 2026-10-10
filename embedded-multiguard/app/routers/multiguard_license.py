@@ -2318,6 +2318,25 @@ def _workshop_csrf() -> str:
     return _csrf_token(int(time.time() // 3600))
 
 
+def _owner_confirm_service_dialog(dialog_id: str) -> str:
+    """A separate explicit second click before service rights are issued."""
+    safe = _panel_escape(dialog_id)
+    return f"""
+        <dialog class="pending-owner-dialog owner-service-confirm-dialog" id="{safe}">
+          <h3>Czy na pewno włączyć tryb serwisowy?</h3>
+          <p>To <strong>nie jest licencja czasowa</strong>.
+             Program będzie działał bezterminowo także bez Internetu,
+             a tryb można wyłączyć wyłącznie z centralnego panelu właściciela.
+             Monitorowanie rozszerzone pozostanie domyślnie wyłączone.</p>
+          <div class="pending-dialog-buttons">
+            <button type="button" class="pending-cancel-button"
+              onclick="this.closest('dialog').close()">ANULUJ</button>
+            <button type="button" class="pending-confirm-archive"
+              data-service-approve>TAK, WŁĄCZ TRYB SERWISOWY</button>
+          </div>
+        </dialog>"""
+
+
 @router.post("/multiguard/panel/pending/{installation_id}/workshop",
              response_class=HTMLResponse)
 def panel_update_workshop(
@@ -2406,50 +2425,39 @@ def multiguard_panel_pending(
     elif pending["status"] == "WAITING":
         direct_info = '<p>Sprzedaż bez przyjęcia sprzętu do warsztatu i bez numeru zlecenia.</p>'
         direct_buttons = f"""
-            <form method="post" action="/multiguard/panel/pending/{installation_id}/direct">
+            <form method="post" action="/multiguard/panel/pending/{installation_id}/direct"
+              data-owner-service-form>
               <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+              <input type="hidden" name="service_confirm" value="">
               <label>Edycja<select name="edition">
                 <option value="STANDARD">Standard</option>
                 <option value="PRO">Pro</option>
               </select></label>
-              <label>Okres<select name="months">
+              <label>Okres / tryb<select name="months">
                 <option value="3">3 miesiące</option>
                 <option value="6">6 miesięcy</option>
                 <option value="12" selected>12 miesięcy</option>
+                <option value="SERVICE">🔧 Tryb serwisowy (bezterminowy)</option>
               </select></label>
               <label>Kanał<select name="release_channel">
                 <option value="STABLE">Stabilna</option>
                 <option value="PILOT">Beta</option>
               </select></label>
-              <button type="submit">PRZYPISZ LICENCJĘ KLIENTA</button>
+              <button type="submit" data-owner-service-submit>PRZYPISZ LICENCJĘ KLIENTA</button>
+              {_owner_confirm_service_dialog(f"confirm-direct-{installation_id}")}
             </form>
         """
     else:
         direct_info = '<p>Ta instalacja ma już powiązanie ze zleceniem serwisowym.</p>'
         direct_buttons = ''
-    with engine.connect() as report_db:
-        workshop_report_row = report_db.execute(text("""
-            SELECT summary,reported_at FROM guard.workshop_reports
-            WHERE installation_id=:id
-        """), {"id":iid}).mappings().first()
-    if grant and grant["enabled"]:
-        workshop_state_html = (
-            '<p class="ok">TRYB WARSZTATOWY AKTYWNY — '
-            + _panel_escape(grant["edition"]) + ' / '
-            + _panel_escape(grant["release_channel"]) + '</p>'
-        )
-    else:
-        workshop_state_html = '<p>Tryb warsztatowy nie jest aktywny.</p>'
-    report_html = (
-        '<div class="detail-facts">'
-        + "".join(
-            '<div class="detail-fact"><b>'+_panel_escape(key)+'</b><span>'
-            +_panel_escape(value)+'</span></div>'
-            for key,value in (workshop_report_row["summary"] or {}).items()
-        ) + '</div>'
-        + '<p class="muted">Ostatni raport: '
-        + _panel_escape(workshop_report_row["reported_at"]) + '</p>'
-        if workshop_report_row else '<p class="muted">Komputer nie wysłał jeszcze raportu warsztatowego.</p>'
+    workshop_state_html = (
+        '<p class="ok">🔧 TRYB SERWISOWY — AKTYWNY · '
+        + _panel_escape(grant["edition"])
+        + '. Monitorowanie rozszerzone: '
+        + _panel_escape(grant.get("monitoring_profile") or "OFF")
+        + '. Zmiany i wyłączenie wyłącznie w '
+        + '<a href="/multiguard/panel#service-modes">panelu właściciela</a>.</p>'
+        if grant and grant["enabled"] else ""
     )
     return _panel_html(
         f"""
@@ -2466,41 +2474,23 @@ def multiguard_panel_pending(
             • host: {_panel_escape(public['hostname'] or '—')}
           </p>
           {name_form}
+          {workshop_state_html}
           <section class="card" id="client-license">
             <div class="eyebrow">LICENCJA KOMERCYJNA</div>
             <h2>Licencja klienta bez zlecenia</h2>
             {direct_info}
             {direct_buttons}
           </section>
-          <section class="card" id="workshop-mode">
-            {workshop_state_html}
-            {report_html}
-            <div class="eyebrow">BEZ LICENCJI CZASOWEJ</div>
-            <h2>Tryb warsztatowy</h2>
-            <p>Może działać na komputerze warsztatowym albo u klienta.
-               Nie wymaga zlecenia i nie nalicza 3/6/12 miesięcy.
-               Dostęp wymaga odnawiania potwierdzenia przez serwer.</p>
-            <form method="post" action="/multiguard/panel/pending/{installation_id}/workshop">
-              <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
-              <label>Edycja <select name="edition">
-                <option value="STANDARD">Standard</option>
-                <option value="PRO">Pro</option>
-              </select></label>
-              <label>Kanał <select name="release_channel">
-                <option value="STABLE">Stabilna</option>
-                <option value="PILOT">Beta</option>
-              </select></label>
-              <label>Akcja <select name="action">
-                <option value="enable">Włącz / zmień edycję</option>
-                <option value="disable">Zakończ tryb warsztatowy</option>
-              </select></label>
-              <button type="submit">ZAPISZ TRYB WARSZTATOWY</button>
-            </form>
-          </section>
           <section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>
-          <form method="post" action="/multiguard/panel/pending/{installation_id}/assign">
+          <form method="post" action="/multiguard/panel/pending/{installation_id}/assign"
+            data-owner-service-form>
+            <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+            <input type="hidden" name="service_confirm" value="">
             <label>Numer zlecenia Multi-Servis
-              <input name="reception_number" placeholder="np. MS-2026-00123" required>
+              <input name="reception_number" placeholder="np. MS-2026-00123"
+                list="owner-order-hints-{installation_id}" data-owner-order-suggest
+                autocomplete="off" required>
+              <datalist id="owner-order-hints-{installation_id}"></datalist>
             </label>
             <div class="grid">
               <label>Wersja
@@ -2509,11 +2499,12 @@ def multiguard_panel_pending(
                   <option value="PRO">Multi-Guard Pro</option>
                 </select>
               </label>
-              <label>Okres
+              <label>Okres / tryb
                 <select name="months">
                   <option value="3">3 miesiące</option>
                   <option value="6">6 miesięcy</option>
                   <option value="12" selected>12 miesięcy</option>
+                  <option value="SERVICE">🔧 Tryb serwisowy (bezterminowy)</option>
                 </select>
               </label>
               <label>Kanał
@@ -2523,7 +2514,8 @@ def multiguard_panel_pending(
                 </select>
               </label>
             </div>
-            <button type="submit">PRZYPISZ I PRZYGOTUJ LICENCJĘ</button>
+            <button type="submit" data-owner-service-submit>PRZYPISZ I PRZYGOTUJ LICENCJĘ</button>
+            {_owner_confirm_service_dialog(f"confirm-order-{installation_id}")}
           </form></section>
         </section>
         """
