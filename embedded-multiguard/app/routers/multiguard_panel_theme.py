@@ -276,6 +276,8 @@ input[type=hidden] {display:none}
   border-radius:9px;background:rgba(5,16,26,.6);color:#dceace;
   font:400 15px/1.5 Consolas,monospace;overflow-wrap:anywhere}
 .row-sub {display:block;margin-top:5px;font-size:13px}
+/* User-edited computer names stay readable even when the detected name is long. */
+.owner-machine-display {display:block;max-width:460px;white-space:normal;overflow-wrap:anywhere;line-height:1.45}
 .settings-hero {border-color:rgba(133,174,199,.3)!important}
 footer {font-size:14px;color:#8fa3b5}
 @media(max-width:1190px) {
