@@ -5,3 +5,5 @@ Confirm live release after owner console reported OWNER-WEB AGENT: DEPLOYED at 2
 Read-only verification after owner console confirmed OWNER-WEB AGENT: DEPLOYED seq=4 sha bee1dc9ccfc998dd26bce356aaac05b007f23b34, health check and unchanged Android/agent routes PASS. Re-run public GitHub smoke to confirm production owner HTTP routes stay protected. No production mutations.
 
 Postrelease OWNER uninstall/archive route verification — 2026-10-10 rev5
+
+OWNER release seq6 read-only route verification — rev6
