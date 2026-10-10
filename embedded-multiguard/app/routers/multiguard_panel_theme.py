@@ -278,6 +278,21 @@ input[type=hidden] {display:none}
 .row-sub {display:block;margin-top:5px;font-size:13px}
 /* User-edited computer names stay readable even when the detected name is long. */
 .owner-machine-display {display:block;max-width:460px;white-space:normal;overflow-wrap:anywhere;line-height:1.45}
+/* Protect the OWNER from confusing licence assignment with removing a device. */
+.pending-primary-actions {min-width:205px}
+.pending-primary-actions>.button-link {display:inline-flex;align-items:center}
+.pending-extra-actions {width:max-content;max-width:100%;margin-top:16px}
+.pending-extra-actions>summary {display:inline-flex;align-items:center;gap:7px;
+  cursor:pointer;list-style:none;font-size:13px;color:var(--subtle);
+  border:1px solid var(--line);border-radius:8px;padding:7px 11px;
+  background:rgba(13,29,44,.76)}
+.pending-extra-actions>summary::-webkit-details-marker {display:none}
+.pending-extra-actions>summary:hover {color:var(--text);border-color:var(--line-light)}
+.pending-extra-actions>summary:focus-visible {outline:2px solid var(--focus);outline-offset:3px}
+.pending-extra-content {margin-top:13px;padding:14px 15px;border:1px solid rgba(237,64,86,.22);
+  border-radius:10px;background:rgba(53,22,34,.14);min-width:240px;max-width:320px}
+.pending-extra-content p {font-size:13px;line-height:1.5;margin:0 0 12px}
+.pending-extra-content .pending-archive-button {min-height:42px;font-size:13px;width:100%}
 .settings-hero {border-color:rgba(133,174,199,.3)!important}
 footer {font-size:14px;color:#8fa3b5}
 @media(max-width:1190px) {
