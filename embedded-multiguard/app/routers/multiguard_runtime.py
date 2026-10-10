@@ -1481,14 +1481,24 @@ def multi_guard_panel_computers(
         detected_name = owner_detected_name(pending)
         display_name = owner_friendly_name(iid) or detected_name
         status_label = "OCZEKUJE NA LICENCJĘ" if pending["status"]=="WAITING" else "PRZYPISANA — POBIERANIE"
-        archive_form = ""
+        archive_menu = ""
         if pending["status"] == "WAITING":
-            archive_form = (
+            # A destructive-looking action must never sit next to the primary
+            # licence button. Reveal it only through a separate options menu,
+            # then require another explicit confirmation before the POST.
+            archive_menu = (
+                '<details class="pending-extra-actions">'
+                '<summary aria-label="Dodatkowe działania dla '
+                + _panel_h(display_name) + '">⋯ WIĘCEJ</summary>'
+                '<div class="pending-extra-content">'
+                '<p>Usuń komputer z oczekujących bez kasowania historii.</p>'
                 '<form method="post" action="/multiguard/panel/computers/pending/'
                 + str(iid) + '/archive" '
-                + 'onsubmit="return confirm(&quot;Usunąć tę instalację z oczekujących?&quot;);">'
+                + 'onsubmit="return confirm(&quot;Na pewno usunąć ten komputer '
+                  'z listy oczekujących? Historia zostanie zachowana.&quot;);">'
                 + '<input type="hidden" name="csrf_token" value="' + archive_csrf + '">'
-                + '<button type="submit">USUŃ Z OCZEKUJĄCYCH</button></form>'
+                + '<button type="submit" class="pending-archive-button">'
+                  'USUŃ Z OCZEKUJĄCYCH</button></form></div></details>'
             )
         pending_trs.append(f"""
             <tr><td><strong>{_panel_h('MG-'+str(iid).replace('-','')[:8].upper())}</strong></td>
@@ -1496,9 +1506,10 @@ def multi_guard_panel_computers(
                 <td>{_panel_h(pending["app_version"] or "—")}</td>
                 <td><span class="badge {'mg-gold' if pending["status"]=='WAITING' else 'mg-blue'}">{status_label}</span></td>
                 <td>{_panel_dt(pending["last_seen_at"])}</td>
-                <td><a class="button-link compact" href="/multiguard/panel/pending/{iid}">
-                  {'PRZYPISZ LICENCJĘ' if pending["status"]=='WAITING' else 'SZCZEGÓŁY'}</a>
-                  {archive_form}
+                <td class="pending-primary-actions">
+                  <a class="button-link compact" href="/multiguard/panel/pending/{iid}">
+                    {'PRZYPISZ LICENCJĘ' if pending["status"]=='WAITING' else 'SZCZEGÓŁY'}</a>
+                  {archive_menu}
                 </td>
             </tr>
         """)
