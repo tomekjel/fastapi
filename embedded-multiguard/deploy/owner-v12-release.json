@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 4,
-  "target_sha": "bee1dc9ccfc998dd26bce356aaac05b007f23b34",
-  "summary": "Licencjonowanie OWNER: warsztat, sprzedaż bez zlecenia, przedłużenia. Naprawa blokady AST w dwóch istniejących endpointach, pozostałe API bez zmian. Testy PostgreSQL/Chromium/AST PASS: 37999160774. Bez zmiany danych klienta ani wydania Windows."
+  "sequence": 5,
+  "target_sha": "b436e3df98ed2917805ae37bbdc6bdba593349ce",
+  "summary": "OWNER: ręczne usuwanie z oczekujących bez kasowania historii; archiwum i przywracanie po kontakcie; nowy uwierzytelniony raport odinstalowania także bez licencji. Regresja PostgreSQL/Chromium/security PASS 38036193325. Bez Windows/Android."
 }
