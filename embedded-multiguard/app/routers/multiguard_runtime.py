@@ -1349,6 +1349,65 @@ def multi_guard_panel_dashboard(
     """)
 
 
+@router.post("/panel/computers/pending/{installation_id}/archive")
+def owner_archive_pending_installation(
+    installation_id: uuid.UUID,
+    csrf_token: str = __import__("fastapi").Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """OWNER can clear the waiting list without claiming an uninstall happened.
+
+    Keep an audit trail and the stable installation ID. A live installation
+    that reconnects with its discovery secret automatically re-enters WAITING.
+    Never silently cancel a prepared/paid licence or a SERVICE grant.
+    """
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowy formularz.")
+    _ensure_schema()
+    with engine.begin() as connection:
+        row = connection.execute(text("""
+            SELECT status,assigned_license_id FROM guard.pending_installations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid":installation_id}).mappings().first()
+        if not row:
+            raise HTTPException(404, "Nie znaleziono instalacji.")
+        if row["status"] == "ARCHIVED":
+            return RedirectResponse("/multiguard/panel/computers#archive",
+                                    status_code=303)
+        if row["status"] not in {"WAITING","IGNORED"} or row["assigned_license_id"]:
+            raise HTTPException(409,
+                "Nie można ukryć instalacji z przygotowaną licencją. "
+                "Najpierw rozstrzygnij jej stan w panelu licencyjnym.")
+        grant = connection.execute(text("""
+            SELECT enabled FROM guard.workshop_grants
+            WHERE installation_id=:iid
+        """),{"iid":installation_id}).scalar_one_or_none()
+        if grant:
+            raise HTTPException(409,
+                "Instalacja ma aktywny tryb serwisowy. Wyłącz go przed archiwizacją.")
+        link = connection.execute(text("""
+            SELECT lifecycle FROM guard.license_links
+            WHERE installation_id=:iid LIMIT 1
+        """),{"iid":installation_id}).scalar_one_or_none()
+        if link and link != "REVOKED":
+            raise HTTPException(409,
+                "Komputer ma powiązaną licencję. Rozstrzygnij ją w panelu licencyjnym.")
+        connection.execute(text("""
+            INSERT INTO guard.pending_archive_events
+              (installation_id,previous_status,actor,reason)
+            VALUES (:iid,:old,'OWNER','Ręcznie usunięto z listy oczekujących')
+        """),{"iid":installation_id,"old":row["status"]})
+        connection.execute(text("""
+            UPDATE guard.pending_installations
+            SET status='ARCHIVED',updated_at=now()
+            WHERE installation_id=:iid
+        """),{"iid":installation_id})
+    return RedirectResponse("/multiguard/panel/computers#pending",
+                            status_code=303,headers={"Cache-Control":"private, no-store"})
+
+
 @router.get("/panel/computers", response_class=HTMLResponse)
 def multi_guard_panel_computers(
     presence: str = "all",
@@ -1410,6 +1469,9 @@ def multi_guard_panel_computers(
                      last_seen_at DESC
             LIMIT 40
         """)).mappings().all()
+    import time
+    from app.routers.multiguard_panel_settings import _csrf_token
+    archive_csrf = _csrf_token(int(time.time() // 3600))
     pending_trs = []
     for pending in pending_rows:
         iid = pending["installation_id"]
@@ -1424,7 +1486,15 @@ def multi_guard_panel_computers(
                 <td><span class="badge {'mg-gold' if pending["status"]=='WAITING' else 'mg-blue'}">{status_label}</span></td>
                 <td>{_panel_dt(pending["last_seen_at"])}</td>
                 <td><a class="button-link compact" href="/multiguard/panel/pending/{iid}">
-                  {'PRZYPISZ LICENCJĘ' if pending["status"]=='WAITING' else 'SZCZEGÓŁY'}</a></td>
+                  {'PRZYPISZ LICENCJĘ' if pending["status"]=='WAITING' else 'SZCZEGÓŁY'}</a>
+                  {(
+                    '<form method="post" action="/multiguard/panel/computers/pending/'+str(iid)+'/archive" '
+                    'onsubmit="return confirm(\'Ukryć instalację z oczekujących? Jeżeli program nadal działa, '
+                    'po następnym kontakcie ponownie pojawi się na liście.\');">'
+                    '<input type="hidden" name="csrf_token" value="'+archive_csrf+'">'
+                    '<button type="submit">USUŃ Z OCZEKUJĄCYCH</button></form>'
+                  ) if pending["status"]=="WAITING" else ""}
+                </td>
             </tr>
         """)
     pending_section = f"""
@@ -1432,7 +1502,10 @@ def multi_guard_panel_computers(
           <div class="section-head"><div><div class="eyebrow">NOWE INSTALACJE</div>
             <h2>Oczekujące komputery ({len(pending_rows)})</h2>
             <p>Tutaj pojawia się nowy Multi-Guard przed przypisaniem licencji.
-            Takie komputery nie są jeszcze w rejestrze aktywnej floty.</p></div></div>
+            Takie komputery nie są jeszcze w rejestrze aktywnej floty.
+            Jeśli instalacja jest już usunięta albo nie będzie kupowana,
+            właściciel może usunąć ją z tej listy bez kasowania historii.
+            Brak kontaktu sam w sobie nie oznacza odinstalowania.</p></div></div>
           <div class="table-wrap"><table><thead><tr><th>ID</th><th>Komputer</th><th>Wersja</th>
             <th>Stan</th><th>Ostatni kontakt</th><th>Akcja</th></tr></thead>
             <tbody>{''.join(pending_trs) or '<tr><td colspan="6" class="muted">Brak oczekujących instalacji.</td></tr>'}</tbody>
@@ -1440,6 +1513,40 @@ def multi_guard_panel_computers(
         </section>
     """
 
+    with engine.connect() as archive_con:
+        archived = archive_con.execute(text("""
+            SELECT installation_id,hostname,manufacturer,model,serial_number,
+                   status,last_seen_at,updated_at
+            FROM guard.pending_installations
+            WHERE status IN ('UNINSTALLED','ARCHIVED')
+            ORDER BY updated_at DESC LIMIT 30
+        """)).mappings().all()
+    archive_trs = []
+    for item in archived:
+        name = " ".join(str(v).strip() for v in
+                        (item["manufacturer"],item["model"]) if v
+                        ) or item["hostname"] or "Komputer"
+        archive_trs.append(
+            '<tr><td>'+_panel_h("MG-"+str(item["installation_id"]).replace("-","")[:8].upper())
+            +'</td><td>'+_panel_h(name)+'</td><td>'+_panel_h(
+                "ODINSTALOWANY" if item["status"]=="UNINSTALLED"
+                else "USUNIĘTY Z OCZEKUJĄCYCH"
+            )+'</td><td>'+_panel_dt(item["last_seen_at"])+'</td></tr>'
+        )
+    archive_section = f"""
+        <section class="card" id="archive">
+          <details>
+            <summary><strong>Historia odinstalowanych i ręcznie usuniętych instalacji</strong>
+              ({len(archived)} ostatnich pozycji)</summary>
+            <p>To archiwum nie jest kolejką licencji. Ponowna rejestracja
+            tego samego identyfikatora automatycznie przywróci oczekiwanie.</p>
+            <div class="table-wrap"><table><thead><tr>
+              <th>ID</th><th>Komputer</th><th>Stan</th><th>Ostatni kontakt</th>
+            </tr></thead><tbody>{''.join(archive_trs) or '<tr><td colspan="4">Brak historii.</td></tr>'}
+            </tbody></table></div>
+          </details>
+        </section>
+    """
     rows_html = []
     for row in devices:
         presence_style, presence_label = _presence_indicator(
@@ -1507,6 +1614,7 @@ def multi_guard_panel_computers(
           </div>
         </section>
         {pending_section}
+        {archive_section}
         <section class="card" id="devices">
           <div class="section-head">
             <div>
