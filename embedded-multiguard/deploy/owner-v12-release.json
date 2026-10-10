@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 9,
-  "target_sha": "6e10aac03927213d9121ac111745b6ae682b0c9d",
-  "summary": "OWNER web seq9: edytowalna nazwa komputera, osobne menu usuwania i domyslnie ukryte finanse. Kwoty wg dnia wydania. Odblokowanie po naprawie skryptu wdrozenia na PVE. PostgreSQL/Chromium/security PASS 38079270212."
+  "sequence": 10,
+  "target_sha": "757fc297bbcf149dedea339ff0c5f98b67f37034",
+  "summary": "OWNER WEB: lista oczekujacych: nazwa w dwoch liniach z edycja pod ikona olowka, dwa przyciski obok siebie, a usuwanie wymaga dodatkowego zatwierdzenia w oknie Czy jestes pewien?. Bez zmian Android/Windows. PostgreSQL, Chromium i testy bezpieczenstwa PASS 38080468121."
 }
