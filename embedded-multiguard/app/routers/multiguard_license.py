@@ -1079,17 +1079,29 @@ def _assign_direct_customer_license(
         """), {"id": installation_id}).mappings().first()
         if pending is None:
             raise HTTPException(404, "Komputer nie został zarejestrowany.")
-        if pending["status"] not in {"WAITING", "IGNORED"} or pending["assigned_license_id"]:
+        if pending["status"] not in {"WAITING", "IGNORED"}:
             raise HTTPException(409, "Komputer ma już przypisaną licencję.")
         existing = con.execute(text("""
-            SELECT id FROM guard.license_links
-            WHERE installation_id=:id LIMIT 1
-        """), {"id": installation_id}).first()
+            SELECT id,lifecycle FROM guard.license_links
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id":installation_id}).mappings().first()
         if existing:
-            raise HTTPException(409, "Istnieje już powiązanie tej instalacji.")
-        # A KeyGate workspace reference identifies the installation, not
-        # an imaginary repair order. No service.order record is created.
+            if pending["status"] != "IGNORED" or existing["lifecycle"] != "REVOKED":
+                raise HTTPException(409, "Istnieje już aktywne powiązanie instalacji.")
+            # Do not erase the old financial/audit record. Retire only the
+            # unique CURRENT device binding so a new sale can use the same
+            # Windows installation UUID without a reinstall.
+            con.execute(text("""
+                UPDATE guard.license_links SET installation_id=NULL,updated_at=now()
+                WHERE id=:id AND lifecycle='REVOKED'
+            """), {"id":existing["id"]})
+        elif pending["assigned_license_id"] and pending["status"] != "IGNORED":
+            raise HTTPException(409, "Komputer ma już przypisaną licencję.")
+        # Direct sale never requires a fabricated service order. New sales
+        # get new unique external references; old payments stay auditable.
         reference = "MG-DIRECT-" + installation_id.hex
+        if existing:
+            reference += "-" + uuid.uuid4().hex[:10]
         created = _keygate_create_license(
             reception_number=reference, edition=edition, months=months,
         )
