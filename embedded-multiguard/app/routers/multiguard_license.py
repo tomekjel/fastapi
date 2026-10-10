@@ -2278,19 +2278,33 @@ def handover_direct_license_api(
 def assign_direct_license_web(
     installation_id: uuid.UUID,
     edition: str = Form(...),
-    months: int = Form(...),
+    months: str = Form(...),
     release_channel: str = Form("STABLE"),
+    service_confirm: str = Form(""),
     csrf_token: str = Form(...),
     _: None = Depends(_panel_auth),
 ):
     from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
     if not _token_valid(csrf_token):
         raise HTTPException(403, "Wygasły formularz.")
-    _assign_direct_customer_license(installation_id, edition, months, release_channel)
-    from fastapi.responses import RedirectResponse
+    if months == "SERVICE":
+        if service_confirm != "CONFIRM_WORKSHOP":
+            raise HTTPException(400, "Tryb serwisowy wymaga dodatkowego potwierdzenia.")
+        _set_workshop_grant(installation_id,edition,release_channel,True)
+        with engine.begin() as con:
+            con.execute(text("""
+                UPDATE guard.workshop_grants SET associated_reception_id=NULL,
+                updated_at=now() WHERE installation_id=:id
+            """),{"id":installation_id})
+        target="/multiguard/panel#service-modes"
+    else:
+        if months not in {"3","6","12"}:
+            raise HTTPException(400, "Wybierz okres 3, 6, 12 lub tryb serwisowy.")
+        _assign_direct_customer_license(installation_id,edition,int(months),release_channel)
+        target=f"/multiguard/panel/pending/{installation_id}#client-license"
     return RedirectResponse(
-        f"/multiguard/panel/pending/{installation_id}#client-license", status_code=303,
-        headers={"Cache-Control":"private, no-store"},
+        target,status_code=303,headers={"Cache-Control":"private, no-store"},
     )
 
 
@@ -2347,11 +2361,9 @@ def panel_update_workshop(
     csrf_token: str = Form(...),
     _: None = Depends(_panel_auth),
 ):
-    from app.routers.multiguard_panel_settings import _token_valid
-    if not _token_valid(csrf_token):
-        raise HTTPException(403, "Nieprawidłowy formularz.")
-    if action not in {"enable", "disable"}:
-        raise HTTPException(400, "Nieprawidłowa operacja.")
+    # No alternate one-click enable/disable route. OWNER uses either
+    # client form with a second confirmation, then central management.
+    raise HTTPException(410, "Trybem serwisowym zarządzaj w aktualnym panelu Multi-Servis.")
     result = _set_workshop_grant(
         installation_id, edition, release_channel, action == "enable",
     )
@@ -2530,22 +2542,42 @@ def multiguard_panel_pending_assign(
     installation_id: str,
     reception_number: str = Form(...),
     edition: str = Form(...),
-    months: int = Form(...),
+    months: str = Form(...),
     release_channel: str = Form("STABLE"),
+    service_confirm: str = Form(""),
+    csrf_token: str = Form(...),
     _: None = Depends(_panel_auth),
 ):
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403,"Wygasły lub nieprawidłowy formularz.")
     try:
         iid = uuid.UUID(installation_id)
     except ValueError as exc:
         raise HTTPException(400, "Nieprawidłowe ID instalacji.") from exc
 
     reception = _reception_by_number(reception_number)
+    if months == "SERVICE":
+        if service_confirm != "CONFIRM_WORKSHOP":
+            raise HTTPException(400,"Tryb serwisowy wymaga dodatkowego potwierdzenia.")
+        if _link_by_reception_id(reception["id"]):
+            raise HTTPException(409,"Zlecenie ma już licencję czasową Multi-Guard.")
+        _set_workshop_grant(iid,edition,release_channel,True)
+        with engine.begin() as con:
+            con.execute(text("""
+                UPDATE guard.workshop_grants
+                SET associated_reception_id=:rid,updated_at=now()
+                WHERE installation_id=:id
+            """),{"rid":reception["id"],"id":iid})
+        return RedirectResponse(
+            "/multiguard/panel#service-modes",status_code=303,
+            headers={"Cache-Control":"private, no-store"},
+        )
+    if months not in {"3","6","12"}:
+        raise HTTPException(400,"Wybierz okres 3, 6, 12 lub tryb serwisowy.")
     link = _assign_pending_to_reception(
-        iid,
-        reception["id"],
-        edition,
-        months,
-        release_channel,
+        iid,reception["id"],edition,int(months),release_channel,
     )
     pending = _pending_installation(iid)
     public = _pending_public(pending) if pending else {}
