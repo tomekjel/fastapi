@@ -24,6 +24,7 @@ from app.routers.multiguard_panel_devices import (
     owner_device_note,
     owner_device_note_form,
     owner_friendly_name,
+    owner_detected_name,
     owner_name_form,
 )
 from app.routers.multiguard_license import (
@@ -1477,9 +1478,8 @@ def multi_guard_panel_computers(
     pending_trs = []
     for pending in pending_rows:
         iid = pending["installation_id"]
-        name = " ".join(str(x).strip() for x in (pending["manufacturer"],pending["model"]) if x
-                        ) or pending["hostname"] or "Komputer bez nazwy"
-        alias = owner_friendly_name(iid)
+        detected_name = owner_detected_name(pending)
+        display_name = owner_friendly_name(iid) or detected_name
         status_label = "OCZEKUJE NA LICENCJĘ" if pending["status"]=="WAITING" else "PRZYPISANA — POBIERANIE"
         archive_form = ""
         if pending["status"] == "WAITING":
@@ -1492,7 +1492,7 @@ def multi_guard_panel_computers(
             )
         pending_trs.append(f"""
             <tr><td><strong>{_panel_h('MG-'+str(iid).replace('-','')[:8].upper())}</strong></td>
-                <td><b>{_panel_h(alias or name)}</b><small class="row-sub">{_panel_h(name)} · {_panel_h(pending["serial_number"] or pending["hostname"] or "")}</small></td>
+                <td><b class="owner-machine-display">{_panel_h(display_name)}</b></td>
                 <td>{_panel_h(pending["app_version"] or "—")}</td>
                 <td><span class="badge {'mg-gold' if pending["status"]=='WAITING' else 'mg-blue'}">{status_label}</span></td>
                 <td>{_panel_dt(pending["last_seen_at"])}</td>
@@ -1582,7 +1582,7 @@ def multi_guard_panel_computers(
                 </a>
               </td>
               <td>
-                <b>{_panel_h(row['friendly_name'] or _device_label(row))}</b><br>
+                <b class="owner-machine-display">{_panel_h(row['friendly_name'] or _device_label(row))}</b><br>
                 <span class="muted">{_panel_h(row['serial_number'] or row['hostname'] or '')}</span>{owner_attention}
               </td>
               <td><span class="badge {'mg-gold' if plan=='PRO' else 'mg-red'}">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(_human_license_state(row['lifecycle']))}</span></td>
@@ -1749,7 +1749,10 @@ def multi_guard_panel_device(
     own_note_data = owner_device_note(iid)
     note_edit_html = owner_device_note_form(iid, own_note_data)
     own_label = owner_friendly_name(row["installation_external_id"])
-    name_edit_html = owner_name_form(row["installation_external_id"], own_label, return_to="device")
+    name_edit_html = owner_name_form(
+        row["installation_external_id"], own_label,
+        return_to="device", detected_name=owner_detected_name(row),
+    )
     diagnostic_plan_html = owner_diagnostic_plan_panel(iid)
     event_rows = []
     for event in events:

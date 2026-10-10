@@ -8,6 +8,7 @@ import html
 import json
 import threading
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import RedirectResponse
@@ -59,9 +60,15 @@ def _schema() -> None:
             con.execute(text("""
                 CREATE TABLE IF NOT EXISTS guard.owner_installation_labels (
                     installation_external_id UUID PRIMARY KEY,
-                    friendly_name VARCHAR(120) NOT NULL DEFAULT '',
+                    friendly_name VARCHAR(420) NOT NULL DEFAULT '',
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
+            """))
+            # A full manufacturer + model can exceed the old 120-character
+            # owner alias limit. Widen existing labels without losing names.
+            con.execute(text("""
+                ALTER TABLE guard.owner_installation_labels
+                ALTER COLUMN friendly_name TYPE VARCHAR(420)
             """))
         _READY = True
 
@@ -81,23 +88,42 @@ def owner_friendly_name(external_id: uuid.UUID) -> str:
     return str(name or "")
 
 
-def owner_name_form(external_id: uuid.UUID, value: str, *, return_to: str) -> str:
-    """OWNER-only form; never transmitted to a remote Multi-Guard endpoint."""
+def owner_detected_name(row: Any) -> str:
+    """Only the default text shown to OWNER, never a Windows identity change."""
+    manufacturer = str(row.get("manufacturer") or "").strip()
+    model = str(row.get("model") or "").strip()
+    found = " ".join(v for v in (manufacturer, model) if v)
+    return found or str(row.get("hostname") or "Komputer bez nazwy").strip()
+
+
+def owner_name_form(
+    external_id: uuid.UUID, value: str, *,
+    return_to: str, detected_name: str,
+) -> str:
+    """Edit one display name prefilled with the detected manufacturer/model.
+
+    An empty stored override means: display the automatically detected name.
+    The real manufacturer/model, serial and Windows hostname are never edited.
+    """
     token = _csrf_token(int(time.time() // 3600))
-    escaped = html.escape(value, quote=True)
+    shown = value or detected_name
+    escaped = html.escape(shown, quote=True)
     back = html.escape(return_to, quote=True)
     return f"""
       <section class="card" id="owner-name">
-        <div class="eyebrow">MULTI-SERVIS / WŁASNA NAZWA</div>
-        <h2>Moja nazwa komputera</h2>
-        <p>Oryginalny model i nazwa Windows pozostają niezmienione.
-           Ta etykieta jest widoczna tylko w panelu właściciela.</p>
+        <div class="eyebrow">MULTI-SERVIS / NAZWA KOMPUTERA</div>
+        <h2>Edytuj nazwę komputera</h2>
+        <p>Podpowiadamy nazwę automatycznie odczytaną przez Multi-Guard.
+           Możesz ją dowolnie skrócić, zmienić lub wpisać „Multi-Servis”
+           na początku albo w środku. W panelu będzie jedna nazwa,
+           bez dodatkowego dopisku na końcu. Dane sprzętu pozostają zapisane
+           bez zmian. Puste pole przywraca nazwę automatyczną.</p>
         <form method="post" action="/multiguard/panel/installation/{external_id}/name">
           <input type="hidden" name="csrf_token" value="{token}">
           <input type="hidden" name="return_to" value="{back}">
-          <label>Nazwa (maks. 120 znaków)
-            <input name="friendly_name" maxlength="120" value="{escaped}"
-             placeholder="np. ASUS — laptop warsztatowy / Jan Nowak — Bydgoszcz"></label>
+          <label>Nazwa wyświetlana w panelu (maks. 420 znaków)
+            <input name="friendly_name" maxlength="420" value="{escaped}"
+              placeholder="Wpisz nazwę komputera"></label>
           <button type="submit">ZAPISZ NAZWĘ</button>
         </form>
       </section>"""
@@ -187,12 +213,12 @@ def save_owner_installation_name(
     csrf_token: str = Form(...),
     _: None = Depends(_panel_auth),
 ):
-    """Update only OWNER's alias; never overwrite Windows identity/hostname."""
+    """Update OWNER display name only; never overwrite hardware metadata."""
     if not _token_valid(csrf_token):
         raise HTTPException(403, "Wygasły lub nieprawidłowy formularz.")
     clean = " ".join(friendly_name.strip().split())
-    if len(clean) > 120 or any(ord(ch) < 32 for ch in clean):
-        raise HTTPException(400, "Nazwa może mieć maksymalnie 120 znaków.")
+    if len(clean) > 420 or any(ord(ch) < 32 for ch in clean):
+        raise HTTPException(400, "Nazwa może mieć maksymalnie 420 znaków.")
     _schema()
     with engine.begin() as con:
         known = con.execute(text("""
