@@ -974,10 +974,8 @@ def _assign_pending_to_reception(
                 "installation_id": installation_id,
             },
         )
-
-    # A paid service-order licence must always supersede temporary service
-    # rights; no second entitlement can remain enabled on this installation.
-    with engine.begin() as connection:
+        # Paid rights and revocation of previous service rights must commit
+        # atomically. Otherwise a backend failure could leave both valid.
         connection.execute(text("""
             UPDATE guard.workshop_grants
                SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
@@ -1045,7 +1043,8 @@ def _assign_direct_customer_license(
             WHERE installation_id=:id
         """), {"license_id":lic["keygate_license_id"],"id":installation_id})
         con.execute(text("""
-            UPDATE guard.workshop_grants SET enabled=FALSE,updated_at=now()
+            UPDATE guard.workshop_grants
+            SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
             WHERE installation_id=:id AND enabled=TRUE
         """), {"id":installation_id})
     return _normalize_link(dict(lic))
