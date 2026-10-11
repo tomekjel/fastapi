@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 10,
-  "target_sha": "757fc297bbcf149dedea339ff0c5f98b67f37034",
-  "summary": "OWNER WEB: lista oczekujacych: nazwa w dwoch liniach z edycja pod ikona olowka, dwa przyciski obok siebie, a usuwanie wymaga dodatkowego zatwierdzenia w oknie Czy jestes pewien?. Bez zmian Android/Windows. PostgreSQL, Chromium i testy bezpieczenstwa PASS 38080468121."
+  "sequence": 11,
+  "target_sha": "23f12ab41f666fab027c3b4e8dba035b25dc795e",
+  "summary": "OWNER WEB V12: zgodna z Multi-Guard 0.3.40 obsluga jednego bezterminowego SERVICE, wlaczanie/wyłączanie i profile monitoringu OFF/STANDARD/OBSERVATION/INTENSIVE oraz raporty. Backup, preflight i rollback. PostgreSQL+Chromium PASS 38116695664; bez zmian Android i Windows."
 }
