@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 11,
+  "sequence": 12,
   "target_sha": "23f12ab41f666fab027c3b4e8dba035b25dc795e",
-  "summary": "OWNER WEB V12: zgodna z Multi-Guard 0.3.40 obsluga jednego bezterminowego SERVICE, wlaczanie/wyłączanie i profile monitoringu OFF/STANDARD/OBSERVATION/INTENSIVE oraz raporty. Backup, preflight i rollback. PostgreSQL+Chromium PASS 38116695664; bez zmian Android i Windows."
+  "summary": "OWNER WWW V12 kontrolowana ponowna proba po korekcie przypietego skryptu na serwerze: zachowane sprawdzanie publicznego API, raportow SERVICE, PostgreSQL/Chromium CI PASS 38116695664; backup i rollback. Bez zmian Android i Windows."
 }
