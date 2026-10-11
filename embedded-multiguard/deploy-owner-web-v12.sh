@@ -77,9 +77,9 @@ cd "$ROOT"
 PYTHONPATH="$ROOT" "$PY" "$STAGE/preflight.py"
 "$PY" -m py_compile "$STAGE"/*.py
 
-# Verify existing Android/agent contracts are unchanged apart from the TWO
-# approved Multi-Guard licensing handlers needed for OWNER workshop + direct
-# sales.  Never broadly disable the former non-OWNER route guard.
+# Verify existing Android/agent contracts are unchanged except the THREE
+# explicitly reviewed Multi-Guard service-mode handlers: discovery/assignment,
+# provision, and opt-in workshop/report. Never relax unrelated API guards.
 "$PY" - "$ROUTERS" "$STAGE" <<'PY'
 from pathlib import Path
 import ast,sys
@@ -87,6 +87,7 @@ old,new=map(Path,sys.argv[1:])
 AUTHORIZED_LICENSE_EVOLUTION=frozenset({
     ("post","/v1/multi-guard/provision"),
     ("post","/v1/multi-guard/discovery/assignment"),
+    ("post","/v1/multi-guard/workshop/report"),
 })
 changed_authorized=set()
 for name in ("multiguard_license.py","multiguard_runtime.py"):
