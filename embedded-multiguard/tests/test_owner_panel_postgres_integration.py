@@ -496,6 +496,157 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
            404,"Deleted private attachment")
 
 
+    # OWNER-only unified service mode: two client forms, one two-click
+    # consent guard; no standalone workshop form and monitoring OFF by default.
+    import base64 as _b64, hashlib as _hash, json as _json
+    os.environ["MULTIGUARD_SIGNING_SEED_B64"]=_b64.b64encode(b"1"*32).decode()
+    mode_direct=uuid.uuid4()
+    mode_order=uuid.uuid4()
+    mode_order_id=uuid.uuid4()
+    mode_secret="ci-mode-discovery-secret-123456789"
+    with engine.begin() as db:
+        for iid,dev in ((mode_direct,"ci-mode-direct-device"),
+                        (mode_order,"ci-mode-order-device")):
+            db.execute(text("""
+                INSERT INTO guard.pending_installations(
+                  installation_id,device_id,discovery_credential_sha256,
+                  app_version,hostname,manufacturer,model,status)
+                VALUES(:iid,:dev,:cred,'0.3.39','ci-mode',
+                       'Lenovo','CI-Mode','WAITING')
+            """),{"iid":iid,"dev":dev,
+                  "cred":_hash.sha256(mode_secret.encode()).hexdigest()})
+        db.execute(text("""
+            INSERT INTO service.service_orders(id,device_id,
+                reception_number,status,received_at)
+            VALUES(:id,:dev,'CI-2026-01234','IN_PROGRESS',now())
+        """),{"id":mode_order_id,"dev":pc_a})
+    mode_page=get(f"/multiguard/panel/pending/{mode_direct}")
+    ensure(mode_page.status_code,200,"Unified OWNER computer form")
+    assert mode_page.text.count('value="SERVICE"')==2
+    assert 'Tryb warsztatowy' not in mode_page.text
+    assert 'id="workshop-mode"' not in mode_page.text
+    assert 'data-service-approve' in mode_page.text
+    suggest="/multiguard/panel/service-orders/suggest?q=123"
+    ensure(get(suggest,False).status_code,401,"Owner-only order autocomplete")
+    assert any(r["number"]=="CI-2026-01234"
+               for r in get(suggest).json()["results"])
+    assert get("/multiguard/panel/service-orders/suggest?q=12").json()["results"]==[]
+
+    token=license._workshop_csrf()
+    form={"edition":"PRO","months":"SERVICE","release_channel":"STABLE",
+          "service_confirm":"CONFIRM_WORKSHOP","csrf_token":token}
+    direct_url=f"/multiguard/panel/pending/{mode_direct}/direct"
+    ensure(c.post(direct_url,data=form).status_code,401,"Service OWNER Basic")
+    ensure(c.post(direct_url,auth=auth,
+                  data={**form,"csrf_token":"bad"}).status_code,403,"Service CSRF")
+    ensure(c.post(direct_url,auth=auth,
+                  data={**form,"service_confirm":""}).status_code,400,
+           "Require deliberate second click")
+    with engine.connect() as db:
+        assert db.execute(text("""
+          SELECT count(*) FROM guard.workshop_grants WHERE installation_id=:id
+        """),{"id":mode_direct}).scalar_one()==0
+    ensure(c.post(direct_url,auth=auth,data=form,
+                  follow_redirects=False).status_code,303,"Service enabled")
+    with engine.connect() as db:
+        grant=db.execute(text("""
+          SELECT enabled,monitoring_profile,associated_reception_id
+          FROM guard.workshop_grants WHERE installation_id=:id
+        """),{"id":mode_direct}).mappings().one()
+    assert grant["enabled"] is True and grant["monitoring_profile"]=="OFF"
+    assert grant["associated_reception_id"] is None
+    owner_modes=get("/multiguard/panel")
+    ensure(owner_modes.status_code,200,"OWNER central service management")
+    assert 'data-owner-monitor-toggle' in owner_modes.text
+    assert f'/multiguard/panel/workshop/{mode_direct}/disable' in owner_modes.text
+
+    discovery={"installationId":str(mode_direct),
+               "deviceId":"ci-mode-direct-device",
+               "discoveryCredential":mode_secret}
+    server_lease=c.post("/v1/multi-guard/discovery/assignment",json=discovery)
+    ensure(server_lease.status_code,200,"Signed service grant")
+    assert server_lease.json()["workshopMonitoring"]=={
+        "enabled":False,"profile":"OFF"}
+    envelope=server_lease.json()["workshopLease"]
+    assert _json.loads(envelope["payload"])["lifecycle"]=="WORKSHOP"
+    license._signing_key().public_key().verify(
+        _b64.b64decode(envelope["signatureB64"]),envelope["payload"].encode())
+
+    monitor_url=f"/multiguard/panel/workshop/{mode_direct}/monitoring"
+    ensure(c.post(monitor_url,auth=auth,
+          data={"csrf_token":"bad","monitoring_enabled":"yes",
+                "profile":"OBSERVATION"}).status_code,403,"Monitoring CSRF")
+    ensure(c.post(monitor_url,auth=auth,
+          data={"csrf_token":token,"monitoring_enabled":"yes",
+                "profile":"BAD"}).status_code,400,"Monitoring whitelisted profiles")
+    ensure(c.post(monitor_url,auth=auth,
+          data={"csrf_token":token,"monitoring_enabled":"yes",
+                "profile":"OBSERVATION"},
+          follow_redirects=False).status_code,303,"Monitoring opt in")
+    observed=c.post("/v1/multi-guard/discovery/assignment",json=discovery)
+    assert observed.json()["workshopMonitoring"]=={
+        "enabled":True,"profile":"OBSERVATION"}
+    sample={"capturedAt":"2026-10-10T20:00:00Z","cpuLoadPercent":42.0,
+            "cpuTemperatureC":56.0,"ramUsedPercent":24.0,
+            "gpuLoadPercent":None,"gpuTemperatureC":None}
+    report={"installationId":str(mode_direct),
+            "deviceId":"ci-mode-direct-device",
+            "discoveryCredential":mode_secret,
+            "summary":{"monitoringProfile":"OBSERVATION","samples":[sample]}}
+    ensure(c.post("/v1/multi-guard/workshop/report",json=report).status_code,
+           200,"Extended service report")
+    history=get(f"/multiguard/panel/workshop/{mode_direct}/reports")
+    ensure(history.status_code,200,"Private report history")
+    assert 'OBSERVATION' in history.text and '42.0%' in history.text
+    ensure(c.post(monitor_url,auth=auth,
+          data={"csrf_token":token,"profile":"STANDARD"},
+          follow_redirects=False).status_code,303,"Disable monitoring only")
+    with engine.connect() as db:
+        assert db.execute(text("""
+          SELECT monitoring_profile FROM guard.workshop_grants WHERE installation_id=:id
+        """),{"id":mode_direct}).scalar_one()=="OFF"
+    assert c.post("/v1/multi-guard/workshop/report",json=report).status_code==409
+
+    revoke_url=f"/multiguard/panel/workshop/{mode_direct}/disable"
+    ensure(c.post(revoke_url,auth=auth,
+          data={"csrf_token":token,"confirmation":"NO"}).status_code,400,
+          "Second confirmation needed to revoke")
+    ensure(c.post(revoke_url,auth=auth,
+          data={"csrf_token":token,"confirmation":"CONFIRM_DISABLE"},
+          follow_redirects=False).status_code,303,"OWNER revoked service")
+    revoked=c.post("/v1/multi-guard/discovery/assignment",json=discovery)
+    ensure(revoked.status_code,200,"Client checks revoked state")
+    unsigned=revoked.json()["workshopLease"]
+    assert _json.loads(unsigned["payload"])["lifecycle"]=="UNKNOWN"
+    license._signing_key().public_key().verify(
+        _b64.b64decode(unsigned["signatureB64"]),unsigned["payload"].encode())
+    assert revoked.json()["workshopMonitoring"]=={
+        "enabled":False,"profile":"OFF"}
+    with engine.connect() as db:
+        assert db.execute(text("""
+          SELECT status FROM guard.pending_installations WHERE installation_id=:id
+        """),{"id":mode_direct}).scalar_one()=="WAITING"
+    assert c.post("/v1/multi-guard/workshop/report",json=report).status_code==403
+
+    # Also verify the service-order path doesn't create paid KeyGate rights.
+    order_form={"reception_number":"CI-2026-01234","edition":"STANDARD",
+                "months":"SERVICE","release_channel":"STABLE",
+                "csrf_token":token,"service_confirm":"CONFIRM_WORKSHOP"}
+    order_url=f"/multiguard/panel/pending/{mode_order}/assign"
+    ensure(c.post(order_url,auth=auth,
+          data={**order_form,"service_confirm":""}).status_code,400,
+           "Order mode requires explicit confirmation")
+    ensure(c.post(order_url,auth=auth,data=order_form,
+          follow_redirects=False).status_code,303,"Service mode linked to order")
+    with engine.connect() as db:
+        association=db.execute(text("""
+            SELECT associated_reception_id,monitoring_profile,enabled
+            FROM guard.workshop_grants WHERE installation_id=:id
+        """),{"id":mode_order}).mappings().one()
+    assert association["associated_reception_id"]==mode_order_id
+    assert association["monitoring_profile"]=="OFF" and association["enabled"]
+    print("PASS: unified OWNER service flow, signed revocation, monitoring OFF/ON, reports, order autocomplete.")
+
     # A true direct sale must never insert a repair order. KeyGate is
     # mocked locally, while SQL and FastAPI routes run against real Postgres.
     import base64, hashlib, json

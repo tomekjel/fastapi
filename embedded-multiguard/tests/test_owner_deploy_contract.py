@@ -21,6 +21,7 @@ start_marker='"$PY" - "$ROUTERS" "$STAGE" <<\'PY\'\n'
 assert script.count(start_marker)==1, "Ambiguous deployment security guard"
 body=script.split(start_marker,1)[1].split("\nPY",1)[0]
 assert "AUTHORIZED_LICENSE_EVOLUTION" in body, "Missing narrow API authorization"
+assert '("post","/v1/multi-guard/workshop/report")' in body, "Only reviewed authenticated workshop report API may change"
 assert "changed_authorized.issubset(AUTHORIZED_LICENSE_EVOLUTION)" in body, "Web-only incremental releases must allow unchanged licensing APIs"
 assert "ast.dump" in body, "Must compare entire handler ASTs"
 
@@ -94,6 +95,19 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     assert "unrelated" in (reject.stdout+reject.stderr)
     path.write_text(original,encoding="utf-8")
     print("PASS: discovery/register API body and signature are unchanged.")
+
+    # The workshop report is the only additional authorized service-mode
+    # endpoint; even this endpoint's public request contract cannot change.
+    tag="def workshop_report(req: WorkshopReportRequest):"
+    assert original.count(tag)==1
+    path.write_text(original.replace(
+        tag,"def workshop_report(req: WorkshopReportRequest, bypass: bool = False):",1
+    ),encoding="utf-8")
+    reject=run()
+    assert reject.returncode!=0,(reject.stdout,reject.stderr)
+    assert "interface" in (reject.stdout+reject.stderr)
+    path.write_text(original,encoding="utf-8")
+    print("PASS: workshop report retains authenticated request schema.")
 
     # New no-license uninstall messages must use a strict discovery secret.
     assert "def discovery_uninstall(req: DiscoveryUninstallRequest):" in original

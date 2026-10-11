@@ -574,9 +574,13 @@ CREATE TABLE IF NOT EXISTS guard.workshop_grants (
     release_channel TEXT NOT NULL DEFAULT 'STABLE'
         CHECK (release_channel IN ('STABLE','PILOT')),
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    monitoring_profile TEXT NOT NULL DEFAULT 'OFF',
+    associated_reception_id UUID REFERENCES service.service_orders(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE guard.workshop_grants ADD COLUMN IF NOT EXISTS monitoring_profile TEXT NOT NULL DEFAULT 'OFF';
+ALTER TABLE guard.workshop_grants ADD COLUMN IF NOT EXISTS associated_reception_id UUID REFERENCES service.service_orders(id) ON DELETE SET NULL;
 CREATE TABLE IF NOT EXISTS guard.workshop_grant_audit (
     id BIGSERIAL PRIMARY KEY,
     installation_id UUID NOT NULL,
@@ -591,6 +595,15 @@ CREATE TABLE IF NOT EXISTS guard.workshop_reports (
     summary JSONB NOT NULL DEFAULT '{}'::jsonb,
     reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS guard.workshop_report_history (
+    id BIGSERIAL PRIMARY KEY,
+    installation_id UUID NOT NULL
+        REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+    summary JSONB NOT NULL,
+    reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guard_workshop_report_history_installation
+    ON guard.workshop_report_history(installation_id,reported_at DESC);
 
 CREATE TABLE IF NOT EXISTS guard.installations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -763,8 +776,9 @@ def _signed_workshop_grant(pending: dict[str, Any],
                            grant: dict[str, Any]) -> dict[str, str]:
     """Ephemeral, installation-bound entitlement; never touches KeyGate.
 
-    Workshop permission is open-ended on the server, but each client lease
-    is only trusted for a short offline grace period and must be refreshed.
+    Workshop permission is unlimited while offline. The client must adopt a
+    separately signed UNKNOWN payload after a successful server revocation
+    check; loss of Internet is never treated as a revocation.
     """
     plan = ("multi_guard_pro" if grant["edition"] == "PRO" else "multi_guard")
     payload = json.dumps({
@@ -775,7 +789,7 @@ def _signed_workshop_grant(pending: dict[str, Any],
         "deviceId": str(pending["device_id"]),
         "planCode": plan,
         "releaseChannel": grant["release_channel"],
-        "lifecycle": "WORKSHOP",
+        "lifecycle": "WORKSHOP" if grant["enabled"] else "UNKNOWN",
         "validFrom": None,
         "validUntil": None,
         "acceptedAt": None,
@@ -812,9 +826,10 @@ def _set_workshop_grant(
         if str(pending["status"]) in ("ASSIGNED", "PROVISIONED"):
             raise HTTPException(409,
                 "Komputer ma już przypisaną licencję klienta. "
-                "Nie można równocześnie uruchomić trybu warsztatowego.")
+                "Nie można równocześnie uruchomić trybu serwisowego.")
         existing = con.execute(text("""
-            SELECT edition,release_channel,enabled FROM guard.workshop_grants
+            SELECT edition,release_channel,enabled,monitoring_profile
+            FROM guard.workshop_grants
             WHERE installation_id=:id FOR UPDATE
         """), {"id": installation_id}).mappings().first()
         previous = dict(existing) if existing else None
@@ -827,6 +842,7 @@ def _set_workshop_grant(
               SET edition=EXCLUDED.edition,
                   release_channel=EXCLUDED.release_channel,
                   enabled=EXCLUDED.enabled,
+                  monitoring_profile='OFF',
                   updated_at=now()
         """), {"id":installation_id,"edition":edition,"channel":channel,"enabled":enabled})
         if previous != current:
@@ -958,6 +974,15 @@ def _assign_pending_to_reception(
                 "installation_id": installation_id,
             },
         )
+
+    # A paid service-order licence must always supersede temporary service
+    # rights; no second entitlement can remain enabled on this installation.
+    with engine.begin() as connection:
+        connection.execute(text("""
+            UPDATE guard.workshop_grants
+               SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
+             WHERE installation_id=:iid AND enabled=TRUE
+        """),{"iid":installation_id})
 
     return link
 
@@ -1184,6 +1209,80 @@ def _panel_html(body: str) -> str:
     if (chosen) link.setAttribute('aria-current', 'page');
   }}
 }})();
+  // SERVICE is deliberately two-step; changing the period must never
+  // silently grant an unmetered workshop entitlement.
+  for (const form of document.querySelectorAll('form[data-owner-service-form]')) {{
+    const period=form.querySelector('select[name="months"]');
+    const approval=form.querySelector('input[name="service_confirm"]');
+    const submit=form.querySelector('[data-owner-service-submit]');
+    const dialog=form.querySelector('.owner-service-confirm-dialog');
+    const normalLabel=submit.textContent.trim();
+    const refresh=()=>{{
+      approval.value='';
+      submit.textContent=period.value==='SERVICE' ? 'WŁĄCZ TRYB SERWISOWY' : normalLabel;
+    }};
+    period.addEventListener('change',refresh);
+    refresh();
+    form.addEventListener('submit',event=>{{
+      if(period.value==='SERVICE' && approval.value!=='CONFIRM_WORKSHOP'){{
+        event.preventDefault();
+        dialog.showModal();
+      }}
+    }});
+    dialog.querySelector('[data-service-approve]').addEventListener('click',()=>{{
+      approval.value='CONFIRM_WORKSHOP';
+      dialog.close();
+      form.requestSubmit();
+    }});
+  }}
+
+  // The profile selector only becomes active after explicit opt-in.
+  // OFF is the default even if the owner leaves all fields untouched.
+  for (const form of document.querySelectorAll('form[data-owner-monitor-form]')) {{
+    const toggle=form.querySelector('[data-owner-monitor-toggle]');
+    const profile=form.querySelector('[data-owner-monitor-profile]');
+    if (!toggle || !profile) continue;
+    const update=()=>{{
+      profile.disabled=!toggle.checked;
+      if(toggle.checked && !['STANDARD','OBSERVATION','INTENSIVE'].includes(profile.value)){{
+        profile.value='STANDARD';
+      }}
+    }};
+    toggle.addEventListener('change',update);
+    update();
+  }}
+
+  // OWNER-only live suggestions (3 digits): no orders are revealed on the
+  // public discovery API. A chosen datalist value becomes the exact order ID.
+  for (const input of document.querySelectorAll('input[data-owner-order-suggest]')) {{
+    const list=document.getElementById(input.getAttribute('list'));
+    if(!list)continue;
+    let timer;
+    input.addEventListener('input',()=>{{
+      clearTimeout(timer);
+      list.replaceChildren();
+      const query=input.value.replace(/\D/g,'');
+      if(query.length<3)return;
+      timer=setTimeout(async()=>{{
+        try{{
+          const response=await fetch(
+            '/multiguard/panel/service-orders/suggest?q='+encodeURIComponent(query),
+            {{credentials:'same-origin',cache:'no-store'}}
+          );
+          if(!response.ok)return;
+          const result=await response.json();
+          if(input.value.replace(/\D/g,'')!==query)return;
+          for(const item of result.results||[]){{
+            const option=document.createElement('option');
+            option.value=item.number;
+            option.label=item.label;
+            list.appendChild(option);
+          }}
+        }}catch(_err){{ /* typing remains possible without connectivity */ }}
+      }},240);
+    }});
+  }}
+
 </script>
 </body>
 </html>"""
@@ -1585,12 +1684,18 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
         raise HTTPException(409, "Nie znaleziono powiązanej licencji klienta.")
     if not reception_id or pending["status"] == "WAITING":
         grant = _workshop_grant(pending["installation_id"])
-        if grant and grant["enabled"]:
+        if grant is not None:
+            # Even revocation is a signed UNKNOWN envelope. The Windows app
+            # must never infer revocation from lost Internet or missing JSON.
             return {
                 "assigned": False,
-                "status": "WORKSHOP",
-                "releaseChannel": grant["release_channel"],
+                "status": "WORKSHOP" if grant["enabled"] else "WAITING",
+                "releaseChannel": grant["release_channel"] if grant["enabled"] else None,
                 "workshopLease": _signed_workshop_grant(pending, grant),
+                "workshopMonitoring": {
+                    "enabled": grant["enabled"] and grant.get("monitoring_profile","OFF") != "OFF",
+                    "profile": grant.get("monitoring_profile") if grant["enabled"] else "OFF",
+                },
                 "serverTime": _iso(_utcnow()),
             }
         return {
@@ -1634,35 +1739,77 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
 
 @router.post("/v1/multi-guard/workshop/report")
 def workshop_report(req: WorkshopReportRequest):
-    """Store a bounded current workshop diagnostic summary, no core.devices required."""
+    """Receive only OWNER-enabled diagnostic metrics; never user file contents."""
     pending = _authenticate_pending(
         req.installation_id, req.device_id, req.discovery_credential,
     )
-    if len(json.dumps(req.summary, ensure_ascii=False)) > 16_384:
+    raw = json.dumps(req.summary, ensure_ascii=False, allow_nan=False)
+    if len(raw.encode("utf-8")) > 16_384:
         raise HTTPException(413, "Raport diagnostyczny jest zbyt duży.")
     allowed = {
         "defenderAvailable", "realtimeProtection", "activeThreatCount",
         "firewallProtected", "whea24h", "kernelPower7d",
         "diskProblemCount", "browserInstalledCount", "browserActiveCount",
         "browserNeedsAttentionCount", "capturedAt", "appVersion",
+        "monitoringProfile", "samples",
     }
-    if not set(req.summary).issubset(allowed):
+    if not isinstance(req.summary, dict) or not set(req.summary).issubset(allowed):
         raise HTTPException(400, "Raport zawiera nieobsługiwane pola.")
+    samples = req.summary.get("samples", [])
+    if not isinstance(samples, list) or len(samples) > 60:
+        raise HTTPException(400, "Nieprawidłowa liczba próbek diagnostycznych.")
+    numeric_keys = {
+        "cpuLoadPercent", "cpuTemperatureC", "ramUsedPercent",
+        "gpuLoadPercent", "gpuTemperatureC",
+    }
+    for sample in samples:
+        if not isinstance(sample, dict) or set(sample) != numeric_keys | {"capturedAt"}:
+            raise HTTPException(400, "Nieprawidłowa próbka diagnostyczna.")
+        if not isinstance(sample["capturedAt"], str) or len(sample["capturedAt"]) > 40:
+            raise HTTPException(400, "Nieprawidłowy czas próbki diagnostycznej.")
+        for key in numeric_keys:
+            value = sample[key]
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise HTTPException(400, "Nieprawidłowy pomiar diagnostyczny.")
+            if not (-50 <= value <= 200):
+                raise HTTPException(400, "Pomiar diagnostyczny poza zakresem.")
     _ensure_schema()
     with engine.begin() as con:
-        enabled = con.execute(text("""
-            SELECT enabled FROM guard.workshop_grants
+        grant = con.execute(text("""
+            SELECT enabled,monitoring_profile FROM guard.workshop_grants
             WHERE installation_id=:id FOR UPDATE
-        """), {"id":pending["installation_id"]}).scalar_one_or_none()
-        if enabled is not True:
-            raise HTTPException(403, "Tryb warsztatowy nie jest aktywny.")
+        """), {"id":pending["installation_id"]}).mappings().first()
+        if not grant or not grant["enabled"]:
+            raise HTTPException(403, "Tryb serwisowy nie jest aktywny.")
+        profile = grant["monitoring_profile"] or "OFF"
+        if samples and profile == "OFF":
+            raise HTTPException(409, "Rozszerzone monitorowanie nie jest włączone.")
+        if req.summary.get("monitoringProfile", profile) not in {profile, None}:
+            # A stale report after changing the profile must not impersonate
+            # a higher cadence setting chosen by the OWNER.
+            raise HTTPException(409, "Ustawienia monitorowania zmieniono. Odśwież je.")
         con.execute(text("""
             INSERT INTO guard.workshop_reports(installation_id,summary,reported_at)
             VALUES (:id,CAST(:data AS jsonb),now())
             ON CONFLICT(installation_id) DO UPDATE
               SET summary=EXCLUDED.summary,reported_at=now()
-        """), {"id":pending["installation_id"],
-                 "data":json.dumps(req.summary,ensure_ascii=False)})
+        """), {"id":pending["installation_id"],"data":raw})
+        if profile != "OFF":
+            con.execute(text("""
+                INSERT INTO guard.workshop_report_history(installation_id,summary)
+                VALUES (:id,CAST(:data AS jsonb))
+            """), {"id":pending["installation_id"],"data":raw})
+            con.execute(text("""
+                DELETE FROM guard.workshop_report_history
+                WHERE installation_id=:id
+                  AND (reported_at < now() - interval '30 days'
+                   OR id NOT IN (
+                     SELECT id FROM guard.workshop_report_history
+                     WHERE installation_id=:id ORDER BY id DESC LIMIT 43200
+                   ))
+            """), {"id":pending["installation_id"]})
     return {"saved":True,"serverTime":_iso(_utcnow())}
 
 
@@ -2219,19 +2366,33 @@ def handover_direct_license_api(
 def assign_direct_license_web(
     installation_id: uuid.UUID,
     edition: str = Form(...),
-    months: int = Form(...),
+    months: str = Form(...),
     release_channel: str = Form("STABLE"),
+    service_confirm: str = Form(""),
     csrf_token: str = Form(...),
     _: None = Depends(_panel_auth),
 ):
     from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
     if not _token_valid(csrf_token):
         raise HTTPException(403, "Wygasły formularz.")
-    _assign_direct_customer_license(installation_id, edition, months, release_channel)
-    from fastapi.responses import RedirectResponse
+    if months == "SERVICE":
+        if service_confirm != "CONFIRM_WORKSHOP":
+            raise HTTPException(400, "Tryb serwisowy wymaga dodatkowego potwierdzenia.")
+        _set_workshop_grant(installation_id,edition,release_channel,True)
+        with engine.begin() as con:
+            con.execute(text("""
+                UPDATE guard.workshop_grants SET associated_reception_id=NULL,
+                updated_at=now() WHERE installation_id=:id
+            """),{"id":installation_id})
+        target="/multiguard/panel#service-modes"
+    else:
+        if months not in {"3","6","12"}:
+            raise HTTPException(400, "Wybierz okres 3, 6, 12 lub tryb serwisowy.")
+        _assign_direct_customer_license(installation_id,edition,int(months),release_channel)
+        target=f"/multiguard/panel/pending/{installation_id}#client-license"
     return RedirectResponse(
-        f"/multiguard/panel/pending/{installation_id}#client-license", status_code=303,
-        headers={"Cache-Control":"private, no-store"},
+        target,status_code=303,headers={"Cache-Control":"private, no-store"},
     )
 
 
@@ -2259,33 +2420,34 @@ def _workshop_csrf() -> str:
     return _csrf_token(int(time.time() // 3600))
 
 
-@router.post("/multiguard/panel/pending/{installation_id}/workshop",
-             response_class=HTMLResponse)
-def panel_update_workshop(
+def _owner_confirm_service_dialog(dialog_id: str) -> str:
+    """A separate explicit second click before service rights are issued."""
+    safe = _panel_escape(dialog_id)
+    return f"""
+        <dialog class="pending-owner-dialog owner-service-confirm-dialog" id="{safe}">
+          <h3>Czy na pewno włączyć tryb serwisowy?</h3>
+          <p>To <strong>nie jest licencja czasowa</strong>.
+             Program będzie działał bezterminowo także bez Internetu,
+             a tryb można wyłączyć wyłącznie z centralnego panelu właściciela.
+             Monitorowanie rozszerzone pozostanie domyślnie wyłączone.</p>
+          <div class="pending-dialog-buttons">
+            <button type="button" class="pending-cancel-button"
+              onclick="this.closest('dialog').close()">ANULUJ</button>
+            <button type="button" class="pending-confirm-archive"
+              data-service-approve>TAK, WŁĄCZ TRYB SERWISOWY</button>
+          </div>
+        </dialog>"""
+
+
+# The obsolete standalone "Tryb warsztatowy" OWNER action no longer
+# exists. All service grants now require a second confirmation in one
+# of the two customer forms. Revocation belongs to central OWNER only.
+@router.post("/multiguard/panel/pending/{installation_id}/workshop")
+def legacy_workshop_owner_endpoint_retired(
     installation_id: uuid.UUID,
-    edition: str = Form("STANDARD"),
-    release_channel: str = Form("STABLE"),
-    action: str = Form("enable"),
-    csrf_token: str = Form(...),
     _: None = Depends(_panel_auth),
 ):
-    from app.routers.multiguard_panel_settings import _token_valid
-    if not _token_valid(csrf_token):
-        raise HTTPException(403, "Nieprawidłowy formularz.")
-    if action not in {"enable", "disable"}:
-        raise HTTPException(400, "Nieprawidłowa operacja.")
-    result = _set_workshop_grant(
-        installation_id, edition, release_channel, action == "enable",
-    )
-    return HTMLResponse(_panel_html(
-        '<section class="card"><h1>Tryb warsztatowy zapisany</h1>'
-        '<p>Komputer pobierze zmienione uprawnienia po kolejnym kontakcie '
-        'z Multi-Servis. Nie uruchomiono żadnej licencji czasowej.</p>'
-        f'<p>Stan: {"WŁĄCZONY" if result["enabled"] else "ZAKOŃCZONY"} '
-        f'· {result["edition"]}</p>'
-        f'<a class="button-link" href="/multiguard/panel/pending/{installation_id}">'
-        'WRÓĆ DO KOMPUTERA</a></section>'
-    ), headers={"Cache-Control":"private, no-store"})
+    raise HTTPException(410,"Ten formularz został wycofany. Użyj Trybu serwisowego w formularzu licencji.")
 
 
 @router.get(
@@ -2347,50 +2509,39 @@ def multiguard_panel_pending(
     elif pending["status"] == "WAITING":
         direct_info = '<p>Sprzedaż bez przyjęcia sprzętu do warsztatu i bez numeru zlecenia.</p>'
         direct_buttons = f"""
-            <form method="post" action="/multiguard/panel/pending/{installation_id}/direct">
+            <form method="post" action="/multiguard/panel/pending/{installation_id}/direct"
+              data-owner-service-form>
               <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+              <input type="hidden" name="service_confirm" value="">
               <label>Edycja<select name="edition">
                 <option value="STANDARD">Standard</option>
                 <option value="PRO">Pro</option>
               </select></label>
-              <label>Okres<select name="months">
+              <label>Okres / tryb<select name="months">
                 <option value="3">3 miesiące</option>
                 <option value="6">6 miesięcy</option>
                 <option value="12" selected>12 miesięcy</option>
+                <option value="SERVICE">🔧 Tryb serwisowy (bezterminowy)</option>
               </select></label>
               <label>Kanał<select name="release_channel">
                 <option value="STABLE">Stabilna</option>
                 <option value="PILOT">Beta</option>
               </select></label>
-              <button type="submit">PRZYPISZ LICENCJĘ KLIENTA</button>
+              <button type="submit" data-owner-service-submit>PRZYPISZ LICENCJĘ KLIENTA</button>
+              {_owner_confirm_service_dialog(f"confirm-direct-{installation_id}")}
             </form>
         """
     else:
         direct_info = '<p>Ta instalacja ma już powiązanie ze zleceniem serwisowym.</p>'
         direct_buttons = ''
-    with engine.connect() as report_db:
-        workshop_report_row = report_db.execute(text("""
-            SELECT summary,reported_at FROM guard.workshop_reports
-            WHERE installation_id=:id
-        """), {"id":iid}).mappings().first()
-    if grant and grant["enabled"]:
-        workshop_state_html = (
-            '<p class="ok">TRYB WARSZTATOWY AKTYWNY — '
-            + _panel_escape(grant["edition"]) + ' / '
-            + _panel_escape(grant["release_channel"]) + '</p>'
-        )
-    else:
-        workshop_state_html = '<p>Tryb warsztatowy nie jest aktywny.</p>'
-    report_html = (
-        '<div class="detail-facts">'
-        + "".join(
-            '<div class="detail-fact"><b>'+_panel_escape(key)+'</b><span>'
-            +_panel_escape(value)+'</span></div>'
-            for key,value in (workshop_report_row["summary"] or {}).items()
-        ) + '</div>'
-        + '<p class="muted">Ostatni raport: '
-        + _panel_escape(workshop_report_row["reported_at"]) + '</p>'
-        if workshop_report_row else '<p class="muted">Komputer nie wysłał jeszcze raportu warsztatowego.</p>'
+    workshop_state_html = (
+        '<p class="ok">🔧 TRYB SERWISOWY — AKTYWNY · '
+        + _panel_escape(grant["edition"])
+        + '. Monitorowanie rozszerzone: '
+        + _panel_escape(grant.get("monitoring_profile") or "OFF")
+        + '. Zmiany i wyłączenie wyłącznie w '
+        + '<a href="/multiguard/panel#service-modes">panelu właściciela</a>.</p>'
+        if grant and grant["enabled"] else ""
     )
     return _panel_html(
         f"""
@@ -2407,41 +2558,23 @@ def multiguard_panel_pending(
             • host: {_panel_escape(public['hostname'] or '—')}
           </p>
           {name_form}
+          {workshop_state_html}
           <section class="card" id="client-license">
             <div class="eyebrow">LICENCJA KOMERCYJNA</div>
             <h2>Licencja klienta bez zlecenia</h2>
             {direct_info}
             {direct_buttons}
           </section>
-          <section class="card" id="workshop-mode">
-            {workshop_state_html}
-            {report_html}
-            <div class="eyebrow">BEZ LICENCJI CZASOWEJ</div>
-            <h2>Tryb warsztatowy</h2>
-            <p>Może działać na komputerze warsztatowym albo u klienta.
-               Nie wymaga zlecenia i nie nalicza 3/6/12 miesięcy.
-               Dostęp wymaga odnawiania potwierdzenia przez serwer.</p>
-            <form method="post" action="/multiguard/panel/pending/{installation_id}/workshop">
-              <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
-              <label>Edycja <select name="edition">
-                <option value="STANDARD">Standard</option>
-                <option value="PRO">Pro</option>
-              </select></label>
-              <label>Kanał <select name="release_channel">
-                <option value="STABLE">Stabilna</option>
-                <option value="PILOT">Beta</option>
-              </select></label>
-              <label>Akcja <select name="action">
-                <option value="enable">Włącz / zmień edycję</option>
-                <option value="disable">Zakończ tryb warsztatowy</option>
-              </select></label>
-              <button type="submit">ZAPISZ TRYB WARSZTATOWY</button>
-            </form>
-          </section>
           <section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>
-          <form method="post" action="/multiguard/panel/pending/{installation_id}/assign">
+          <form method="post" action="/multiguard/panel/pending/{installation_id}/assign"
+            data-owner-service-form>
+            <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+            <input type="hidden" name="service_confirm" value="">
             <label>Numer zlecenia Multi-Servis
-              <input name="reception_number" placeholder="np. MS-2026-00123" required>
+              <input name="reception_number" placeholder="np. MS-2026-00123"
+                list="owner-order-hints-{installation_id}" data-owner-order-suggest
+                autocomplete="off" required>
+              <datalist id="owner-order-hints-{installation_id}"></datalist>
             </label>
             <div class="grid">
               <label>Wersja
@@ -2450,11 +2583,12 @@ def multiguard_panel_pending(
                   <option value="PRO">Multi-Guard Pro</option>
                 </select>
               </label>
-              <label>Okres
+              <label>Okres / tryb
                 <select name="months">
                   <option value="3">3 miesiące</option>
                   <option value="6">6 miesięcy</option>
                   <option value="12" selected>12 miesięcy</option>
+                  <option value="SERVICE">🔧 Tryb serwisowy (bezterminowy)</option>
                 </select>
               </label>
               <label>Kanał
@@ -2464,7 +2598,8 @@ def multiguard_panel_pending(
                 </select>
               </label>
             </div>
-            <button type="submit">PRZYPISZ I PRZYGOTUJ LICENCJĘ</button>
+            <button type="submit" data-owner-service-submit>PRZYPISZ I PRZYGOTUJ LICENCJĘ</button>
+            {_owner_confirm_service_dialog(f"confirm-order-{installation_id}")}
           </form></section>
         </section>
         """
@@ -2479,22 +2614,42 @@ def multiguard_panel_pending_assign(
     installation_id: str,
     reception_number: str = Form(...),
     edition: str = Form(...),
-    months: int = Form(...),
+    months: str = Form(...),
     release_channel: str = Form("STABLE"),
+    service_confirm: str = Form(""),
+    csrf_token: str = Form(...),
     _: None = Depends(_panel_auth),
 ):
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403,"Wygasły lub nieprawidłowy formularz.")
     try:
         iid = uuid.UUID(installation_id)
     except ValueError as exc:
         raise HTTPException(400, "Nieprawidłowe ID instalacji.") from exc
 
     reception = _reception_by_number(reception_number)
+    if months == "SERVICE":
+        if service_confirm != "CONFIRM_WORKSHOP":
+            raise HTTPException(400,"Tryb serwisowy wymaga dodatkowego potwierdzenia.")
+        if _link_by_reception_id(reception["id"]):
+            raise HTTPException(409,"Zlecenie ma już licencję czasową Multi-Guard.")
+        _set_workshop_grant(iid,edition,release_channel,True)
+        with engine.begin() as con:
+            con.execute(text("""
+                UPDATE guard.workshop_grants
+                SET associated_reception_id=:rid,updated_at=now()
+                WHERE installation_id=:id
+            """),{"rid":reception["id"],"id":iid})
+        return RedirectResponse(
+            "/multiguard/panel#service-modes",status_code=303,
+            headers={"Cache-Control":"private, no-store"},
+        )
+    if months not in {"3","6","12"}:
+        raise HTTPException(400,"Wybierz okres 3, 6, 12 lub tryb serwisowy.")
     link = _assign_pending_to_reception(
-        iid,
-        reception["id"],
-        edition,
-        months,
-        release_channel,
+        iid,reception["id"],edition,int(months),release_channel,
     )
     pending = _pending_installation(iid)
     public = _pending_public(pending) if pending else {}
@@ -2517,12 +2672,258 @@ def multiguard_panel_pending_assign(
     )
 
 
+def _owner_workshop_manager_panel() -> str:
+    """OWNER central controls; no remote customer API or Windows UI changes."""
+    _ensure_schema()
+    with engine.connect() as con:
+        rows = con.execute(text("""
+            SELECT w.installation_id,w.edition,w.release_channel,w.enabled,
+                   w.monitoring_profile,w.associated_reception_id,
+                   p.hostname,p.manufacturer,p.model,so.reception_number
+            FROM guard.workshop_grants w
+            JOIN guard.pending_installations p ON p.installation_id=w.installation_id
+            LEFT JOIN service.service_orders so ON so.id=w.associated_reception_id
+            ORDER BY w.enabled DESC,w.updated_at DESC LIMIT 80
+        """)).mappings().all()
+    from app.routers.multiguard_panel_devices import owner_detected_name,owner_friendly_name
+    token = _workshop_csrf()
+    trs = []
+    for row in rows:
+        iid = row["installation_id"]
+        display = _panel_escape(owner_friendly_name(iid) or owner_detected_name(row))
+        edition = _panel_escape(row["edition"])
+        status = "<span class='badge mg-gold'>AKTYWNY</span>" if row["enabled"] else "<span class='badge'>WYŁĄCZONY</span>"
+        selected = row["monitoring_profile"] if row["enabled"] else "OFF"
+        link = (
+            f'<span class="muted">Zlecenie {_panel_escape(row["reception_number"])}</span>'
+            if row["reception_number"] else '<span class="muted">Bez zlecenia</span>'
+        )
+        controls = '<span class="muted">Oczekuje na nowe uprawnienia</span>'
+        if row["enabled"]:
+            options = "".join(
+                f'<option value="{value}" {"selected" if value==selected else ""}>{label}</option>'
+                for value,label in (
+                    ("STANDARD","Standardowy"),("OBSERVATION","Obserwacja"),
+                    ("INTENSIVE","Intensywny"),
+                )
+            )
+            controls = f"""
+              <div class="owner-service-controls">
+                <form method="post" action="/multiguard/panel/workshop/{iid}/monitoring"
+                    data-owner-monitor-form>
+                  <input type="hidden" name="csrf_token" value="{token}">
+                  <label class="owner-monitor-toggle">
+                    <input type="checkbox" name="monitoring_enabled" value="yes"
+                      {"checked" if selected!="OFF" else ""} data-owner-monitor-toggle>
+                    Monitorowanie rozszerzone — WŁĄCZONE / WYŁĄCZONE
+                  </label>
+                  <label>Poziom monitorowania
+                    <select name="profile" aria-label="Poziom monitorowania dla {display}"
+                        data-owner-monitor-profile {"disabled" if selected=="OFF" else ""}>
+                      {options}
+                    </select>
+                  </label>
+                  <button type="submit">ZAPISZ MONITOROWANIE</button>
+                </form>
+                <a class="button-link compact" href="/multiguard/panel/workshop/{iid}/reports">
+                  HISTORIA RAPORTÓW
+                </a>
+                <button type="button" class="pending-archive-trigger"
+                  onclick="document.getElementById('disable-workshop-{iid}').showModal()">
+                  WYŁĄCZ TRYB SERWISOWY
+                </button>
+                <dialog class="pending-owner-dialog" id="disable-workshop-{iid}"
+                  aria-labelledby="disable-workshop-title-{iid}">
+                  <h3 id="disable-workshop-title-{iid}">Wyłączyć tryb serwisowy?</h3>
+                  <p>Komputer {display} po kolejnym kontakcie z Multi-Servis
+                     wróci do stanu „Oczekuje na licencję Multi-Servis”.
+                     Bez Internetu zachowa dotychczasowe uprawnienia.</p>
+                  <div class="pending-dialog-buttons">
+                    <button type="button" class="pending-cancel-button"
+                      onclick="this.closest('dialog').close()">ANULUJ</button>
+                    <form method="post" action="/multiguard/panel/workshop/{iid}/disable">
+                      <input type="hidden" name="csrf_token" value="{token}">
+                      <input type="hidden" name="confirmation" value="CONFIRM_DISABLE">
+                      <button type="submit" class="pending-confirm-archive">
+                        TAK, WYŁĄCZ TRYB SERWISOWY
+                      </button>
+                    </form>
+                  </div>
+                </dialog>
+              </div>"""
+        trs.append(
+            f"<tr><td><a href='/multiguard/panel/pending/{iid}'>{display}</a><br>"
+            + link + "</td><td>" + edition + "</td><td>" + status
+            + "</td><td>" + controls + "</td></tr>"
+        )
+    return f"""
+      <section class="card" id="service-modes">
+        <div class="eyebrow">MULTI-GUARD / PANEL WŁAŚCICIELA</div>
+        <h2>Aktywne tryby serwisowe i monitorowanie</h2>
+        <p>Tryb serwisowy działa również bez Internetu. Rozszerzone
+           monitorowanie jest domyślnie wyłączone. Możesz wybrać
+           Standardowy, Obserwacja lub Intensywny dla każdego komputera.
+           Wyłączenie uprawnienia jest możliwe tylko tutaj.</p>
+        <div class="table-wrap"><table style="min-width:900px">
+          <thead><tr><th>Komputer / zlecenie</th><th>Edycja</th>
+            <th>Tryb serwisowy</th><th>Monitorowanie i sterowanie</th></tr></thead>
+          <tbody>{''.join(trs) or '<tr><td colspan="4">Brak komputerów z trybem serwisowym.</td></tr>'}</tbody>
+        </table></div>
+      </section>
+    """
+
+
+@router.get("/multiguard/panel/workshop/{installation_id}/reports",
+            response_class=HTMLResponse)
+def owner_workshop_reports(
+    installation_id: uuid.UUID,
+    _: None = Depends(_panel_auth),
+):
+    """OWNER-only recent time series; no raw private files, no public URL."""
+    _ensure_schema()
+    with engine.connect() as con:
+        grant=con.execute(text("""
+            SELECT edition,enabled,monitoring_profile FROM guard.workshop_grants
+            WHERE installation_id=:id
+        """),{"id":installation_id}).mappings().first()
+        if grant is None:
+            raise HTTPException(404,"Brak trybu serwisowego tej instalacji.")
+        logs=con.execute(text("""
+            SELECT reported_at,summary FROM guard.workshop_report_history
+            WHERE installation_id=:id ORDER BY reported_at DESC LIMIT 60
+        """),{"id":installation_id}).mappings().all()
+    trs=[]
+    for row in logs:
+        summary=row["summary"] if isinstance(row["summary"],dict) else {}
+        sample_list=summary.get("samples",[])
+        if not isinstance(sample_list,list):
+            sample_list=[]
+        cpu_values=[v["cpuLoadPercent"] for v in sample_list
+                    if isinstance(v,dict) and isinstance(v.get("cpuLoadPercent"),(float,int))]
+        avg_cpu=f"{sum(cpu_values)/len(cpu_values):.1f}%" if cpu_values else "—"
+        trs.append(
+            "<tr><td>"+_panel_escape(row["reported_at"])+"</td>"
+            "<td>"+_panel_escape(summary.get("monitoringProfile","—"))+"</td>"
+            "<td>"+_panel_escape(len(sample_list))+"</td>"
+            "<td>"+_panel_escape(avg_cpu)+"</td>"
+            "<td>"+_panel_escape(summary.get("whea24h","—"))+"</td>"
+            "<td>"+_panel_escape(summary.get("kernelPower7d","—"))+"</td></tr>"
+        )
+    return HTMLResponse(_panel_html(f"""
+      <section class="card">
+        <a href="/multiguard/panel#service-modes">← Tryby serwisowe</a>
+        <h1>Historia raportów diagnostycznych</h1>
+        <p>Instalacja {_panel_escape(installation_id)} ·
+           edycja {_panel_escape(grant["edition"])} ·
+           monitorowanie {_panel_escape(grant["monitoring_profile"])}.</p>
+        <p>Ostatnie 60 raportów (retencja maksymalnie 30 dni).
+           Raportowanie wyłączone nie usuwa starszej historii.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Otrzymano</th><th>Profil</th><th>Próbki</th>
+          <th>Średnie użycie CPU</th><th>Błędy WHEA 24h</th>
+          <th>Kernel-Power 7 dni</th></tr></thead>
+          <tbody>{''.join(trs) or '<tr><td colspan="6">Brak raportów.</td></tr>'}</tbody>
+        </table></div>
+      </section>
+    """),headers={"Cache-Control":"private, no-store"})
+
+
+@router.post("/multiguard/panel/workshop/{installation_id}/monitoring")
+def owner_set_workshop_monitoring(
+    installation_id: uuid.UUID,
+    profile: str = Form("STANDARD"),
+    monitoring_enabled: str = Form(""),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Wygasły lub nieprawidłowy formularz.")
+    if monitoring_enabled not in {"","yes"} or profile not in {"STANDARD","OBSERVATION","INTENSIVE"}:
+        raise HTTPException(400, "Nieprawidłowe ustawienia monitorowania.")
+    profile=profile if monitoring_enabled=="yes" else "OFF"
+    _ensure_schema()
+    with engine.begin() as con:
+        grant = con.execute(text("""
+            SELECT edition,release_channel,monitoring_profile,enabled
+            FROM guard.workshop_grants WHERE installation_id=:id FOR UPDATE
+        """), {"id":installation_id}).mappings().first()
+        if not grant or not grant["enabled"]:
+            raise HTTPException(409, "Tryb serwisowy nie jest aktywny.")
+        if grant["monitoring_profile"] != profile:
+            con.execute(text("""
+                UPDATE guard.workshop_grants
+                SET monitoring_profile=:profile,updated_at=now()
+                WHERE installation_id=:id
+            """), {"profile":profile,"id":installation_id})
+            con.execute(text("""
+                INSERT INTO guard.workshop_grant_audit(
+                    installation_id,before_state,after_state
+                ) VALUES (:id,CAST(:before AS jsonb),CAST(:after AS jsonb))
+            """), {
+                "id":installation_id,
+                "before":json.dumps({"monitoring_profile":grant["monitoring_profile"]}),
+                "after":json.dumps({"monitoring_profile":profile}),
+            })
+    return RedirectResponse("/multiguard/panel#service-modes",status_code=303)
+
+
+@router.post("/multiguard/panel/workshop/{installation_id}/disable")
+def owner_disable_workshop(
+    installation_id: uuid.UUID,
+    confirmation: str = Form(...),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Wygasły lub nieprawidłowy formularz.")
+    if confirmation != "CONFIRM_DISABLE":
+        raise HTTPException(400, "Wyłączenie wymaga osobnego potwierdzenia.")
+    grant = _workshop_grant(installation_id)
+    if not grant or not grant["enabled"]:
+        raise HTTPException(409, "Tryb serwisowy nie jest aktywny.")
+    _set_workshop_grant(
+        installation_id,grant["edition"],grant["release_channel"],False,
+    )
+    return RedirectResponse("/multiguard/panel#service-modes",status_code=303)
+
+
+@router.get("/multiguard/panel/service-orders/suggest")
+def owner_suggest_service_orders(q: str = "", _: None = Depends(_panel_auth)):
+    """Authenticated number fragments only: max 8 matching real service orders."""
+    if len(q)>40:
+        raise HTTPException(400,"Zbyt długi fragment numeru zlecenia.")
+    digits = "".join(ch for ch in q if "0" <= ch <= "9")
+    if len(digits)<3:
+        return {"results":[]}
+    with engine.connect() as con:
+        rows=con.execute(text("""
+            SELECT so.reception_number,d.manufacturer,d.model
+            FROM service.service_orders so
+            LEFT JOIN core.devices d ON d.id=so.device_id
+            WHERE regexp_replace(so.reception_number,'[^0-9]','','g') LIKE :query
+            ORDER BY so.received_at DESC NULLS LAST,so.reception_number DESC
+            LIMIT 8
+        """),{"query":"%"+digits+"%"}).mappings().all()
+    return {"results":[{
+        "number":str(row["reception_number"]),
+        "label":str(row["reception_number"]) + " — "
+                 + " ".join(x for x in (
+                     str(row["manufacturer"] or "").strip(),
+                     str(row["model"] or "").strip()) if x),
+    } for row in rows]}
+
+
 @router.get("/multiguard/panel", response_class=HTMLResponse)
 def multiguard_panel(
     _: None = Depends(_panel_auth),
 ):
     return _panel_html(
-        """
+        f"""
+        {_owner_workshop_manager_panel()}
         <section class="card">
           <div class="eyebrow">MULTI-SERVIS / AKTYWACJA PROGRAMU</div>
           <h1>Nowa licencja Multi-Guard</h1>
