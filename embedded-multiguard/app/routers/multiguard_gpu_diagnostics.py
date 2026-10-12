@@ -112,7 +112,7 @@ def _safe_report(raw):
         raise HTTPException(400,"Niespójna lista GPU.")
     missing=0
     names=re.compile(r"[\w .()\-+&,/]{1,120}",re.UNICODE)
-    version=re.compile(r"[0-9A-Za-z.\-]{1,64}")
+    driver_pattern=re.compile(r"[0-9A-Za-z.\-]{1,64}")
     hex4=re.compile(r"[0-9A-Fa-f]{4}")
     for gpu in adapters:
         if not isinstance(gpu,dict) or set(gpu)!={"name","kind","loadAvailable",
@@ -125,7 +125,7 @@ def _safe_report(raw):
         if type(gpu["loadAvailable"]) is not bool or type(gpu["temperatureAvailable"]) is not bool:
             raise HTTPException(400,"Nieprawidłowa dostępność odczytu.")
         missing+=not gpu["loadAvailable"]
-        for key,pattern in (("driverVersion",version),("vendorId",hex4),("deviceId",hex4)):
+        for key,pattern in (("driverVersion",driver_pattern),("vendorId",hex4),("deviceId",hex4)):
             v=gpu[key]
             if v is not None and (not isinstance(v,str) or not pattern.fullmatch(v)):
                 raise HTTPException(400,f"Nieprawidłowe pole: {key}.")
