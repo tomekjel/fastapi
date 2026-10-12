@@ -1,4 +1,4 @@
-"""Authenticated, opt-in cross-OEM GPU missing-utilization development reports.
+"""Authenticated, opt-in cross-OEM hardware compatibility diagnostics.
 
 Payload is strictly allowlisted. No hostnames, device serial numbers,
 full PNP instance IDs, hardware GUIDs, user accounts, process lists,
@@ -61,12 +61,16 @@ def _safe_report(raw):
     if not isinstance(raw,dict):
         raise HTTPException(400,"Brak raportu GPU.")
     allowed={"schemaVersion","issueCode","appVersion","windowsBuild","probeAvailable","cpuModel","systemManufacturer","systemModel","gpuCount",
+             "gpuMissingTemperatureCount","cpuTemperatureAvailable","cpuThermalZoneAvailable",
+             "coolingState","fanCount","fanRpmCount","fanTelemetryIncomplete",
              "missingCount","gpuEngineCounterCount","gpuEngineLuidCount",
              "gpuEnginePhysicalCount","directxLuidMatchedCount","adapters"}
     if set(raw)-allowed:
         raise HTTPException(400,"Raport GPU zawiera niedozwolone pola.")
-    if raw.get("schemaVersion")!=1 or raw.get("issueCode")!="GPU_LOAD_UNAVAILABLE":
-        raise HTTPException(400,"Nieznany format problemu GPU.")
+    version=raw.get("schemaVersion")
+    issue=raw.get("issueCode")
+    if (version,issue) not in ((1,"GPU_LOAD_UNAVAILABLE"),(2,"HARDWARE_TELEMETRY_INCOMPLETE")):
+        raise HTTPException(400,"Nieznany format diagnostyki sprzętowej.")
     if not isinstance(raw.get("appVersion"),str) or not re.fullmatch(r"[0-9A-Za-z.+-]{1,32}",raw["appVersion"]):
         raise HTTPException(400,"Nieprawidłowa wersja aplikacji.")
     if type(raw.get("probeAvailable")) is not bool:
@@ -84,8 +88,25 @@ def _safe_report(raw):
         n=raw.get(key)
         if type(n) is not int or n<0 or n>10000:
             raise HTTPException(400,f"Nieprawidłowe pole GPU: {key}.")
-    if not 1 <= raw["missingCount"] <= raw["gpuCount"] <= 8:
+    if not 0 <= raw["missingCount"] <= raw["gpuCount"] <= 8:
         raise HTTPException(400,"Nieprawidłowa liczba GPU.")
+    if version==1 and raw["missingCount"]<1:
+        raise HTTPException(400,"Brakujące obciążenie GPU jest wymagane dla wersji 1.")
+    if version==2:
+        if (type(raw.get("cpuTemperatureAvailable")) is not bool or
+            type(raw.get("cpuThermalZoneAvailable")) is not bool or
+            type(raw.get("fanTelemetryIncomplete")) is not bool):
+            raise HTTPException(400,"Brak wymaganych flag zgodności sprzętowej.")
+        state=raw.get("coolingState")
+        if state not in ("available","not_exposed","unsupported","checking","unavailable","unknown"):
+            raise HTTPException(400,"Nieznany stan telemetrii chłodzenia.")
+        for key in ("gpuMissingTemperatureCount","fanCount","fanRpmCount"):
+            value=raw.get(key)
+            if type(value) is not int or value<0 or value>32:
+                raise HTTPException(400,f"Nieprawidłowa liczba czujników: {key}.")
+        if (raw["gpuMissingTemperatureCount"]>raw["gpuCount"] or
+            raw["fanRpmCount"]>raw["fanCount"]):
+            raise HTTPException(400,"Niespójna lista brakujących czujników.")
     adapters=raw.get("adapters")
     if not isinstance(adapters,list) or len(adapters)!=raw["gpuCount"]:
         raise HTTPException(400,"Niespójna lista GPU.")
@@ -110,6 +131,15 @@ def _safe_report(raw):
                 raise HTTPException(400,f"Nieprawidłowe pole: {key}.")
     if missing!=raw["missingCount"]:
         raise HTTPException(400,"Niezgodna liczba brakujących odczytów.")
+    if version==2:
+        temp_missing=sum(not card["temperatureAvailable"] for card in adapters)
+        if temp_missing!=raw["gpuMissingTemperatureCount"]:
+            raise HTTPException(400,"Niezgodne dane o temperaturach GPU.")
+        if (not missing and not temp_missing and raw["cpuTemperatureAvailable"] and
+                not raw["fanTelemetryIncomplete"]):
+            raise HTTPException(400,"Brak wykrytego problemu zgodności sprzętowej.")
+        if raw["fanCount"]==0 and raw["fanRpmCount"]!=0:
+            raise HTTPException(400,"Brak wentylatorów przy dodatnich odczytach RPM.")
     if len(json.dumps(raw,ensure_ascii=False).encode("utf-8"))>8192:
         raise HTTPException(413,"Diagnostyka GPU przekracza 8 KB.")
     return raw
