@@ -14,6 +14,7 @@ ROUTER_DIR="$APP_ROOT/app/routers"
 LICENSE_ROUTER_FILE="$ROUTER_DIR/multiguard_license.py"
 RUNTIME_ROUTER_FILE="$ROUTER_DIR/multiguard_runtime.py"
 REMOTE_ROUTER_FILE="$ROUTER_DIR/multiguard_remote.py"
+WORKSHOP_REMOTE_FILE="$ROUTER_DIR/multiguard_workshop_remote.py"
 MESH_ADAPTER_FILE="$ROUTER_DIR/multiguard_meshcentral.py"
 UPDATES_ROUTER_FILE="$ROUTER_DIR/multiguard_updates.py"
 SERVICE_PANEL_FILE="$ROUTER_DIR/multiguard_service_panel.py"
@@ -184,6 +185,7 @@ DEPLOY_STARTED=1
 curl -fsSL "$RAW_BASE/app/routers/multiguard_license.py" -o "$LICENSE_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_runtime.py" -o "$RUNTIME_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_remote.py" -o "$REMOTE_ROUTER_FILE"
+curl -fsSL "$RAW_BASE/app/routers/multiguard_workshop_remote.py" -o "$WORKSHOP_REMOTE_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_meshcentral.py" -o "$MESH_ADAPTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_updates.py" -o "$UPDATES_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_service_panel.py" -o "$SERVICE_PANEL_FILE"
@@ -220,6 +222,7 @@ import_lines = [
     "from app.routers import multiguard_license",
     "from app.routers import multiguard_runtime",
     "from app.routers import multiguard_remote",
+    "from app.routers import multiguard_workshop_remote",
     "from app.routers import multiguard_updates",
     "from app.routers import multiguard_service_panel",
     "from app.routers import multiguard_panel_settings",
@@ -231,6 +234,7 @@ include_lines = [
     "app.include_router(multiguard_license.router)",
     "app.include_router(multiguard_runtime.router)",
     "app.include_router(multiguard_remote.router)",
+    "app.include_router(multiguard_workshop_remote.router)",
     "app.include_router(multiguard_updates.router)",
     "app.include_router(multiguard_service_panel.router)",
     "app.include_router(multiguard_panel_settings.router)",
