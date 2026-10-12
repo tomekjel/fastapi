@@ -366,8 +366,11 @@ def owner_workshop_remote_connect(session_id: uuid.UUID,
             raise HTTPException(409, "Nie znaleziono powiązanego MeshAgent.")
         if row["status"] not in {"CONSENTED", "CONNECT_READY"}:
             raise HTTPException(409, "Klient nie wyraził aktualnej zgody na połączenie.")
-        if row["status"] == "CONSENTED" and row["expires_at"] < now:
-            raise HTTPException(410, "Zgoda wygasła.")
+        # Reopening an earlier link must not silently extend user's consent.
+        if (not row["consented_at"]
+                or row["consented_at"] + timedelta(minutes=10) < now
+                or row["expires_at"] < now):
+            raise HTTPException(410, "Zgoda wygasła. Klient musi potwierdzić nowe żądanie.")
         granted = list(row["granted_capabilities"] or [])
         if "desktop" not in granted:
             raise HTTPException(403, "Nie ma zgody na pulpit.")
@@ -387,7 +390,7 @@ def owner_workshop_remote_connect(session_id: uuid.UUID,
         with engine.begin() as con:
             # Recheck owner revocation and consent after the external call.
             row2 = con.execute(text("""
-                SELECT status,granted_capabilities,expires_at
+                SELECT status,granted_capabilities,expires_at,consented_at
                 FROM guard.workshop_remote_sessions WHERE id=:sid FOR UPDATE
             """), {"sid": session_id}).mappings().first()
             _active_pro(con, row["installation_id"])
@@ -395,7 +398,10 @@ def owner_workshop_remote_connect(session_id: uuid.UUID,
                 raise HTTPException(409, "Zgoda została cofnięta.")
             if "desktop" not in list(row2["granted_capabilities"] or []):
                 raise HTTPException(409, "Brak zgody na pulpit.")
-            if row2["status"] == "CONSENTED" and row2["expires_at"] < _now():
+            current=_now()
+            if (row2["expires_at"] < current
+                    or row2["consented_at"] is None
+                    or row2["consented_at"] + timedelta(minutes=10) < current):
                 raise HTTPException(410, "Zgoda wygasła.")
             con.execute(text("""
                 UPDATE guard.workshop_remote_sessions
