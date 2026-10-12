@@ -7,3 +7,5 @@ Read-only verification after owner console confirmed OWNER-WEB AGENT: DEPLOYED s
 Postrelease OWNER uninstall/archive route verification — 2026-10-10 rev5
 
 OWNER release seq6 read-only route verification — rev6
+
+OWNER seq13 — read-only postrelease safety check after one-time service-order notes rollout: verify health, required routes, and anonymous 401. No customer data, no server mutation. Source f7186463c64b711d8933590c95dae6c5af5772b7.
