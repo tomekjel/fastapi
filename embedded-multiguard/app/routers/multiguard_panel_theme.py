@@ -269,6 +269,14 @@ input[type=hidden] {display:none}
 .detail-grid b,.detail-fact b,.detail-fact span {display:block}
 .detail-grid b,.detail-fact b {color:#aabed0;font-weight:400;font-size:14px;margin-bottom:6px}
 .detail-grid span,.detail-fact span {font-size:16px;color:#e4edf4}
+/* Actual time-stamped Android notes, read-only OWNER. Do not confuse these
+   with the legacy technician_notes/customer_notes fields on the order. */
+.service-note-preview {white-space:pre-wrap;overflow-wrap:anywhere;color:#c2d7e4;line-height:1.4;max-width:380px}
+.service-notes-timeline {display:grid;gap:9px;margin-top:9px}
+.service-note-entry {border:1px solid rgba(157,189,212,.24);border-left:3px solid var(--gold);border-radius:9px;background:rgba(5,20,33,.48);padding:11px 15px}
+.service-note-meta {display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;font-size:12px;color:var(--subtle)}
+.service-note-entry p {white-space:pre-wrap;overflow-wrap:anywhere;margin:7px 0 0;font-size:15px;line-height:1.52;color:var(--text);user-select:text}
+.owner-service-notes .section-head {margin-bottom:0}
 .notes-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:17px}
 .detail-note strong {color:#ddbd8b;font-size:15px;font-weight:400}
 .detail-note p {white-space:pre-wrap;overflow-wrap:anywhere;margin:7px 0 0;font-size:15px}
