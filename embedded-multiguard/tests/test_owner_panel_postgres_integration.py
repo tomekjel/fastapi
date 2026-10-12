@@ -79,6 +79,11 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             """CREATE TABLE IF NOT EXISTS service.service_order_status_history(
                 service_order_id UUID REFERENCES service.service_orders(id),
                 old_status TEXT,new_status TEXT,changed_at TIMESTAMPTZ)""",
+            """CREATE TABLE IF NOT EXISTS service.service_order_notes(
+                id UUID PRIMARY KEY,service_order_id UUID REFERENCES service.service_orders(id),
+                note_text TEXT NOT NULL,visibility TEXT NOT NULL DEFAULT 'STAFF',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),deleted_at TIMESTAMPTZ)""",
             """CREATE OR REPLACE VIEW service.v_service_order_summary AS
                 SELECT s.id,s.reception_number,s.status,s.received_at,s.completed_at,s.ready_at,
                        d.manufacturer,d.model,d.serial_number,d.device_type,
@@ -156,6 +161,20 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
                 service_order_id,service_amount,material_cost,donor_material_value)
               VALUES(:id,280,40,0)
             """),{"id":order})
+        # Native Android note history is a different table from the
+        # service_orders.technician_notes/customer_notes legacy fields.
+        for id,order,content,visibility,deleted in [
+            (uuid.uuid4(),order_a,"Pierwsza notatka: problem z BIOS","STAFF",None),
+            (uuid.uuid4(),order_a,"Druga notatka z Androida: sprawdź RAM <script>alert(1)</script>","OWNER_ONLY",None),
+            (uuid.uuid4(),order_a,"Ukryta notatka po usunięciu","STAFF","2025-10-10 12:00:00+00"),
+            (uuid.uuid4(),order_b,"TAJNA_INNEGO_ZLECENIA","OWNER_ONLY",None),
+        ]:
+            db.execute(text("""
+                INSERT INTO service.service_order_notes(
+                    id,service_order_id,note_text,visibility,deleted_at
+                ) VALUES(:id,:order_id,:note,:visibility,:deleted_at)
+            """),{"id":id,"order_id":order,"note":content,
+                   "visibility":visibility,"deleted_at":deleted})
         db.execute(text("""
             INSERT INTO core.devices(id,manufacturer,model,serial_number,
                                      hostname,device_type)
@@ -347,6 +366,19 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert f'/multiguard/panel/pending/{waiting_id}' not in get("/multiguard/panel/computers").text
     ensure(get(f"/multiguard/panel/service/{order_a}").status_code,200,"Service detail")
     d=get(f"/multiguard/panel/service/{order_a}").text
+    assert "Notatki do zlecenia (2)" in d
+    assert "Pierwsza notatka: problem z BIOS" in d
+    assert "Druga notatka z Androida" in d
+    assert "&lt;script&gt;" in d and "<script>alert(1)</script>" not in d
+    assert "Tylko właściciel" in d
+    assert "Ukryta notatka po usunięciu" not in d
+    assert "TAJNA_INNEGO_ZLECENIA" not in d
+    all_page=get("/multiguard/panel/service?status=all").text
+    assert "Ostatnia notatka" in all_page and "Druga notatka z Androida" in all_page
+    assert get("/multiguard/panel/service?q=problem%20z%20BIOS&status=all").status_code==200
+    lookup=get("/multiguard/panel/service?q=problem%20z%20BIOS&status=all").text
+    assert f'CI-{str(order_a)[:8]}' in lookup and f'CI-{str(order_b)[:8]}' not in lookup
+    assert get(f"/multiguard/panel/service/{order_a}",False).status_code==401
     assert '<details class="card finance-disclosure">' in d, "Financial card must be closed by default"
     assert 'finance-disclosure" open' not in d
     # Web handover is owner-authenticated + CSRF, and commits the service
