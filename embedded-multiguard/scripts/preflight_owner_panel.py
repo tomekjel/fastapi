@@ -28,6 +28,8 @@ NEEDED = {
         "manufacturer","model","serial_number","device_type","display_name","phone_e164",
     },
     "service.owner_finances": {"service_order_id","service_amount","material_cost","donor_material_value"},
+    "service.service_order_notes": {"id","service_order_id","note_text","visibility",
+                                     "created_at","updated_at","deleted_at"},
     "service.service_order_media": {"id","service_order_id","storage_object_id",
                                    "media_kind","caption","created_at","sort_order","deleted_at"},
     "core.storage_objects": {"id","object_key","original_filename",
