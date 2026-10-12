@@ -19,7 +19,9 @@ from app.routers.multiguard_license import (
     _ensure_schema as _ensure_license_schema,
     _panel_auth,
     _panel_html,
+    _workshop_csrf,
 )
+from app.routers.multiguard_workshop_remote import _ensure_schema as _ensure_remote_schema
 
 router = APIRouter(tags=["multiguard-owner-remote-console"])
 
@@ -42,14 +44,20 @@ def _recent(value: Any) -> bool:
 def _remote_candidates():
     """Both grant stores: workshop first, then paid PRO; no Standard entries."""
     _ensure_license_schema()
+    _ensure_remote_schema()
+    from app.routers.multiguard_remote import _ensure_schema as _ensure_paid_remote_schema
+    _ensure_paid_remote_schema()
     with engine.connect() as con:
         workshop = con.execute(text("""
             SELECT pi.installation_id,
                    pi.manufacturer,pi.model,pi.hostname,pi.last_seen_at,
-                   pi.first_seen_at, 'WORKSHOP' AS source
+                   pi.first_seen_at, 'WORKSHOP' AS source,
+                   (wn.mesh_node_id IS NOT NULL) AS mesh_ready
             FROM guard.pending_installations pi
             JOIN guard.workshop_grants wg
               ON wg.installation_id=pi.installation_id AND wg.enabled=TRUE
+            LEFT JOIN guard.workshop_remote_nodes wn
+              ON wn.installation_id=pi.installation_id
             WHERE wg.edition='PRO'
               AND pi.status IN ('WAITING','IGNORED')
             ORDER BY pi.first_seen_at DESC
@@ -61,7 +69,8 @@ def _remote_candidates():
                    COALESCE(d.model,pi.model) AS model,
                    COALESCE(d.hostname,pi.hostname) AS hostname,
                    gi.last_seen_at, gi.created_at AS first_seen_at,
-                   'CLIENT' AS source
+                   'CLIENT' AS source,
+                   (gi.mesh_node_id IS NOT NULL) AS mesh_ready
             FROM guard.installations gi
             LEFT JOIN guard.pending_installations pi
               ON pi.installation_id=gi.installation_external_id
@@ -84,7 +93,7 @@ def _remote_candidates():
                or str(row["hostname"] or "").strip() or "Komputer")
         results.append({"uuid":uid,"short":_short_id(uid),"name":label,
                         "recent":_recent(row["last_seen_at"]),
-                        "source":row["source"]})
+                        "source":row["source"],"meshReady":bool(row["mesh_ready"])})
     return results
 
 
@@ -158,6 +167,8 @@ def owner_remote_console(_: None = Depends(_panel_auth)):
             f'data-name="{_e(row["name"])}" '
             f'data-uuid="{_e(row["uuid"])}" '
             f'data-recent="{int(row["recent"])}" '
+            f'data-source="{_e(row["source"])}" '
+            f'data-mesh="{int(row["meshReady"])}" '
             f'aria-label="{_e(row["short"]+" "+row["name"])}">'
             f'<i class="owner-remote-presence {"recent" if row["recent"] else ""}" '
             'aria-hidden="true"></i>'
@@ -169,6 +180,7 @@ def owner_remote_console(_: None = Depends(_panel_auth)):
         items.append('<p class="owner-remote-empty">Brak komputerów z aktywnym PRO.</p>')
     body = f"""
     <style>{REMOTE_LAYOUT_CSS}</style>
+    <input type="hidden" id="owner-remote-csrf" value="{_e(_workshop_csrf())}">
     <section class="card" style="padding:12px 15px;margin-bottom:10px">
       <div class="section-head" style="margin:0">
         <div><div class="eyebrow">MULTI-GUARD / POMOC ZDALNA</div>
@@ -233,15 +245,129 @@ def owner_remote_console(_: None = Depends(_panel_auth)):
         status.textContent = count+' / '+entries.length+' komputerów';
       }};
       input.addEventListener('input', filter);
+      let selected=null;
+      let sessionId=null;
+      let sessionStatus='';
+      let polling=null;
+      const connectButton=document.getElementById('owner-remote-connect');
+      const endButton=document.getElementById('owner-remote-end');
+      const stage=document.getElementById('owner-remote-view');
+      const csrf=document.getElementById('owner-remote-csrf').value;
+      async function api(url,body) {{
+        const opts={{method:body?'POST':'GET',cache:'no-store',credentials:'same-origin'}};
+        if(body) {{opts.headers={{'Content-Type':'application/json'}};
+          opts.body=JSON.stringify({{...body,csrfToken:csrf}});}}
+        const response=await fetch(url,opts);
+        let data=null;
+        try {{data=await response.json();}}catch(e){{}}
+        if(!response.ok) {{
+          const reason=(typeof data?.detail==='string'?data.detail:'Serwer nie potwierdził operacji.');
+          throw new Error(reason+' (HTTP '+response.status+')');
+        }}
+        return data;
+      }}
+      function showError(error) {{
+        status.textContent='Błąd';
+        msg.textContent='Nie można rozpocząć zdalnej pomocy';
+        detail.textContent=error?.message||String(error);
+      }}
+      function resetSession() {{
+        if(polling)clearInterval(polling);
+        polling=null;sessionId=null;sessionStatus='';
+        endButton.disabled=true;
+        connectButton.textContent='POŁĄCZ';
+        connectButton.disabled=!selected||selected.dataset.source!=='WORKSHOP'||selected.dataset.mesh!=='1';
+      }}
+      function render(session) {{
+        if(!session||session.sessionId!==sessionId)return;
+        sessionStatus=session.status;
+        status.textContent={{REQUESTED:'Oczekiwanie na zgodę klienta',CONSENTED:'Klient potwierdził',
+          CONNECT_READY:'Sesja gotowa',ACTIVE:'Połączono',DENIED:'Klient odmówił',
+          ENDED:'Sesja zakończona',EXPIRED:'Zgoda wygasła',ERROR:'Błąd sesji'}}[sessionStatus]||sessionStatus;
+        if(['DENIED','ENDED','EXPIRED','ERROR'].includes(sessionStatus)){{
+          msg.textContent=status.textContent;
+          detail.textContent='Aby ponowić pomoc, poproś klienta o nową zgodę.';
+          resetSession();return;
+        }}
+        endButton.disabled=false;
+        if(sessionStatus==='CONSENTED'||sessionStatus==='CONNECT_READY'){{
+          connectButton.disabled=false;
+          connectButton.textContent='OTWÓRZ PULPIT';
+          msg.textContent='Klient wyraził zgodę';
+          detail.textContent='Możesz teraz otworzyć jednorazowe połączenie MeshCentral.';
+        }}else{{
+          connectButton.disabled=true;
+          msg.textContent='Oczekiwanie na zgodę klienta';
+          detail.textContent='Na komputerze klienta musi pojawić się prośba o zgodę.';
+        }}
+      }}
+      async function refresh() {{
+        if(!sessionId)return;
+        try {{render(await api('/multiguard/panel/remote/session/'+encodeURIComponent(sessionId)));}}
+        catch(e) {{showError(e);}}
+      }}
       for(const el of entries) el.addEventListener('click', () => {{
+        if(sessionId){{status.textContent='Najpierw zakończ bieżącą sesję.';return;}}
         for(const previous of entries) previous.classList.remove('is-selected');
-        el.classList.add('is-selected');
+        el.classList.add('is-selected');selected=el;
         title.textContent=el.dataset.id+' · '+el.dataset.name;
         msg.textContent=el.dataset.name;
         detail.textContent='ID: '+el.dataset.id+
-          '. Ostatni kontakt: '+(el.dataset.recent==='1'?'do 10 minut':'niepotwierdzony w ostatnich 10 minutach')+
-          '. Wybór komputera nie uruchamia samoczynnie żadnego połączenia.';
+          '. Ostatni kontakt: '+(el.dataset.recent==='1'?'do 10 minut':'niepotwierdzony ostatnio')+
+          (el.dataset.source!=='WORKSHOP'?'. Licencja klienta: zdalny dostęp wymaga zgłoszenia serwisowego.':
+          el.dataset.mesh!=='1'?'. Brak potwierdzonego powiązania MeshAgent. Nie można połączyć.':
+          '. Wybierz POŁĄCZ, aby wysłać prośbę o zgodę.');
         status.textContent='Wybrano '+el.dataset.id;
+        connectButton.disabled=el.dataset.source!=='WORKSHOP'||el.dataset.mesh!=='1';
+        connectButton.textContent='POŁĄCZ';
+      }});
+      connectButton.addEventListener('click',async()=>{{
+        if(!selected)return;
+        connectButton.disabled=true;
+        try {{
+          if(!sessionId){{
+            const response=await api('/multiguard/panel/remote/start',{{installationId:selected.dataset.uuid}});
+            sessionId=response.sessionId;
+            render(response);
+            polling=setInterval(refresh,3000);
+          }}else if(sessionStatus==='CONSENTED'||sessionStatus==='CONNECT_READY'){{
+            const share=await api('/multiguard/panel/remote/session/'+encodeURIComponent(sessionId)+'/connect',{{}});
+            const remoteUrl=new URL(share.url);
+            if(remoteUrl.protocol!=='https:')throw new Error('Niezabezpieczony adres pulpitu został odrzucony.');
+            stage.replaceChildren();
+            const frame=document.createElement('iframe');
+            frame.setAttribute('title','Zdalny pulpit '+selected.dataset.id);
+            frame.setAttribute('referrerpolicy','no-referrer');
+            frame.setAttribute('allowfullscreen','');
+            frame.style.cssText='width:100%;height:100%;border:0;min-height:440px';
+            frame.src=remoteUrl.href;
+            stage.appendChild(frame);
+            const link=document.createElement('a');
+            link.href=remoteUrl.href;link.target='_blank';link.rel='noopener noreferrer';
+            link.textContent='Otwórz pulpit w osobnym oknie, jeżeli osadzenie jest blokowane';
+            link.style.cssText='font-size:11px;padding:5px;color:#d9be7a';
+            stage.appendChild(link);
+            status.textContent='Sesja przygotowana. Pulpit wymaga potwierdzenia MeshCentral.';
+            connectButton.textContent='OTWÓRZ PULPIT';
+          }}
+        }}catch(e){{showError(e);}}
+        finally{{
+          if(!sessionId)connectButton.disabled=!selected||selected.dataset.mesh!=='1';
+          else if(['CONSENTED','CONNECT_READY'].includes(sessionStatus))connectButton.disabled=false;
+        }}
+      }});
+      endButton.addEventListener('click',async()=>{{
+        if(!sessionId)return;
+        endButton.disabled=true;
+        try{{
+          await api('/multiguard/panel/remote/session/'+encodeURIComponent(sessionId)+'/end',{{}});
+          stage.replaceChildren();
+          const notice=document.createElement('div');
+          notice.className='owner-remote-notice';
+          notice.textContent='Połączenie zakończone. Link MeshCentral został unieważniony.';
+          stage.appendChild(notice);
+          resetSession();
+        }}catch(e){{showError(e);endButton.disabled=false;}}
       }});
       document.getElementById('owner-remote-fullscreen')
         .addEventListener('click', () => {{
