@@ -1176,12 +1176,10 @@ def _panel_html(body: str) -> str:
       <a href="/multiguard/panel/statistics"><span class="nav-icon" aria-hidden="true">▥</span>Statystyki</a>
       <a href="/multiguard/panel/telemetry"><span class="nav-icon" aria-hidden="true">⌁</span>Telemetria i błędy</a>
       <a href="/multiguard/panel/licenses"><span class="nav-icon" aria-hidden="true">▣</span>Licencje</a>
+      <a href="/multiguard/panel#service-modes"><span class="nav-icon" aria-hidden="true">⚒</span>Tryb serwisowy</a>
+      <a href="/multiguard/panel/remote"><span class="nav-icon" aria-hidden="true">◧</span>Zdalna pomoc</a>
       <a href="/multiguard/panel/versions"><span class="nav-icon" aria-hidden="true">≡</span>Historia wersji</a>
       <a href="/multiguard/panel/settings"><span class="nav-icon" aria-hidden="true">⚙</span>Ustawienia</a>
-    </nav>
-    <p class="nav-group-label">Szybkie działania</p>
-    <nav aria-label="Działania">
-      <a href="/multiguard/panel"><span class="nav-icon" aria-hidden="true">＋</span>Nowa licencja</a>
     </nav>
   </aside>
   <div class="workspace-content">
@@ -1203,6 +1201,7 @@ def _panel_html(body: str) -> str:
     const target = new URL(link.href, window.location.origin);
     const chosen = target.pathname === path ||
       (target.pathname === '/multiguard/panel/computers' && path.startsWith('/multiguard/panel/device/')) ||
+      (target.pathname === '/multiguard/panel' && target.hash === '#service-modes' && path === '/multiguard/panel') ||
       (target.pathname === '/multiguard/panel/service' && path.startsWith('/multiguard/panel/service/')) ||
       (target.pathname === '/multiguard/panel/telemetry' && path.startsWith('/multiguard/panel/telemetry/'));
     // Distinct sections, exactly one active navigation item.
