@@ -54,6 +54,14 @@ class OwnerWorkshopRequest(BaseModel):
     subject: str = Field(default="Zdalna pomoc Multi-Servis", min_length=3, max_length=160)
 
 
+class WorkshopSupportRequest(WorkshopAgentAuth):
+    localRequestId: uuid.UUID
+    subject: str = Field(min_length=3, max_length=120)
+    description: str = Field(min_length=10, max_length=4000)
+    diagnosticsIncluded: bool = False
+    diagnostics: Optional[dict] = None
+
+
 class OwnerWorkshopMeshBind(BaseModel):
     installationId: uuid.UUID
     meshNodeId: str = Field(min_length=8, max_length=300)
@@ -68,6 +76,24 @@ def _ensure_schema():
         if _READY:
             return
         with engine.begin() as con:
+            con.execute(text("""
+                CREATE TABLE IF NOT EXISTS guard.workshop_support_requests (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    local_request_id UUID NOT NULL UNIQUE,
+                    installation_id UUID NOT NULL REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+                    subject TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    diagnostics_included BOOLEAN NOT NULL DEFAULT FALSE,
+                    diagnostics JSONB,
+                    status TEXT NOT NULL DEFAULT 'NEW'
+                        CHECK (status IN ('NEW','SEEN','IN_PROGRESS','RESOLVED')),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """))
+            con.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_guard_workshop_support_time
+                ON guard.workshop_support_requests(installation_id,created_at DESC)
+            """))
             con.execute(text("""
                 CREATE TABLE IF NOT EXISTS guard.workshop_remote_nodes (
                     installation_id UUID PRIMARY KEY REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
@@ -129,7 +155,7 @@ def _audit(con, sid, name, actor, payload=None):
            "payload": json.dumps(payload or {}, ensure_ascii=False)})
 
 
-def _authorized_pending(con, installation_id, device_id, secret, *, require_pro=True):
+def _authorized_pending(con, installation_id, device_id, secret, *, require_pro=True, allow_revoked=False):
     """Authenticate discovery only against the exact pending installation.
 
     No commercial credential, paid runtime installation or KeyGate is touched.
@@ -146,9 +172,11 @@ def _authorized_pending(con, installation_id, device_id, secret, *, require_pro=
             or not hmac.compare_digest(str(row["discovery_credential_sha256"]),
                                        hashlib.sha256(secret.encode()).hexdigest())):
         raise HTTPException(401, "Nieprawidłowe poświadczenie instalacji serwisowej.")
-    if require_pro and (not row["enabled"] or row["edition"] != "PRO"
-                        or row["status"] in {"ARCHIVED", "UNINSTALLED", "ASSIGNED", "PROVISIONED"}):
-        raise HTTPException(403, "Tryb serwisowy PRO nie jest aktywny.")
+    if not allow_revoked and (not row["enabled"]
+                              or row["status"] in {"ARCHIVED", "UNINSTALLED", "ASSIGNED", "PROVISIONED"}):
+        raise HTTPException(403, "Tryb serwisowy nie jest aktywny.")
+    if require_pro and row["edition"] != "PRO":
+        raise HTTPException(403, "Zdalna pomoc wymaga trybu serwisowego PRO.")
     return row
 
 
@@ -209,6 +237,75 @@ def _open(con, iid):
           AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
         ORDER BY requested_at DESC LIMIT 1
     """), {"iid": iid}).mappings().first()
+
+
+@router.post("/agent/workshop/support-request")
+def agent_workshop_support_request(body: WorkshopSupportRequest):
+    """Save a customer-initiated service ticket without paid KeyGate state.
+
+    Limit optional diagnostics to the documented nonsecret sections. No
+    screenshot/file, browser history, clipboard or credential transfer.
+    The authenticated installation ID is taken from the request envelope.
+    """
+    _ensure_schema()
+    diagnostics=None
+    if body.diagnosticsIncluded:
+        diagnostics=body.diagnostics
+        if not isinstance(diagnostics,dict):
+            raise HTTPException(400,"Brak diagnostyki wybranej przez użytkownika.")
+        allowed={"schemaVersion","generatedAt","appVersion","license",
+                 "defender","browserShield","hardware","localData","privacy"}
+        if set(diagnostics)-allowed:
+            raise HTTPException(400,"Nieznane pola diagnostyczne.")
+        privacy=diagnostics.get("privacy")
+        if not isinstance(privacy,dict):
+            raise HTTPException(400,"Brak potwierdzenia ograniczenia danych prywatnych.")
+        for forbidden in ("credentialsIncluded","browserHistoryIncluded",
+                          "fullUrlsIncluded","clipboardIncluded","privateFileContentsIncluded"):
+            if privacy.get(forbidden) is not False:
+                raise HTTPException(400,"Diagnostyka zawiera niedozwolone dane prywatne.")
+        if len(json.dumps(diagnostics,allow_nan=False).encode("utf-8")) > 65536:
+            raise HTTPException(413,"Raport diagnostyczny przekracza limit 64 KB.")
+    elif body.diagnostics is not None:
+        raise HTTPException(400,"Diagnostyka wymaga wyraźnej zgody użytkownika.")
+    with engine.begin() as con:
+        _authorized_pending(con,body.installationId,body.deviceId,
+                            body.discoveryCredential,require_pro=False)
+        existing=con.execute(text("""
+            SELECT id,installation_id FROM guard.workshop_support_requests
+            WHERE local_request_id=:local
+        """),{"local":body.localRequestId}).mappings().first()
+        if existing and existing["installation_id"]!=body.installationId:
+            raise HTTPException(409,"Identyfikator zgłoszenia należy do innej instalacji.")
+        if existing:
+            ticket_id=existing["id"]
+        else:
+            ticket_id=uuid.uuid4()
+            con.execute(text("""
+                INSERT INTO guard.workshop_support_requests(
+                    id,local_request_id,installation_id,subject,description,
+                    diagnostics_included,diagnostics)
+                VALUES (:id,:local,:iid,:subject,:description,:included,CAST(:diagnostics AS jsonb))
+            """),{"id":ticket_id,"local":body.localRequestId,
+                  "iid":body.installationId,"subject":body.subject,
+                  "description":body.description,"included":body.diagnosticsIncluded,
+                  "diagnostics":json.dumps(diagnostics)})
+    return {"requestId":body.requestId,"accepted":True,
+            "supportRequestId":str(ticket_id),"serverTime":_iso(_now())}
+
+
+@router.get("/workshop/support-requests")
+def owner_workshop_support_requests(limit:int=50,user:CurrentUser=Depends(require_owner)):
+    _ensure_schema()
+    with engine.connect() as con:
+        rows=con.execute(text("""
+            SELECT id,installation_id,subject,description,diagnostics_included,
+                   created_at,status
+            FROM guard.workshop_support_requests
+            ORDER BY created_at DESC LIMIT :limit
+        """),{"limit":min(max(limit,1),100)}).mappings().all()
+    return [{**dict(row),"id":str(row["id"]),
+             "installation_id":str(row["installation_id"])} for row in rows]
 
 
 @router.post("/agent/workshop/remote/poll")
@@ -297,7 +394,7 @@ def agent_workshop_end(body: WorkshopEnd):
     with engine.connect() as con:
         # Even a revoked grant may terminate a prior session.
         _authorized_pending(con, body.installationId, body.deviceId,
-                            body.discoveryCredential, require_pro=False)
+                            body.discoveryCredential, require_pro=False, allow_revoked=True)
         found = con.execute(text("""
             SELECT id FROM guard.workshop_remote_sessions
             WHERE id=:sid AND installation_id=:iid
