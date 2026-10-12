@@ -60,7 +60,7 @@ def _ensure_schema():
 def _safe_report(raw):
     if not isinstance(raw,dict):
         raise HTTPException(400,"Brak raportu GPU.")
-    allowed={"schemaVersion","issueCode","appVersion","windowsBuild","gpuCount",
+    allowed={"schemaVersion","issueCode","appVersion","windowsBuild","probeAvailable","cpuModel","systemManufacturer","systemModel","gpuCount",
              "missingCount","gpuEngineCounterCount","gpuEngineLuidCount",
              "gpuEnginePhysicalCount","directxLuidMatchedCount","adapters"}
     if set(raw)-allowed:
@@ -69,6 +69,13 @@ def _safe_report(raw):
         raise HTTPException(400,"Nieznany format problemu GPU.")
     if not isinstance(raw.get("appVersion"),str) or not re.fullmatch(r"[0-9A-Za-z.+-]{1,32}",raw["appVersion"]):
         raise HTTPException(400,"Nieprawidłowa wersja aplikacji.")
+    if type(raw.get("probeAvailable")) is not bool:
+        raise HTTPException(400,"Brak informacji o jakości odczytu systemowego.")
+    for key in ("cpuModel","systemManufacturer","systemModel"):
+        value=raw.get(key)
+        if value is not None and (not isinstance(value,str) or
+            not re.fullmatch(r"[\w .()\-+&,/]{1,120}",value,re.UNICODE)):
+            raise HTTPException(400,f"Niedozwolone dane sprzętowe: {key}.")
     if raw.get("windowsBuild") is not None and (not isinstance(raw["windowsBuild"],str) or
                     not re.fullmatch(r"[0-9.]{1,30}",raw["windowsBuild"])):
         raise HTTPException(400,"Nieprawidłowa wersja Windows.")
