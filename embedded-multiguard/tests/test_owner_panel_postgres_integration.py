@@ -163,17 +163,18 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             """),{"id":order})
         # Native Android note history is a different table from the
         # service_orders.technician_notes/customer_notes legacy fields.
-        for id,order,content,visibility,deleted in [
+        for rank,(id,order,content,visibility,deleted) in enumerate([
             (uuid.uuid4(),order_a,"Pierwsza notatka: problem z BIOS","STAFF",None),
             (uuid.uuid4(),order_a,"Druga notatka z Androida: sprawdź RAM <script>alert(1)</script>","OWNER_ONLY",None),
             (uuid.uuid4(),order_a,"Ukryta notatka po usunięciu","STAFF","2025-10-10 12:00:00+00"),
             (uuid.uuid4(),order_b,"TAJNA_INNEGO_ZLECENIA","OWNER_ONLY",None),
-        ]:
+        ]):
             db.execute(text("""
                 INSERT INTO service.service_order_notes(
-                    id,service_order_id,note_text,visibility,deleted_at
-                ) VALUES(:id,:order_id,:note,:visibility,:deleted_at)
-            """),{"id":id,"order_id":order,"note":content,
+                    id,service_order_id,note_text,visibility,deleted_at,created_at
+                ) VALUES(:id,:order_id,:note,:visibility,:deleted_at,
+                          now() + (:rank * interval '1 second'))
+            """),{"id":id,"order_id":order,"note":content,"rank":rank,
                    "visibility":visibility,"deleted_at":deleted})
         db.execute(text("""
             INSERT INTO core.devices(id,manufacturer,model,serial_number,
