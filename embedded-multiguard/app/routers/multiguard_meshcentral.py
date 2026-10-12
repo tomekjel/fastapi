@@ -63,7 +63,7 @@ def _run(args: list[str]) -> str:
 
     output = (completed.stdout or "").strip()
     error = (completed.stderr or "").strip()
-    if completed.returncode not in (0, 1):
+    if completed.returncode != 0:
         raise MeshCentralError(
             (error or output or f"meshctrl exit {completed.returncode}")[:600]
         )
@@ -95,7 +95,9 @@ def create_share(
         "MESH_CENTRAL_SHARE_CONSENT",
         "prompt,bar",
     ).strip() or "prompt,bar"
-    if consent not in {"prompt,bar", "prompt", "notify,bar", "notify"}:
+    # Both desktop and file actions require an explicit on-device consent prompt.
+    # Notify-only is never sufficient for Multi-Guard remote help.
+    if consent not in {"prompt,bar", "prompt"}:
         raise MeshCentralError("Niedozwolona wartość MESH_CENTRAL_SHARE_CONSENT.")
 
     cmd = _base_command() + [
@@ -124,7 +126,7 @@ def revoke_share(node_id: str, public_id: str) -> None:
             "--remove", public_id.strip(),
         ]
     )
-    if output and "OK" not in output.upper():
+    if not output or "OK" not in output.upper():
         raise MeshCentralError(
             f"Nie potwierdzono usunięcia linku MeshCentral: {output[:500]}"
         )
