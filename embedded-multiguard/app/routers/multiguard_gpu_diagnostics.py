@@ -168,13 +168,34 @@ def owner_gpu_diagnostics(_:None=Depends(_panel_auth)):
     for row in rows:
         data=row["report"] or {}
         adapters=data.get("adapters",[])
-        models=", ".join(str(v.get("name","")) for v in adapters if not v.get("loadAvailable"))
+        missing_names=", ".join(str(v.get("name","")) for v in adapters if not v.get("loadAvailable"))
         iid="MG-"+str(row["installation_external_id"]).replace("-","")[:8].upper()
+        identity=" / ".join(str(data.get(field) or "—") for field in
+                          ("systemManufacturer","systemModel","cpuModel"))
+        cards=[]
+        for card in adapters:
+            state="Brak odczytu obciążenia" if not card.get("loadAvailable") else "Odczyt dostępny"
+            cards.append("<div style='padding:4px 0'>"+escape(str(card.get("kind","—"))) + " · "+
+                escape(str(card.get("name","—")))+" · "+
+                escape(state)+" · sterownik "+
+                escape(str(card.get("driverVersion") or "nieudostępniony"))+
+                " · VEN "+escape(str(card.get("vendorId") or "—"))+
+                " · DEV "+escape(str(card.get("deviceId") or "—"))+"</div>")
+        probe_ok=bool(data.get("probeAvailable"))
+        counters=(str(data.get("gpuEngineCounterCount","—")) if probe_ok else "sonda niedostępna")
+        details=("<details><summary>"+escape(missing_names)+"</summary>"+
+                 "<div style='padding:8px 2px;font-size:12px'>"+
+                 "<div>Sprzęt / CPU: "+escape(identity)+"</div>"+
+                 "<div>Windows: "+escape(str(data.get("windowsBuild") or "—"))+"</div>"+
+                 "<div>GPU Engine: "+escape(counters)+", LUID: "+
+                 escape(str(data.get("gpuEngineLuidCount","—")))+", fizyczne: "+
+                 escape(str(data.get("gpuEnginePhysicalCount","—")))+", DirectX trafienia: "+
+                 escape(str(data.get("directxLuidMatchedCount","—")))+"</div>"+
+                 "".join(cards)+"</div></details>")
         table.append("<tr><td>"+escape(iid)+"</td><td>"+escape(str(row["source"]))+
             "</td><td>"+escape(str(row["received_at"]))+"</td><td>"+
             escape(str(row["app_version"]))+"</td><td>"+
-            escape(models)+"</td><td>"+
-            escape(str(data.get("gpuEngineCounterCount","—")))+"</td></tr>")
+            details+"</td><td>"+escape(counters)+"</td></tr>")
     return HTMLResponse(_panel_html("""
     <section class="card"><div class="eyebrow">MULTI-GUARD / DIAGNOSTYKA ROZWOJOWA</div>
     <h1>Brakujące odczyty obciążenia GPU</h1>
