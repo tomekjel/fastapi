@@ -17,6 +17,7 @@ REMOTE_ROUTER_FILE="$ROUTER_DIR/multiguard_remote.py"
 WORKSHOP_REMOTE_FILE="$ROUTER_DIR/multiguard_workshop_remote.py"
 OWNER_REMOTE_CONSOLE_FILE="$ROUTER_DIR/multiguard_panel_remote.py"
 OWNER_REMOTE_ACTIONS_FILE="$ROUTER_DIR/multiguard_owner_remote_actions.py"
+GPU_DIAGNOSTICS_ROUTER_FILE="$ROUTER_DIR/multiguard_gpu_diagnostics.py"
 MESH_ADAPTER_FILE="$ROUTER_DIR/multiguard_meshcentral.py"
 UPDATES_ROUTER_FILE="$ROUTER_DIR/multiguard_updates.py"
 SERVICE_PANEL_FILE="$ROUTER_DIR/multiguard_service_panel.py"
@@ -190,6 +191,7 @@ curl -fsSL "$RAW_BASE/app/routers/multiguard_remote.py" -o "$REMOTE_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_workshop_remote.py" -o "$WORKSHOP_REMOTE_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_remote.py" -o "$OWNER_REMOTE_CONSOLE_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_owner_remote_actions.py" -o "$OWNER_REMOTE_ACTIONS_FILE"
+curl -fsSL "$RAW_BASE/app/routers/multiguard_gpu_diagnostics.py" -o "$GPU_DIAGNOSTICS_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_meshcentral.py" -o "$MESH_ADAPTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_updates.py" -o "$UPDATES_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_service_panel.py" -o "$SERVICE_PANEL_FILE"
@@ -229,6 +231,7 @@ import_lines = [
     "from app.routers import multiguard_workshop_remote",
     "from app.routers import multiguard_panel_remote",
     "from app.routers import multiguard_owner_remote_actions",
+    "from app.routers import multiguard_gpu_diagnostics",
     "from app.routers import multiguard_updates",
     "from app.routers import multiguard_service_panel",
     "from app.routers import multiguard_panel_settings",
@@ -243,6 +246,7 @@ include_lines = [
     "app.include_router(multiguard_workshop_remote.router)",
     "app.include_router(multiguard_panel_remote.router)",
     "app.include_router(multiguard_owner_remote_actions.router)",
+    "app.include_router(multiguard_gpu_diagnostics.router)",
     "app.include_router(multiguard_updates.router)",
     "app.include_router(multiguard_service_panel.router)",
     "app.include_router(multiguard_panel_settings.router)",
