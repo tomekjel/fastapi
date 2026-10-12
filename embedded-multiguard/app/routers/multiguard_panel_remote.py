@@ -107,6 +107,7 @@ REMOTE_LAYOUT_CSS = """
     gap:7px;align-items:center;min-height:42px;width:100%;padding:6px 8px;
     border:0;border-bottom:1px solid rgba(84,137,169,.17);border-radius:6px;
     background:transparent;color:#eaf4ff;text-align:left;cursor:pointer}
+.owner-remote-device[hidden]{display:none!important}
 .owner-remote-device:hover,.owner-remote-device.is-selected{background:rgba(29,102,148,.24)}
 .owner-remote-device.is-selected{outline:1px solid rgba(224,176,74,.48)}
 .owner-remote-device>code{font-size:12px;color:#e8c27c;white-space:nowrap;
