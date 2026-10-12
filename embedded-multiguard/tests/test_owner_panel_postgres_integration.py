@@ -262,6 +262,17 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     def ensure(actual,expected,label):
         assert actual==expected, f"{label}: {actual}, expected {expected}"
 
+    ensure(get("/multiguard/panel/service-modes",False).status_code,401,
+           "Private dedicated service-mode manager")
+    modes=get("/multiguard/panel/service-modes")
+    ensure(modes.status_code,200,"Dedicated service-mode manager")
+    assert 'Aktywne tryby serwisowe i monitorowanie' in modes.text
+    assert 'href="/multiguard/panel/service-modes"' in modes.text
+    assert 'Szybkie działania' not in modes.text
+    assert 'Nowa licencja</a>' not in modes.text
+    licence_create=get("/multiguard/panel")
+    ensure(licence_create.status_code,200,"Legacy verified licence creation form")
+    assert 'Aktywne tryby serwisowe i monitorowanie' not in licence_create.text
     ensure(get("/multiguard/panel/service",False).status_code,401,"Private service list")
     ensure(get("/multiguard/panel/settings",False).status_code,401,"Private settings")
     ensure(get("/multiguard/panel/versions",False).status_code,401,"Private versions")
