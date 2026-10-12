@@ -291,6 +291,7 @@ def agent_workshop_support_request(body: WorkshopSupportRequest):
                   "description":body.description,"included":body.diagnosticsIncluded,
                   "diagnostics":json.dumps(diagnostics)})
     return {"requestId":body.requestId,"accepted":True,
+            "duplicate":bool(existing),
             "supportRequestId":str(ticket_id),"serverTime":_iso(_now())}
 
 
