@@ -2088,6 +2088,7 @@ def multi_guard_panel_telemetry(
             <div class="telemetry-status">
               <span class="badge good">● ANALIZA AKTYWNA</span>
               <span class="muted">Zakres: ostatnie {days} dni</span>
+              <a class="button-link compact" href="/multiguard/panel/gpu-diagnostics">BRAKUJĄCE ODCZYTY GPU →</a>
             </div>
           </div>
           <div class="metrics">{metrics_html}</div>
