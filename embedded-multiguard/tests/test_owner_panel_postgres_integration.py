@@ -599,7 +599,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"id":mode_direct}).mappings().one()
     assert grant["enabled"] is True and grant["monitoring_profile"]=="OFF"
     assert grant["associated_reception_id"] is None
-    owner_modes=get("/multiguard/panel")
+    owner_modes=get("/multiguard/panel/service-modes")
     ensure(owner_modes.status_code,200,"OWNER central service management")
     assert 'data-owner-monitor-toggle' in owner_modes.text
     assert f'/multiguard/panel/workshop/{mode_direct}/disable' in owner_modes.text
