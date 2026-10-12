@@ -198,16 +198,25 @@ def owner_gpu_diagnostics(_:None=Depends(_panel_auth)):
     for row in rows:
         data=row["report"] or {}
         adapters=data.get("adapters",[])
-        missing_names=", ".join(str(v.get("name","")) for v in adapters if not v.get("loadAvailable"))
+        missing_parts=[]
+        missing_load=[str(v.get("name","GPU")) for v in adapters if not v.get("loadAvailable")]
+        missing_temp=[str(v.get("name","GPU")) for v in adapters if not v.get("temperatureAvailable")]
+        if missing_load:missing_parts.append("Obciążenie: "+", ".join(missing_load))
+        if data.get("cpuTemperatureAvailable") is False:missing_parts.append("Temperatura CPU")
+        if missing_temp and data.get("schemaVersion")==2:
+            missing_parts.append("Temperatury GPU: "+", ".join(missing_temp))
+        if data.get("fanTelemetryIncomplete"):missing_parts.append("Wentylatory: RPM nieudostępnione")
+        missing_names=" · ".join(missing_parts) or "Niepełna telemetria sprzętowa"
         iid="MG-"+str(row["installation_external_id"]).replace("-","")[:8].upper()
         identity=" / ".join(str(data.get(field) or "—") for field in
                           ("systemManufacturer","systemModel","cpuModel"))
         cards=[]
         for card in adapters:
-            state="Brak odczytu obciążenia" if not card.get("loadAvailable") else "Odczyt dostępny"
+            state="Obciążenie nieudostępnione" if not card.get("loadAvailable") else "Odczyt obciążenia dostępny"
+            temp="temperatura dostępna" if card.get("temperatureAvailable") else "temperatura nieudostępniona"
             cards.append("<div style='padding:4px 0'>"+escape(str(card.get("kind","—"))) + " · "+
                 escape(str(card.get("name","—")))+" · "+
-                escape(state)+" · sterownik "+
+                escape(state)+" · "+escape(temp)+" · sterownik "+
                 escape(str(card.get("driverVersion") or "nieudostępniony"))+
                 " · VEN "+escape(str(card.get("vendorId") or "—"))+
                 " · DEV "+escape(str(card.get("deviceId") or "—"))+"</div>")
@@ -217,6 +226,9 @@ def owner_gpu_diagnostics(_:None=Depends(_panel_auth)):
                  "<div style='padding:8px 2px;font-size:12px'>"+
                  "<div>Sprzęt / CPU: "+escape(identity)+"</div>"+
                  "<div>Windows: "+escape(str(data.get("windowsBuild") or "—"))+"</div>"+
+                 "<div>Chłodzenie: "+escape(str(data.get("coolingState") or "—"))+
+                 " · wykryte: "+escape(str(data.get("fanCount","—")))+
+                 " · RPM dostępne: "+escape(str(data.get("fanRpmCount","—")))+"</div>"+
                  "<div>GPU Engine: "+escape(counters)+", LUID: "+
                  escape(str(data.get("gpuEngineLuidCount","—")))+", fizyczne: "+
                  escape(str(data.get("gpuEnginePhysicalCount","—")))+", DirectX trafienia: "+
@@ -228,10 +240,10 @@ def owner_gpu_diagnostics(_:None=Depends(_panel_auth)):
             details+"</td><td>"+escape(counters)+"</td></tr>")
     return HTMLResponse(_panel_html("""
     <section class="card"><div class="eyebrow">MULTI-GUARD / DIAGNOSTYKA ROZWOJOWA</div>
-    <h1>Brakujące odczyty obciążenia GPU</h1>
+    <h1>Automatyczna diagnostyka zgodności sprzętu</h1>
     <p>Wyłącznie techniczne informacje o kartach i sterownikach; pełne dane
     raportu dostępne w rejestrze diagnostycznym serwera.</p>
     <div class="table-wrap"><table><thead><tr><th>ID</th><th>Tryb</th>
-    <th>Otrzymano</th><th>Wersja</th><th>Brak obciążenia</th><th>Liczników GPU</th>
+    <th>Otrzymano</th><th>Wersja</th><th>Brakujące odczyty</th><th>Liczników GPU</th>
     </tr></thead><tbody>"""+("".join(table) or "<tr><td colspan='6'>Brak zgłoszeń.</td></tr>")+
     "</tbody></table></div></section>"),headers={"Cache-Control":"private, no-store"})
