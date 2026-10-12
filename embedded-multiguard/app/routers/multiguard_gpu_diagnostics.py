@@ -120,7 +120,13 @@ def agent_gpu_diagnostic(body:GpuReportBody):
             source="WORKSHOP"
         else:
             # Strictly commercial KeyGate-bound identity, untouched paid-auth contract.
-            _require_agent(con,body.installationId,body.deviceId,body.installationCredential)
+            licensed=_require_agent(con,body.installationId,body.deviceId,body.installationCredential)
+            acceptance=con.execute(text("""
+                SELECT lifecycle,accepted_at FROM guard.installations
+                WHERE id=:iid AND is_current=TRUE
+            """),{"iid":licensed["id"]}).mappings().first()
+            if not acceptance or acceptance["lifecycle"]!="ACTIVE" or not acceptance["accepted_at"]:
+                raise HTTPException(403,"Raportowanie wymaga aktywnej licencji i akceptacji dokumentów.")
             source="CLIENT"
         result=con.execute(text("""
             INSERT INTO guard.gpu_diagnostics
