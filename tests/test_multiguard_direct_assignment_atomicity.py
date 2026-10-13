@@ -191,6 +191,27 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
         # External licence exists in this scenario despite SQL rollback.
         # This is a documented release blocker until reconciliation is implemented.
 
+    def test_retry_after_external_creation_is_blocked(self):
+        db = SimulatedDatabase(fail_workshop_update=True)
+        installation_id = uuid.uuid4()
+        with (
+            patch.object(mg, "engine", db),
+            patch.object(mg, "_ensure_schema"),
+            patch.object(mg, "_keygate_create_license", return_value={
+                "id": "EXTERNAL-ORPHAN",
+                "_plan_id": "FAKE-PLAN",
+                "_license_key": "FAKE-KEY",
+            }) as keygate,
+        ):
+            with self.assertRaises(mg.HTTPException) as first:
+                mg._assign_direct_customer_license(installation_id, "PRO", 3, "STABLE")
+            self.assertEqual(first.exception.status_code, 503)
+            with self.assertRaises(mg.HTTPException) as repeated:
+                mg._assign_direct_customer_license(installation_id, "PRO", 3, "STABLE")
+            self.assertEqual(repeated.exception.status_code, 409)
+            keygate.assert_called_once()
+        self.assertEqual(db.attempts[str(installation_id)]["state"], "RECONCILIATION_REQUIRED")
+
     def test_sql_failure_rolls_back_pending_assignment(self):
         db = SimulatedDatabase(fail_workshop_update=True)
         with self.assertRaises(mg.HTTPException) as failure:
