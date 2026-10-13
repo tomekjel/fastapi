@@ -2993,7 +2993,7 @@ def _owner_keygate_reconciliation_panel() -> str:
         rows = con.execute(text("""
             SELECT installation_id,workspace_reference,state,keygate_license_id
             FROM guard.direct_keygate_attempts
-            WHERE state='RECONCILIATION_REQUIRED'
+            WHERE state IN ('STARTED','RECONCILIATION_REQUIRED')
             ORDER BY updated_at DESC LIMIT 50
         """)).mappings().all()
     if not rows:
