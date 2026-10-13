@@ -31,6 +31,8 @@ class OwnerServiceVisualContract(unittest.TestCase):
     def test_monitoring_form_keeps_backend_contract(self):
         # Visual changes cannot rename form fields or disable CSRF checks.
         self.assertIn('name="monitoring_enabled" value="yes"', self.license)
+        # Only source-form behavior is checked; do not claim a browser E2E PASS.
+        self.assertIn('name="csrf_token" value="{token}"', self.license)
         self.assertIn('name="profile" aria-label=', self.license)
         self.assertIn('name="csrf_token" value="{token}"', self.license)
         self.assertIn('data-owner-monitor-form', self.license)
