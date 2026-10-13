@@ -1,0 +1,34 @@
+name: Multi-Guard OWNER licence regression (private Windows)
+on:
+  push:
+    branches: [feature/service-mode-monitoring-20261010]
+    paths:
+      - '.github/workflows/owner-license-regression.yml'
+      - 'tests/test_multiguard_direct_assignment_atomicity.py'
+      - 'embedded-multiguard/app/routers/multiguard_license.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  owner-license-tests:
+    runs-on: [self-hosted, Windows, X64, mg-local-dev]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          clean: false
+      - name: Verify OWNER computer
+        run: |
+          if ($env:RUNNER_NAME -ne 'MultiGuard-Dev') { throw 'Unexpected Windows runner' }
+      - name: Run synthetic licence regression suite
+        run: |
+          $env:PYTHONPATH = Join-Path $env:GITHUB_WORKSPACE 'embedded-multiguard'
+          if (Get-Command python -ErrorAction SilentlyContinue) {
+            python -m unittest discover -s tests -p test_multiguard_direct_assignment_atomicity.py -v
+          } elseif (Get-Command py -ErrorAction SilentlyContinue) {
+            py -3 -m unittest discover -s tests -p test_multiguard_direct_assignment_atomicity.py -v
+          } else { throw 'Python is unavailable on MultiGuard-Dev' }
