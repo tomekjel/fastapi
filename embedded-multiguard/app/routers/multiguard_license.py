@@ -515,6 +515,9 @@ CREATE TABLE IF NOT EXISTS guard.direct_keygate_attempts (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE guard.direct_keygate_attempts ADD COLUMN IF NOT EXISTS edition TEXT;
+ALTER TABLE guard.direct_keygate_attempts ADD COLUMN IF NOT EXISTS duration_months INTEGER;
+ALTER TABLE guard.direct_keygate_attempts ADD COLUMN IF NOT EXISTS release_channel TEXT;
 CREATE INDEX IF NOT EXISTS idx_guard_direct_keygate_attempts_state
     ON guard.direct_keygate_attempts(state);
 
@@ -1038,11 +1041,12 @@ def _assign_direct_customer_license(
     with engine.begin() as audit:
         reserved = audit.execute(text("""
             INSERT INTO guard.direct_keygate_attempts(
-                installation_id,workspace_reference,state
-            ) VALUES (:installation_id,:reference,'STARTED')
+                installation_id,workspace_reference,edition,duration_months,release_channel,state
+            ) VALUES (:installation_id,:reference,:edition,:months,:channel,'STARTED')
             ON CONFLICT (installation_id) DO NOTHING
             RETURNING installation_id
-        """), {"installation_id":installation_id,"reference":reference}).scalar_one_or_none()
+        """), {"installation_id":installation_id,"reference":reference,
+            "edition":edition,"months":months,"channel":channel}).scalar_one_or_none()
     if reserved is None:
         raise HTTPException(
             409, "Poprzednia próba w KeyGate wymaga sprawdzenia przez OWNER "
