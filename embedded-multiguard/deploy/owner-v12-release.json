@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 16,
-  "target_sha": "7b46e847b9737846a210fe0d928741813061e41d",
-  "summary": "OWNER WWW: tryb serwisowy, płatne 3/6/12 mies., atomowe przypisanie i audyt KeyGate, ścisła akceptacja 3 dokumentów. KeyGate API i PostgreSQL/Chromium PASS. Naprawa /health potwierdzona: baza connected, 5 schematów. Backup i rollback."
+  "sequence": 17,
+  "target_sha": "1da58335511cff1110e94da7882b2886f64b0475",
+  "summary": "OWNER V12: poprawiony wygląd sekcji trybów serwisowych, przełącznik monitorowania i stany niezapisane, uporządkowane przyciski oraz nowe logo tranzystora. Bez zmian API Android/Windows i działania licencji. Testy OWNER visual na ROG PASS, wdrożenie z preflight i rollback."
 }
