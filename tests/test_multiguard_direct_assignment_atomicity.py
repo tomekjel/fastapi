@@ -84,6 +84,18 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
         self.assertEqual(result["keygate_license_id"], "FAKE-LICENSE")
         self.assertEqual(db.state, {"status": "ASSIGNED", "license": "FAKE-LICENSE", "grant": False})
 
+    def test_keygate_failure_does_not_assign_local_rights(self):
+        db = SimulatedDatabase()
+        with (
+            patch.object(mg, "engine", db),
+            patch.object(mg, "_ensure_schema"),
+            patch.object(mg, "_keygate_create_license", side_effect=RuntimeError("synthetic KeyGate outage")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "synthetic KeyGate outage"):
+                mg._assign_direct_customer_license(uuid.uuid4(), "PRO", 3, "STABLE")
+        self.assertEqual(db.state, {"status": "WAITING", "license": None, "grant": True})
+        self.assertFalse(any("INSERT INTO guard.license_links" in q for q in db.queries))
+
     def test_sql_failure_rolls_back_pending_assignment(self):
         db = SimulatedDatabase(fail_workshop_update=True)
         with self.assertRaisesRegex(RuntimeError, "synthetic SQL error"):
