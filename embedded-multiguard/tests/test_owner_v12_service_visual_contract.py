@@ -49,7 +49,10 @@ class OwnerServiceVisualContract(unittest.TestCase):
     def test_legacy_visual_defects_do_not_return(self):
         self.assertNotIn('Monitorowanie rozszerzone — WŁĄCZONE / WYŁĄCZONE', self.license)
         self.assertNotIn('data:image/webp;base64,', self.license)
-        self.assertIn('mg-owner-silver', self.license)
+        self.assertIn('owner-approved-shield', self.theme)
+        self.assertIn('class="owner-approved-shield"', self.license)
+        self.assertIn('data:image/png;base64,', self.license)
+        self.assertNotIn('mg-owner-silver', self.license)
         self.assertIn('owner-service-actions', self.license)
         self.assertIn('Wariant serwisowy', self.license)
         self.assertIn("SERWIS · ", self.license)
