@@ -78,10 +78,16 @@ class SimulatedDatabase:
                 query = str(sql)
                 db.queries.append(query)
                 if "INSERT INTO guard.direct_keygate_attempts" in query:
+                    if "edition" not in params or "months" not in params or "channel" not in params:
+                        raise AssertionError("Missing KeyGate audit plan details")
                     iid = str(params["installation_id"])
                     if iid in db.attempts:
                         return Result(None)
-                    db.attempts[iid] = {"state": "STARTED", "keygate_license_id": None}
+                    db.attempts[iid] = {
+                        "state": "STARTED", "keygate_license_id": None,
+                        "edition": params["edition"], "duration_months": params["months"],
+                        "release_channel": params["channel"],
+                    }
                     return Result(iid)
                 if "UPDATE guard.direct_keygate_attempts" in query:
                     iid = str(params["id"])
@@ -200,6 +206,9 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
         db = SimulatedDatabase()
         result = self.run_assignment(db)
         self.assertEqual(result["keygate_license_id"], "FAKE-LICENSE")
+        self.assertEqual(next(iter(db.attempts.values()))["edition"], "PRO")
+        self.assertEqual(next(iter(db.attempts.values()))["duration_months"], 3)
+        self.assertEqual(next(iter(db.attempts.values()))["release_channel"], "STABLE")
         self.assertEqual(
             next(iter(db.attempts.values()))["state"], "CREATED"
         )
