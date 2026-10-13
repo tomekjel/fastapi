@@ -172,6 +172,35 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
 
 
 
+class AcceptanceGateTests(unittest.TestCase):
+    def test_duplicate_document_cannot_activate_keygate(self):
+        from types import SimpleNamespace
+        original = next(node for node in parsed.body if isinstance(node, ast.FunctionDef) and node.name == "acceptance")
+        original.decorator_list = []
+        module = ast.Module(body=[original], type_ignores=[])
+        ast.fix_missing_locations(module)
+        kinds = ["licence", "privacy", "terms"]
+        required = [
+            {"kind": kind, "version": "1", "sha256": "ab" * 32}
+            for kind in kinds
+        ]
+        keygate_calls = []
+        env = {
+            "AcceptanceRequest": object,
+            "HTTPException": FakeHTTPException,
+            "_authenticate_installation": lambda req: {"lifecycle": "PENDING_ACCEPTANCE"},
+            "_required_documents": lambda: required,
+            "_keygate_set_valid_until": lambda *args: keygate_calls.append(args),
+        }
+        exec(compile(module, str(source_file), "exec"), env)
+        accepted = [SimpleNamespace(**item) for item in required]
+        req = SimpleNamespace(documents=accepted + [accepted[0]])
+        with self.assertRaises(FakeHTTPException) as error:
+            env["acceptance"](req)
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertEqual(keygate_calls, [])
+
+
 class BackendWindowsContractTests(unittest.TestCase):
     def test_workshop_lease_contains_windows_required_fields(self):
         # Verify the real backend JSON builder rather than a hand-written fixture.
