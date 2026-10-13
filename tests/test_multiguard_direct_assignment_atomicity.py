@@ -212,6 +212,23 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
             keygate.assert_called_once()
         self.assertEqual(db.attempts[str(installation_id)]["state"], "RECONCILIATION_REQUIRED")
 
+    def test_audit_reservation_remains_after_transaction_rollback(self):
+        db = SimulatedDatabase(fail_workshop_update=True)
+        installation_id = uuid.uuid4()
+        with (
+            patch.object(mg, "engine", db),
+            patch.object(mg, "_ensure_schema"),
+            patch.object(mg, "_keygate_create_license", return_value={
+                "id": "KG-TEST", "_plan_id": "PLAN", "_license_key": "KEY"
+            }),
+        ):
+            with self.assertRaises(mg.HTTPException):
+                mg._assign_direct_customer_license(installation_id, "PRO", 3, "STABLE")
+        self.assertEqual(db.state["status"], "WAITING")
+        self.assertEqual(db.attempts[str(installation_id)]["state"], "RECONCILIATION_REQUIRED")
+        self.assertEqual(db.attempts[str(installation_id)]["keygate_license_id"], "KG-TEST")
+
+
     def test_retry_after_uncertain_keygate_network_result_is_blocked(self):
         db = SimulatedDatabase()
         installation_id = uuid.uuid4()
