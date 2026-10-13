@@ -144,6 +144,27 @@ class TransactionScopeReviewTests(unittest.TestCase):
         # A real PostgreSQL concurrency test is mandatory before deployment.
 
 
+class KeyGateShortTransactionTests(unittest.TestCase):
+    def test_external_keygate_create_not_nested_in_db_transaction(self):
+        fn = next(n for n in parsed.body if isinstance(n, ast.FunctionDef)
+                  and n.name == "_assign_direct_customer_license")
+        parents = {}
+        for node in ast.walk(fn):
+            for child in ast.iter_child_nodes(node):
+                parents[child] = node
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name)
+                 and n.func.id == "_keygate_create_license"]
+        self.assertEqual(len(calls), 1)
+        parent = parents[calls[0]]
+        while parent is not fn:
+            if isinstance(parent, ast.With):
+                for item in parent.items:
+                    self.assertNotIn("engine.begin", ast.unparse(item.context_expr))
+            parent = parents[parent]
+        self.assertIn("with engine.begin() as con:", ast.get_source_segment(source, fn))
+
+
 class KeyGateLockSafetyTests(unittest.TestCase):
     def test_external_keygate_call_does_not_hold_pending_row_for_update_lock(self):
         fn = next(
