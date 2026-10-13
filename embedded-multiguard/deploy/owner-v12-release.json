@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 13,
-  "target_sha": "f7186463c64b711d8933590c95dae6c5af5772b7",
-  "summary": "OWNER WWW: notatki z Androida widoczne w zleceniach (historia, ostatnia notatka, wyszukiwanie); zachowane istniejące poprawki V12, finanse, licencje i zdjęcia. PostgreSQL/Chromium CI PASS. Tylko OWNER web, backup i rollback."
+  "sequence": 14,
+  "target_sha": "7b46e847b9737846a210fe0d928741813061e41d",
+  "summary": "OWNER WWW: bezterminowy tryb serwisowy, prawa płatne 3/6/12 mies., atomowe przypisanie i audyt KeyGate, ścisła akceptacja 3 dokumentów. KeyGate API oraz PostgreSQL/Chromium PASS. Zachowane notatki, finanse i zdjęcia; backup i rollback."
 }
