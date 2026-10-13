@@ -2,6 +2,6 @@
   "schema_version": 1,
   "scope": "owner-web-only",
   "sequence": 17,
-  "target_sha": "1da58335511cff1110e94da7882b2886f64b0475",
-  "summary": "OWNER V12: poprawiony wygląd sekcji trybów serwisowych, przełącznik monitorowania i stany niezapisane, uporządkowane przyciski oraz nowe logo tranzystora. Bez zmian API Android/Windows i działania licencji. Testy OWNER visual na ROG PASS, wdrożenie z preflight i rollback."
+  "target_sha": "279e543310d942690ee02ae38660bab9c1363a36",
+  "summary": "OWNER V12 web visual refresh: switch, saving status, labels and transistor mark; release gate Chromium/PostgreSQL and guarded rollback; no Android/Windows changes."
 }
