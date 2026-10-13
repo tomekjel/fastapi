@@ -1,6 +1,6 @@
 # KeyGate integration test — 2026-10-13
 
-State: real KeyGate helper tests passed; OWNER production deployment and real Windows client validation remain pending.
+State: real KeyGate helper tests passed; OWNER release sequence 16 deployed and confirmed on CT 103. Real Windows client validation remains pending.
 
 ## Test-only catalogue
 
@@ -38,7 +38,7 @@ The unmodified backend functions _keygate_request, _find_plan_id, _keygate_creat
 
 This does not prove live OWNER acceptance/assignment against real KeyGate, Windows 0.3.40 activation/offline handling or signed client revocation. Do not label the full system ready based on helper tests.
 
-The broad development branch contains root tests and additional workflows/triggers outside the pinned server agent allowlist. A release package must include only permitted OWNER files. The pinned on-server deployment script also needs the reviewed exact acceptance hardening exception; a repository edit alone does not update that pinned file.
+The broad development branch contains root tests/workflows outside the server agent allowlist. Narrow PR #16 packaged only allowed files and was merged. The owner refreshed the pinned on-server agent/deployer from 605e224dab495a1655d4f4801f9cb87772522a42 before rollout.
 
 Cleanup performed: temporary API key removed through the admin UI and its former token now returns HTTP 401. The local token file and licence-key values were removed from scratch. Four unused plans were deleted: Standard 6m/12m and Pro 3m/12m. Both test licences remain revoked with no active device activations.
 
@@ -46,4 +46,14 @@ Cleanup limitation: KeyGate 246c418 has no admin licence deletion endpoint or UI
 
 ## Release package
 
-Draft PR #16 packages only permitted OWNER paths at initial revision 605e224dab495a1655d4f4801f9cb87772522a42. The original agent allowlist accepted its diff from sequence-13 target f7186463c64b711d8933590c95dae6c5af5772b7. The release manifest sequence is unchanged, so this does not deploy production.
+PR #16 merged as f24e3148d0e934fd27b72fa54430a973473b8fc0. Exact base-branch Chromium/PostgreSQL gate 38446068830 passed at 7b46e847b9737846a210fe0d928741813061e41d. A separate legacy SSH preflight failed because GitHub has no configured SSH host; deployment uses the outbound container agent.
+
+
+## Confirmed production rollout
+
+- Pre-existing /health SQL bug: schema names lacked SQL string quotes. The response incorrectly reported database disconnected although an earlier connection query succeeded. A guarded single-query repair from 46d9c3551089e20240218fc2df087b0f734c449a was executed by the owner in CT 103; health then returned status=ok, database=connected with assist,breeze,config,core,service. Backup: /opt/multiservis/backups/main-health-20261013T183020213148Z.py.
+- Sequence 14 was held before application; sequence 15 preserved the prior source. After health repair, sequence 16 resumed the same tested target.
+- Owner supplied actual container state: sequence=16, applied_sha=7b46e847b9737846a210fe0d928741813061e41d, failed_sequence=null, last_failed_sha=null.
+- Server log 2026-10-13 18:31:25 UTC: SUCCESS OWNER web deployed from that exact target. Preflight required_schema_issues={} and result=PASS; unchanged agent/Android public API surface passed. Later agent poll returned NO_CHANGE.
+- Deployment backup: /opt/multiservis/backups/owner-panel-v12-20261013-183119-263584.
+- This confirms deployment and server checks. It does not replace an authenticated real OWNER-to-KeyGate assignment/acceptance test or Windows 0.3.40 activation/offline/signed-revocation validation.
