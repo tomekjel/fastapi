@@ -221,6 +221,16 @@ class BackendWindowsContractTests(unittest.TestCase):
         self.assertEqual(revoked["deviceId"], device_id)
         self.assertEqual(revoked["acceptedDocuments"], [])
         self.assertIsNone(revoked["validUntil"])
+        # STANDARD service mode must never inherit PRO plan rights.
+        grant["enabled"] = True
+        grant["edition"] = "STANDARD"
+        standard = json.loads(env["_signed_workshop_grant"](pending, grant)["payload"])
+        self.assertEqual(standard["lifecycle"], "WORKSHOP")
+        self.assertEqual(standard["planCode"], "multi_guard")
+        self.assertEqual(standard["installationId"], str(installation_id))
+        self.assertEqual(standard["deviceId"], device_id)
+        self.assertIsNone(standard["validUntil"])
+
 
 
 if __name__ == "__main__":
