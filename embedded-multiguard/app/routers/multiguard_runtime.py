@@ -2308,6 +2308,66 @@ def multi_guard_panel_telemetry_detail(
     )
 
 
+@router.get("/panel/remote-help", response_class=HTMLResponse)
+def owner_remote_help(_: None = Depends(_panel_auth)):
+    """List actual PRO installations; do not simulate a remote desktop session."""
+    _ensure_schema()
+    with engine.connect() as connection:
+        remote_eligible = connection.execute(text("""
+            SELECT gi.id,gi.installation_external_id,gi.last_seen_at,
+                   gi.plan_code,gi.lifecycle,
+                   COALESCE(d.manufacturer,p.manufacturer) AS manufacturer,
+                   COALESCE(d.model,p.model) AS model,
+                   COALESCE(d.hostname,p.hostname) AS hostname
+            FROM guard.installations gi
+            LEFT JOIN core.devices d ON d.id=gi.service_device_id
+            LEFT JOIN guard.pending_installations p
+                ON p.installation_id=gi.installation_external_id
+            LEFT JOIN guard.workshop_grants w
+                ON w.installation_id=gi.installation_external_id
+            WHERE gi.is_current=TRUE AND
+                (gi.plan_code='PRO' OR (w.enabled=TRUE AND w.edition='PRO'))
+            ORDER BY gi.created_at DESC,gi.last_seen_at DESC NULLS LAST
+            LIMIT 250
+        """)).mappings().all()
+    items = []
+    for item in remote_eligible:
+        label = " ".join(str(x).strip() for x in
+                         (item["manufacturer"],item["model"]) if x
+                         ) or str(item["hostname"] or "Komputer")
+        items.append(
+            f'<li><a href="/multiguard/panel/device/{item["id"]}">'
+            f'{_panel_h(_short_installation_id(item["installation_external_id"]))}'
+            f'</a> <span>{_panel_h(label)}</span>'
+            f'<small>Ostatni kontakt: {_panel_dt(item["last_seen_at"])}</small></li>'
+        )
+    return _panel_html(f"""
+      <section class="card panel-hero">
+        <div class="eyebrow">MULTI-GUARD / ZDALNA POMOC</div>
+        <h1>Zdalna pomoc</h1>
+        <p>Komputery uprawnione do funkcji Pro. Lista bazuje na rzeczywistych
+          instalacjach i ich ostatnim kontakcie z serwerem.</p>
+      </section>
+      <div class="owner-remote-columns">
+        <section class="card">
+          <h2>Komputery Pro ({len(items)})</h2>
+          <ul class="owner-remote-list">
+            {''.join(items) or '<li>Brak zarejestrowanych komputerów Pro.</li>'}
+          </ul>
+        </section>
+        <section class="card" role="status">
+          <h2>Sesja zdalna</h2>
+          <p>Nie ma uruchomionego podglądu ani sterowania pulpitem.
+             Ten widok nie tworzy pozornej sesji zdalnej ani nie wysyła
+             poleceń do komputera klienta.</p>
+          <p class="muted">Uruchamianie zdalnej sesji pozostaje niedostępne
+             w panelu do czasu potwierdzenia działającej integracji
+             po stronie agenta i serwera.</p>
+        </section>
+      </div>
+    """)
+
+
 @router.get("/panel/licenses", response_class=HTMLResponse)
 def multi_guard_panel_licenses(
     _: None = Depends(_panel_auth),
