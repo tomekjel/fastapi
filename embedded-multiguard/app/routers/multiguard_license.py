@@ -2552,6 +2552,19 @@ def multiguard_panel_pending(
         iid, stored_name, return_to="pending", detected_name=detected_name,
     )
     grant = _workshop_grant(iid)
+    # Avoid suggesting a new paid licence while a previous external KeyGate
+    # creation may have succeeded without a local licence link.
+    with engine.connect() as audit_con:
+        unresolved_attempt = audit_con.execute(text("""
+            SELECT a.state,a.keygate_license_id
+            FROM guard.direct_keygate_attempts a
+            LEFT JOIN guard.license_links l
+              ON l.installation_id=a.installation_id
+             AND l.keygate_license_id=a.keygate_license_id
+            WHERE a.installation_id=:id
+              AND (a.state IN ('STARTED','RECONCILIATION_REQUIRED')
+                OR (a.state='CREATED' AND l.id IS NULL))
+        """), {"id":iid}).mappings().first()
     direct = None
     if pending.get("assigned_license_id"):
         with engine.connect() as direct_con:
@@ -2608,6 +2621,12 @@ def multiguard_panel_pending(
     else:
         direct_info = '<p>Ta instalacja ma już powiązanie ze zleceniem serwisowym.</p>'
         direct_buttons = ''
+    if unresolved_attempt:
+        direct_buttons = (
+            '<p class="bad" role="alert">Blokada bezpieczeństwa KeyGate: '
+            'poprzednia próba wymaga ręcznego uzgodnienia przez OWNER. '
+            'Nie twórz kolejnej licencji dla tej instalacji.</p>'
+        )
     workshop_state_html = (
         '<p class="ok">🔧 TRYB SERWISOWY — AKTYWNY · '
         + _panel_escape(grant["edition"])
