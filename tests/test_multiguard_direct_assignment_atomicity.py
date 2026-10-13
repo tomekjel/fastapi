@@ -46,6 +46,8 @@ mg.__dict__.update({
     "HTTPException": FakeHTTPException,
     "text": lambda sql: sql,
     "_ensure_schema": lambda: None,
+    "engine": None,
+    "_keygate_create_license": lambda **kwargs: None,
     "_normalize_link": lambda row: row,
     "_hash": lambda key: "HASH",
     "logger": types.SimpleNamespace(exception=lambda *args, **kwargs: None),
