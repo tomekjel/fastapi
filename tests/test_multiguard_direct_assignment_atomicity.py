@@ -212,6 +212,24 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
             keygate.assert_called_once()
         self.assertEqual(db.attempts[str(installation_id)]["state"], "RECONCILIATION_REQUIRED")
 
+    def test_preexisting_attempt_blocks_keygate_before_external_request(self):
+        db = SimulatedDatabase()
+        installation_id = uuid.uuid4()
+        db.attempts[str(installation_id)] = {
+            "state": "STARTED", "keygate_license_id": None
+        }
+        with (
+            patch.object(mg, "engine", db),
+            patch.object(mg, "_ensure_schema"),
+            patch.object(mg, "_keygate_create_license") as external_create,
+        ):
+            with self.assertRaises(mg.HTTPException) as failure:
+                mg._assign_direct_customer_license(installation_id, "PRO", 3, "STABLE")
+            self.assertEqual(failure.exception.status_code, 409)
+            external_create.assert_not_called()
+        self.assertEqual(db.state["status"], "WAITING")
+        self.assertIsNone(db.state["license"])
+
     def test_audit_reservation_remains_after_transaction_rollback(self):
         db = SimulatedDatabase(fail_workshop_update=True)
         installation_id = uuid.uuid4()
