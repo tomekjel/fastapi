@@ -64,6 +64,7 @@ class SimulatedDatabase:
     def __init__(self, fail_workshop_update=False):
         self.fail_workshop_update = fail_workshop_update
         self.state = {"status": "WAITING", "license": None, "grant": True}
+        self.attempts = {}
         self.queries = []
 
     @contextmanager
@@ -76,7 +77,21 @@ class SimulatedDatabase:
                 query = str(sql)
                 db.queries.append(query)
                 if "INSERT INTO guard.direct_keygate_attempts" in query:
-                    return Result("reserved")
+                    iid = str(params["installation_id"])
+                    if iid in db.attempts:
+                        return Result(None)
+                    db.attempts[iid] = {"state": "STARTED", "keygate_license_id": None}
+                    return Result(iid)
+                if "UPDATE guard.direct_keygate_attempts" in query:
+                    iid = str(params["id"])
+                    if iid in db.attempts:
+                        db.attempts[iid]["state"] = (
+                            "RECONCILIATION_REQUIRED" if "RECONCILIATION_REQUIRED" in query
+                            else "CREATED"
+                        )
+                        if params.get("license_id"):
+                            db.attempts[iid]["keygate_license_id"] = params["license_id"]
+                    return Result(None)
                 if "FROM guard.pending_installations" in query:
                     return Result({"status": working["status"], "assigned_license_id": working["license"]})
                 if "SELECT id FROM guard.license_links" in query:
