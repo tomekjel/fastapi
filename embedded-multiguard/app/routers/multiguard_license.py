@@ -5,6 +5,7 @@ import calendar
 import hashlib
 import html
 import json
+import logging
 import os
 import secrets
 import threading
@@ -28,6 +29,7 @@ from app.database import engine
 from app.security import CurrentUser, require_owner, require_staff
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["multi-guard-license"])
 _panel_security = HTTPBasic(auto_error=False)
 
@@ -499,6 +501,25 @@ CREATE INDEX IF NOT EXISTS idx_guard_license_links_device
     ON guard.license_links(service_device_id);
 CREATE INDEX IF NOT EXISTS idx_guard_license_links_lifecycle
     ON guard.license_links(lifecycle);
+
+-- Durable trace of KeyGate DIRECT creation attempts. Keep this independent
+-- of licence_links: an external licence may exist after SQL rollback.
+CREATE TABLE IF NOT EXISTS guard.direct_keygate_attempts (
+    installation_id UUID PRIMARY KEY,
+    workspace_reference TEXT NOT NULL UNIQUE,
+    edition TEXT,
+    duration_months INTEGER,
+    release_channel TEXT,
+    state TEXT NOT NULL CHECK (state IN ('STARTED','CREATED','RECONCILIATION_REQUIRED')),
+    keygate_license_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE guard.direct_keygate_attempts ADD COLUMN IF NOT EXISTS edition TEXT;
+ALTER TABLE guard.direct_keygate_attempts ADD COLUMN IF NOT EXISTS duration_months INTEGER;
+ALTER TABLE guard.direct_keygate_attempts ADD COLUMN IF NOT EXISTS release_channel TEXT;
+CREATE INDEX IF NOT EXISTS idx_guard_direct_keygate_attempts_state
+    ON guard.direct_keygate_attempts(state);
 
 CREATE TABLE IF NOT EXISTS guard.license_extensions (
     id UUID PRIMARY KEY,
@@ -974,10 +995,8 @@ def _assign_pending_to_reception(
                 "installation_id": installation_id,
             },
         )
-
-    # A paid service-order licence must always supersede temporary service
-    # rights; no second entitlement can remain enabled on this installation.
-    with engine.begin() as connection:
+        # Paid rights and revocation of previous service rights must commit
+        # atomically. Otherwise a backend failure could leave both valid.
         connection.execute(text("""
             UPDATE guard.workshop_grants
                SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
@@ -1002,7 +1021,7 @@ def _assign_direct_customer_license(
     with engine.begin() as con:
         pending = con.execute(text("""
             SELECT * FROM guard.pending_installations
-            WHERE installation_id=:id FOR UPDATE
+            WHERE installation_id=:id
         """), {"id": installation_id}).mappings().first()
         if pending is None:
             raise HTTPException(404, "Komputer nie został zarejestrowany.")
@@ -1014,40 +1033,108 @@ def _assign_direct_customer_license(
         """), {"id": installation_id}).first()
         if existing:
             raise HTTPException(409, "Istnieje już powiązanie tej instalacji.")
-        # A KeyGate workspace reference identifies the installation, not
-        # an imaginary repair order. No service.order record is created.
-        reference = "MG-DIRECT-" + installation_id.hex
+    # A KeyGate workspace reference identifies the installation, not
+    # an imaginary repair order. No service.order record is created.
+    reference = "MG-DIRECT-" + installation_id.hex
+    # A separately committed attempt survives rollback of this transaction.
+    # Duplicate submissions fail closed until an OWNER reconciles KeyGate.
+    with engine.begin() as audit:
+        reserved = audit.execute(text("""
+            INSERT INTO guard.direct_keygate_attempts(
+                installation_id,workspace_reference,edition,duration_months,release_channel,state
+            ) VALUES (:installation_id,:reference,:edition,:months,:channel,'STARTED')
+            ON CONFLICT (installation_id) DO NOTHING
+            RETURNING installation_id
+        """), {"installation_id":installation_id,"reference":reference,
+            "edition":edition,"months":months,"channel":channel}).scalar_one_or_none()
+    if reserved is None:
+        raise HTTPException(
+            409, "Poprzednia próba w KeyGate wymaga sprawdzenia przez OWNER "
+                 "przed ponownym utworzeniem licencji."
+        )
+    try:
         created = _keygate_create_license(
             reception_number=reference, edition=edition, months=months,
         )
-        lic = con.execute(text("""
-            INSERT INTO guard.license_links(
-                reception_id,reception_number,service_device_id,
-                sale_kind,installation_id,
-                keygate_license_id,keygate_plan_id,license_key_hash,
-                plan_code,duration_months,release_channel,lifecycle
-            ) VALUES (
-                NULL,:reference,NULL,'DIRECT',:installation_id,
-                :license_id,:plan_id,:key_hash,:plan,:months,:channel,'UNASSIGNED'
-            ) RETURNING *
-        """), {
-            "reference":reference, "installation_id":installation_id,
-            "license_id":str(created["id"]), "plan_id":created["_plan_id"],
-            "key_hash":_hash(created["_license_key"]),
-            "plan":"multi_guard_pro" if edition=="PRO" else "multi_guard",
-            "months":months,"channel":channel,
-        }).mappings().one()
-        con.execute(text("""
-            UPDATE guard.pending_installations SET
-                status='ASSIGNED',assigned_reception_id=NULL,
-                assigned_license_id=:license_id,
-                assigned_at=now(),updated_at=now()
+    except Exception:
+        # An interrupted HTTP call can succeed remotely. Never auto-retry.
+        # Keep the original KeyGate error even if the audit DB is down:
+        # STARTED is already durable and blocks repeated creation.
+        try:
+            with engine.begin() as audit:
+                audit.execute(text("""
+                    UPDATE guard.direct_keygate_attempts
+                    SET state='RECONCILIATION_REQUIRED',updated_at=now()
+                    WHERE installation_id=:id
+                """), {"id":installation_id})
+        except Exception:
+            logger.exception("Could not update ambiguous KeyGate attempt audit")
+        raise
+    with engine.begin() as audit:
+        audit.execute(text("""
+            UPDATE guard.direct_keygate_attempts
+            SET state='CREATED',keygate_license_id=:license_id,updated_at=now()
             WHERE installation_id=:id
-        """), {"license_id":lic["keygate_license_id"],"id":installation_id})
-        con.execute(text("""
-            UPDATE guard.workshop_grants SET enabled=FALSE,updated_at=now()
-            WHERE installation_id=:id AND enabled=TRUE
-        """), {"id":installation_id})
+        """), {"id":installation_id,"license_id":str(created["id"])})
+    try:
+        with engine.begin() as con:
+            lic = con.execute(text("""
+                INSERT INTO guard.license_links(
+                    reception_id,reception_number,service_device_id,
+                    sale_kind,installation_id,
+                    keygate_license_id,keygate_plan_id,license_key_hash,
+                    plan_code,duration_months,release_channel,lifecycle
+                ) VALUES (
+                    NULL,:reference,NULL,'DIRECT',:installation_id,
+                    :license_id,:plan_id,:key_hash,:plan,:months,:channel,'UNASSIGNED'
+                ) RETURNING *
+            """), {
+                "reference":reference, "installation_id":installation_id,
+                "license_id":str(created["id"]), "plan_id":created["_plan_id"],
+                "key_hash":_hash(created["_license_key"]),
+                "plan":"multi_guard_pro" if edition=="PRO" else "multi_guard",
+                "months":months,"channel":channel,
+            }).mappings().one()
+            updated = con.execute(text("""
+                UPDATE guard.pending_installations SET
+                    status='ASSIGNED',assigned_reception_id=NULL,
+                    assigned_license_id=:license_id,
+                    assigned_at=now(),updated_at=now()
+                WHERE installation_id=:id
+                  AND status='WAITING'
+                  AND assigned_license_id IS NULL
+                RETURNING installation_id
+            """), {"license_id":lic["keygate_license_id"],"id":installation_id}).scalar_one_or_none()
+            if updated is None:
+                raise RuntimeError("Instalacja zmieniła status podczas operacji KeyGate.")
+            con.execute(text("""
+                UPDATE guard.workshop_grants
+                SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
+                WHERE installation_id=:id AND enabled=TRUE
+            """), {"id":installation_id})
+    except Exception:
+        # KeyGate has already acknowledged creation. The SQL transaction
+        # rolls back, but the external licence cannot be rolled back here.
+        # Do NOT silently retry: doing so can generate duplicate licences.
+        try:
+            with engine.begin() as audit:
+                audit.execute(text("""
+                    UPDATE guard.direct_keygate_attempts
+                    SET state='RECONCILIATION_REQUIRED',updated_at=now()
+                    WHERE installation_id=:id
+                """), {"id":installation_id})
+        except Exception:
+            logger.exception("Could not persist DIRECT reconciliation state")
+        logger.exception(
+            "Multi-Guard DIRECT needs manual KeyGate reconciliation: "
+            "workspace=%s external_license_id=%s",
+            reference, str(created.get("id", "")),
+        )
+        raise HTTPException(
+            503,
+            "Nie zakończono przypisania licencji. Wymagana weryfikacja "
+            "w KeyGate przed ponowieniem operacji.",
+        ) from None
     return _normalize_link(dict(lic))
 
 
@@ -1999,7 +2086,7 @@ def acceptance(req: AcceptanceRequest):
     received = {
         (item.kind, item.version, item.sha256.lower()) for item in req.documents
     }
-    if received != expected:
+    if len(req.documents) != len(required) or received != expected:
         raise HTTPException(400, "Zaakceptowane dokumenty nie są aktualnym zestawem.")
 
     started = _utcnow()
@@ -2478,6 +2565,19 @@ def multiguard_panel_pending(
         iid, stored_name, return_to="pending", detected_name=detected_name,
     )
     grant = _workshop_grant(iid)
+    # Avoid suggesting a new paid licence while a previous external KeyGate
+    # creation may have succeeded without a local licence link.
+    with engine.connect() as audit_con:
+        unresolved_attempt = audit_con.execute(text("""
+            SELECT a.state,a.keygate_license_id
+            FROM guard.direct_keygate_attempts a
+            LEFT JOIN guard.license_links l
+              ON l.installation_id=a.installation_id
+             AND l.keygate_license_id=a.keygate_license_id
+            WHERE a.installation_id=:id
+              AND (a.state IN ('STARTED','RECONCILIATION_REQUIRED')
+                OR (a.state='CREATED' AND l.id IS NULL))
+        """), {"id":iid}).mappings().first()
     direct = None
     if pending.get("assigned_license_id"):
         with engine.connect() as direct_con:
@@ -2534,6 +2634,12 @@ def multiguard_panel_pending(
     else:
         direct_info = '<p>Ta instalacja ma już powiązanie ze zleceniem serwisowym.</p>'
         direct_buttons = ''
+    if unresolved_attempt:
+        direct_buttons = (
+            '<p class="bad" role="alert">Blokada bezpieczeństwa KeyGate: '
+            'poprzednia próba wymaga ręcznego uzgodnienia przez OWNER. '
+            'Nie twórz kolejnej licencji dla tej instalacji.</p>'
+        )
     workshop_state_html = (
         '<p class="ok">🔧 TRYB SERWISOWY — AKTYWNY · '
         + _panel_escape(grant["edition"])
@@ -2917,6 +3023,44 @@ def owner_suggest_service_orders(q: str = "", _: None = Depends(_panel_auth)):
     } for row in rows]}
 
 
+def _owner_keygate_reconciliation_panel() -> str:
+    """Read-only OWNER warning; manual reconciliation must precede any retry."""
+    _ensure_schema()
+    with engine.connect() as con:
+        rows = con.execute(text("""
+            SELECT installation_id,workspace_reference,state,keygate_license_id,edition,duration_months,release_channel
+            FROM guard.direct_keygate_attempts
+            WHERE state IN ('STARTED','RECONCILIATION_REQUIRED')
+               OR (state='CREATED' AND NOT EXISTS (
+                   SELECT 1 FROM guard.license_links l
+                   WHERE l.installation_id=guard.direct_keygate_attempts.installation_id
+                     AND l.keygate_license_id=guard.direct_keygate_attempts.keygate_license_id
+               ))
+            ORDER BY updated_at DESC LIMIT 50
+        """)).mappings().all()
+    if not rows:
+        return ""
+    lines = "".join(
+        "<li>Instalacja <code>" + _panel_escape(str(row["installation_id"]))
+        + "</code> · workspace <code>" + _panel_escape(row["workspace_reference"])
+        + "</code> · plan " + _panel_escape(row.get("edition") or "—")
+        + " / " + _panel_escape(row.get("duration_months") or "—")
+        + " mies. · kanał " + _panel_escape(row.get("release_channel") or "—")
+        + " · stan <strong>" + _panel_escape(row["state"])
+        + "</strong> · KeyGate ID <code>"
+        + _panel_escape(row.get("keygate_license_id") or "nieznane")
+        + "</code> · <a href=\"/multiguard/panel/pending/"
+        + _panel_escape(str(row["installation_id"]))
+        + "\">Szczegóły komputera</a></li>"
+        for row in rows
+    )
+    return (
+        '<section class="card" role="alert"><h2>Wymagana weryfikacja KeyGate</h2>'
+        '<p>Nie ponawiaj tworzenia licencji. Najpierw uzgodnij stan w KeyGate '
+        'i bazie Multi-Servis.</p><ul>' + lines + '</ul></section>'
+    )
+
+
 @router.get("/multiguard/panel", response_class=HTMLResponse)
 def multiguard_panel(
     _: None = Depends(_panel_auth),
@@ -2924,6 +3068,7 @@ def multiguard_panel(
     return _panel_html(
         f"""
         {_owner_workshop_manager_panel()}
+        {_owner_keygate_reconciliation_panel()}
         <section class="card">
           <div class="eyebrow">MULTI-SERVIS / AKTYWACJA PROGRAMU</div>
           <h1>Nowa licencja Multi-Guard</h1>
