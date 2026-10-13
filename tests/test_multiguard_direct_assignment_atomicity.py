@@ -229,6 +229,32 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
         self.assertEqual(db.attempts[str(installation_id)]["keygate_license_id"], "KG-TEST")
 
 
+    def test_keygate_error_remains_visible_when_audit_update_fails(self):
+        db = SimulatedDatabase()
+        original_begin = db.begin
+        from contextlib import contextmanager
+        @contextmanager
+        def failing_audit_begin():
+            with original_begin() as conn:
+                class Proxy:
+                    def execute(self, sql, params=None):
+                        if "UPDATE guard.direct_keygate_attempts" in str(sql):
+                            raise RuntimeError("audit update failed")
+                        return conn.execute(sql, params)
+                yield Proxy()
+        db.begin = failing_audit_begin
+        installation_id = uuid.uuid4()
+        with (
+            patch.object(mg, "engine", db),
+            patch.object(mg, "_ensure_schema"),
+            patch.object(mg, "_keygate_create_license",
+                         side_effect=RuntimeError("KeyGate network timeout")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "KeyGate network timeout"):
+                mg._assign_direct_customer_license(installation_id, "PRO", 3, "STABLE")
+        self.assertEqual(db.attempts[str(installation_id)]["state"], "STARTED")
+        self.assertEqual(db.state["status"], "WAITING")
+
     def test_retry_after_uncertain_keygate_network_result_is_blocked(self):
         db = SimulatedDatabase()
         installation_id = uuid.uuid4()
