@@ -25,6 +25,11 @@ jobs:
         with:
           persist-credentials: false
           clean: false
+      - name: Verify Python source syntax
+        run: |
+          @echo off
+          python -m py_compile tests\test_multiguard_direct_assignment_atomicity.py embedded-multiguard\app\routers\multiguard_license.py
+          if errorlevel 1 exit /b 1
       - name: Run synthetic licence regression suite
         run: |
           @echo off
