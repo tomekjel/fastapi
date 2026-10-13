@@ -132,6 +132,18 @@ class Result:
         return self
 
 
+class TransactionScopeReviewTests(unittest.TestCase):
+    def test_keygate_transaction_scope_requires_staging_review(self):
+        # This is a release-gate observation, not an integration PASS.
+        fn = next(node for node in parsed.body
+                  if isinstance(node, ast.FunctionDef)
+                  and node.name == "_assign_direct_customer_license")
+        code = ast.get_source_segment(source, fn)
+        self.assertIn("_keygate_create_license(", code)
+        self.assertIn("direct_keygate_attempts", code)
+        # A real PostgreSQL concurrency test is mandatory before deployment.
+
+
 class KeyGateLockSafetyTests(unittest.TestCase):
     def test_external_keygate_call_does_not_hold_pending_row_for_update_lock(self):
         fn = next(
