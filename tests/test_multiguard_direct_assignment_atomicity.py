@@ -210,6 +210,73 @@ class AcceptanceGateTests(unittest.TestCase):
                 self.assertEqual(keygate_calls, [])
 
 
+class DiscoveryQueueContractTests(unittest.TestCase):
+    def test_unlicensed_computer_is_waiting_and_service_grant_is_signed(self):
+        # Execute the real discovery endpoint against an isolated in-memory DB.
+        from types import SimpleNamespace
+        from contextlib import nullcontext
+        original = next(
+            node for node in parsed.body
+            if isinstance(node, ast.FunctionDef) and node.name == "discovery_assignment"
+        )
+        original.decorator_list = []
+        module = ast.Module(body=[original], type_ignores=[])
+        ast.fix_missing_locations(module)
+        iid = uuid.uuid4()
+        pending = {
+            "installation_id": iid, "device_id": "asus-test",
+            "status": "WAITING", "assigned_reception_id": None,
+            "assigned_license_id": None,
+        }
+        queries = []
+        class Result:
+            def scalar_one(self):
+                return "WAITING"
+        class Connection:
+            def execute(self, query, params):
+                queries.append(str(query))
+                return Result()
+        class Engine:
+            def begin(self):
+                return nullcontext(Connection())
+        grant = None
+        def find_grant(installation_id):
+            self.assertEqual(installation_id, iid)
+            return grant
+        env = {
+            "DiscoveryAssignmentRequest": object,
+            "_authenticate_pending": lambda *args: pending.copy(),
+            "engine": Engine(),
+            "text": lambda sql: sql,
+            "_workshop_grant": find_grant,
+            "_signed_workshop_grant": lambda p, g: {"payload": "signed", "signatureB64": "test"},
+            "_iso": lambda _: "2026-10-13T00:00:00Z",
+            "_utcnow": lambda: None,
+        }
+        exec(compile(module, str(source_file), "exec"), env)
+        req = SimpleNamespace(
+            installation_id=iid, device_id="asus-test", discovery_credential="test"
+        )
+        waiting = env["discovery_assignment"](req)
+        self.assertFalse(waiting["assigned"])
+        self.assertEqual(waiting["status"], "WAITING")
+        self.assertNotIn("provisioningToken", waiting)
+        self.assertNotIn("workshopLease", waiting)
+        grant = {"enabled": True, "release_channel": "STABLE", "monitoring_profile": "OFF"}
+        service = env["discovery_assignment"](req)
+        self.assertFalse(service["assigned"])
+        self.assertEqual(service["status"], "WORKSHOP")
+        self.assertEqual(service["workshopLease"]["payload"], "signed")
+        self.assertEqual(service["workshopMonitoring"]["profile"], "OFF")
+        grant["enabled"] = False
+        revoked = env["discovery_assignment"](req)
+        self.assertFalse(revoked["assigned"])
+        self.assertEqual(revoked["status"], "WAITING")
+        self.assertIn("workshopLease", revoked)
+        self.assertFalse(revoked["workshopMonitoring"]["enabled"])
+        self.assertTrue(any("UPDATE guard.pending_installations" in sql for sql in queries))
+
+
 class BackendWindowsContractTests(unittest.TestCase):
     def test_workshop_lease_contains_windows_required_fields(self):
         # Verify the real backend JSON builder rather than a hand-written fixture.
