@@ -1,0 +1,30 @@
+name: OWNER V12 visual regression (private ROG)
+on:
+  push:
+    branches:
+      - fix/owner-v12-service-panel-visual-20261013
+    paths:
+      - 'embedded-multiguard/app/routers/multiguard_license.py'
+      - 'embedded-multiguard/app/routers/multiguard_panel_theme.py'
+      - 'tests/test_owner_v12_service_visual_contract.py'
+      - '.github/workflows/owner-v12-visual-regression.yml'
+  workflow_dispatch:
+
+jobs:
+  owner-visual-contract:
+    runs-on: [self-hosted, Windows, X64]
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm dedicated private ROG runner
+        shell: cmd
+        run: |
+          if /I not "%RUNNER_NAME%"=="ROG" exit /b 1
+      - uses: actions/checkout@v4
+      - name: Validate OWNER Python source and visual contract
+        shell: powershell
+        run: |
+          python -m py_compile embedded-multiguard/app/routers/multiguard_license.py embedded-multiguard/app/routers/multiguard_panel_theme.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p "test_owner_v12_service_visual_contract.py" -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
