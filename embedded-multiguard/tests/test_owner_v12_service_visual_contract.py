@@ -40,7 +40,7 @@ class OwnerServiceVisualContract(unittest.TestCase):
         self.assertIn('data-owner-monitor-form', self.license)
         self.assertIn("if monitoring_enabled not in", self.license)
         self.assertIn('profile=profile if monitoring_enabled=="yes" else "OFF"', self.license)
-        self.assertIn('return RedirectResponse("/multiguard/panel#service-modes",status_code=303)', self.license)
+        self.assertIn('return RedirectResponse("/multiguard/panel/workshop#service-modes",status_code=303)', self.license)
 
     def test_controls_remain_owner_only(self):
         self.assertIn('def owner_set_workshop_monitoring(', self.license)
@@ -50,8 +50,20 @@ class OwnerServiceVisualContract(unittest.TestCase):
 
     def test_service_grant_never_shows_as_waiting_license(self):
         self.assertIn("w.installation_id=p.installation_id AND w.enabled=TRUE", self.runtime)
-        self.assertIn("WHERE p.status IN ('WAITING','ASSIGNED')", self.runtime)
+        self.assertIn("WHERE p.status='WAITING' AND p.assigned_license_id IS NULL", self.runtime)
         self.assertIn("SELECT count(*) FROM guard.pending_installations p", self.runtime)
+
+    def test_approved_owner_sections_are_exact_and_ordered(self):
+        nav = self.license.split('<nav aria-label="Sekcje panelu">', 1)[1].split('</nav>', 1)[0]
+        labels = ("Pulpit", "Komputery", "Licencje", "Tryb serwisowy", "Zdalna pomoc", "Zlecenia")
+        self.assertEqual(nav.count('<a href='), 6)
+        positions = [nav.index('>' + label + '</a>') for label in labels]
+        self.assertEqual(positions, sorted(positions))
+        self.assertNotIn("Szybkie działania", self.license)
+        self.assertIn('@router.get("/multiguard/panel/workshop"', self.license)
+        self.assertIn('@router.get("/panel/remote-help"', self.runtime)
+        self.assertIn("def _owner_pending_license_queue()", self.runtime)
+        self.assertNotIn("<h2>Szybki dostęp</h2>", self.runtime)
 
     def test_legacy_visual_defects_do_not_return(self):
         self.assertNotIn('Monitorowanie rozszerzone — WŁĄCZONE / WYŁĄCZONE', self.license)
