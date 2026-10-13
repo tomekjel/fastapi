@@ -1,0 +1,62 @@
+name: Multi-Guard OWNER licence regression (private Windows)
+on:
+  push:
+    branches: [feature/service-mode-monitoring-20261010]
+    paths:
+      - '.github/workflows/owner-license-regression.yml'
+      - 'tests/test_multiguard_direct_assignment_atomicity.py'
+      - 'embedded-multiguard/app/routers/multiguard_license.py'
+      - 'embedded-multiguard/deploy-owner-web-v12.sh'
+      - 'embedded-multiguard/tests/test_owner_deploy_contract.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  owner-license-tests:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - name: Verify OWNER computer
+        run: |
+          @echo off
+          if /I not "%RUNNER_NAME%"=="ROG" (echo ERROR: Unexpected backend runner %RUNNER_NAME% & exit /b 1)
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          clean: false
+      - name: Verify Python source syntax
+        run: |
+          @echo off
+          python -m py_compile tests\test_multiguard_direct_assignment_atomicity.py embedded-multiguard\app\routers\multiguard_license.py
+          if errorlevel 1 exit /b 1
+      - name: Detect local tools for isolated PostgreSQL validation
+        run: |
+          @echo off
+          python -c "import shutil; from pathlib import Path; tools=('psql','pg_ctl','postgres','docker'); [print('LOCAL_TOOL '+name+': '+('PRESENT' if shutil.which(name) else 'ABSENT')) for name in tools]; roots=(Path(r'C:\Program Files\PostgreSQL'),Path(r'C:\Program Files (x86)\PostgreSQL')); found=[p for root in roots if root.is_dir() for p in root.glob('*/bin/pg_ctl.exe')]; print('LOCAL_POSTGRES_BINARIES: '+('PRESENT' if found else 'ABSENT'))"
+          if errorlevel 1 exit /b 1
+      - name: Run synthetic licence regression suite
+        run: |
+          @echo off
+          setlocal EnableDelayedExpansion
+          echo Running real-code isolation regression: OWNER assignment, document acceptance, service grant Standard/Pro.
+          set "PYTHONPATH=%GITHUB_WORKSPACE%\embedded-multiguard"
+          where python >nul 2>nul
+          if not errorlevel 1 (
+            python -m unittest discover -s tests -p test_multiguard_direct_assignment_atomicity.py -v
+            exit /b !ERRORLEVEL!
+          )
+          where py >nul 2>nul
+          if not errorlevel 1 (
+            py -3 -m unittest discover -s tests -p test_multiguard_direct_assignment_atomicity.py -v
+            exit /b !ERRORLEVEL!
+          )
+          echo ERROR: Python not available on ROG
+          exit /b 1
+      - name: Verify exact deployment API boundaries on owner PC
+        run: |
+          @echo off
+          python embedded-multiguard\tests\test_owner_deploy_contract.py
+          if errorlevel 1 exit /b 1

@@ -2,13 +2,10 @@ name: Multi-Servis WEB — compact dashboard, finance & handover integration tes
 on:
   # Owner code changes do not burn hosted CI time on each push.
   # Full browser + PostgreSQL regression tests execute only for deliberate release-gate triggers.
-  # SERVICE OWNER regression: signed revocation + two-step consent + monitoring OFF/3 profiles.
+  # Deliberate release trigger only; ordinary source edits use owner ROG.
   push:
-    branches: [feature/multiservis-web-compact-stats-20261009, multiservis-panel-multiguard-gold-crimson-v1, feature/guard-license-model-owner-renew-20261009, feature/service-mode-monitoring-20261010, fix/owner-service-mode-browser-check-20261011]
-    paths:
-      - 'embedded-multiguard/app/routers/**'
-      - 'embedded-multiguard/tests/**'
-      - '.github/workflows/multiservis-panel-preview-ci.yml'
+    branches: [feature/service-mode-monitoring-20261010]
+    paths: ['embedded-multiguard/deploy/owner-web-test.trigger']
   workflow_dispatch:
 
 jobs:
