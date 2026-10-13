@@ -210,6 +210,28 @@ class AcceptanceGateTests(unittest.TestCase):
                 self.assertEqual(keygate_calls, [])
 
 
+class OwnerPanelContractTests(unittest.TestCase):
+    def test_owner_panel_has_both_license_routes_and_indefinite_service(self):
+        # AST verifies the actual OWNER-rendering endpoint independently of FastAPI.
+        panel = next(
+            node for node in parsed.body
+            if isinstance(node, ast.FunctionDef) and node.name == "multiguard_panel_pending"
+        )
+        literals = [
+            node.value for node in ast.walk(panel)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        markup = "\\n".join(literals)
+        self.assertIn("/direct", markup)
+        self.assertIn("/assign", markup)
+        self.assertIn('value="STANDARD"', markup)
+        self.assertIn('value="PRO"', markup)
+        self.assertEqual(markup.count('value="SERVICE"'), 2)
+        self.assertIn("Tryb serwisowy (bezterminowy)", markup)
+        self.assertIn("PRZEKAŻ KLIENTOWI", markup)
+        self.assertIn("csrf_token", markup)
+
+
 class DiscoveryRegistrationSecurityTests(unittest.TestCase):
     def test_existing_asus_identity_rejects_foreign_device_or_credential(self):
         # Production endpoint, fake SQL transaction, no secrets or network.
