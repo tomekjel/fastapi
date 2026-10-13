@@ -379,6 +379,7 @@ footer {font-size:14px;color:#8fa3b5}
 .brand-emblem {border-radius:12px;width:48px;height:48px;color:#ebf4fb;border-color:rgba(62,174,232,.46);
   background:radial-gradient(circle at 28% 24%,rgba(63,177,242,.28),transparent 67%),linear-gradient(155deg,#18324c,#0b192b);
   box-shadow:inset 0 1px rgba(255,255,255,.18),0 0 16px rgba(44,145,210,.15)}
+.owner-approved-shield {display:block;width:42px;height:42px;object-fit:contain;filter:drop-shadow(0 2px 5px rgba(231,180,72,.22))}
 .brand-emblem svg {width:37px;height:37px;filter:drop-shadow(0 0 4px rgba(35,175,235,.17))}
 .brand-multi {color:#eaf1f9}
 .brand-servis {color:#65c9ef}
