@@ -1307,7 +1307,7 @@ def multi_guard_panel_dashboard(
     ]
     metrics_html = "".join(
         (
-            f'<a class="metric metric-link accent-{tone}" href="/multiguard/panel/computers#pending">'
+            f'<a class="metric metric-link accent-{tone}" href="/multiguard/panel/licenses#pending">'
             f'<b>{_panel_h(label)}</b><strong>{int(value or 0)}</strong></a>'
             if label == "Oczekujące instalacje" else
             f'<div class="metric accent-{tone}"><b>{_panel_h(label)}</b>'
@@ -1321,34 +1321,6 @@ def multi_guard_panel_dashboard(
         <h1>Pulpit</h1>
         <p>Aktualny stan serwisu i Multi-Guard. Kliknij oczekujące instalacje, aby od razu przypisać licencję.</p>
         <div class="metrics">{metrics_html}</div>
-      </section>
-      <section class="card">
-        <div class="section-head">
-          <div><div class="eyebrow">SKRÓTY</div>
-          <h2>Szybki dostęp</h2></div>
-        </div>
-        <div class="hub-grid">
-          <a class="hub-tile" href="/multiguard/panel/computers">
-            <span class="hub-symbol" aria-hidden="true">▤</span>
-            <strong>Komputery</strong><span>Lista instalacji, zdarzenia i historia napraw</span>
-            <small>{int(counts["standard"] or 0)} Standard · {int(counts["pro"] or 0)} Pro →</small>
-          </a>
-          <a class="hub-tile" href="/multiguard/panel/service">
-            <span class="hub-symbol" aria-hidden="true">◇</span>
-            <strong>Zlecenia serwisowe</strong><span>Statusy napraw, zdjęcia, dokumentacja, kwoty</span>
-            <small>Otwórz rejestr zleceń →</small>
-          </a>
-          <a class="hub-tile" href="/multiguard/panel/statistics">
-            <span class="hub-symbol" aria-hidden="true">▥</span>
-            <strong>Statystyki</strong><span>Finanse, materiały z dawcy i rozliczenia</span>
-            <small>Dostęp właściciela →</small>
-          </a>
-          <a class="hub-tile" href="/multiguard/panel/licenses">
-            <span class="hub-symbol" aria-hidden="true">▣</span>
-            <strong>Licencje</strong><span>Standard, Pro i przypisanie instalacji</span>
-            <small>Otwórz licencje →</small>
-          </a>
-        </div>
       </section>
 
     """)
@@ -1381,7 +1353,7 @@ def owner_archive_pending_installation(
         if not row:
             raise HTTPException(404, "Nie znaleziono instalacji.")
         if row["status"] == "ARCHIVED":
-            return RedirectResponse("/multiguard/panel/computers#archive",
+            return RedirectResponse("/multiguard/panel/licenses#archive",
                                     status_code=303)
         if row["status"] not in {"WAITING","IGNORED"} or row["assigned_license_id"]:
             raise HTTPException(409,
@@ -1411,58 +1383,13 @@ def owner_archive_pending_installation(
             SET status='ARCHIVED',updated_at=now()
             WHERE installation_id=:iid
         """),{"iid":installation_id})
-    return RedirectResponse("/multiguard/panel/computers#pending",
+    return RedirectResponse("/multiguard/panel/licenses#pending",
                             status_code=303,headers={"Cache-Control":"private, no-store"})
 
 
-@router.get("/panel/computers", response_class=HTMLResponse)
-def multi_guard_panel_computers(
-    presence: str = "all",
-    q: str = "",
-    page_number: int = 1,
-    _: None = Depends(_panel_auth),
-):
-    if len(q) > 120 or not 1 <= page_number <= 5000:
-        raise HTTPException(400, "Nieprawidłowe parametry wyszukiwania.")
-    if presence not in {"all", "silent", "removed"}:
-        raise HTTPException(400, "Nieprawidłowy filtr kontaktu Multi-Guard.")
+def _owner_pending_license_queue() -> tuple[str, str]:
+    """OWNER waiting license queue and reversible archive, outside inventory."""
     _ensure_schema()
-    config = owner_panel_config()
-    page_size = config["inventory_page_size"]
-    device_results = _fetch_device_rows(
-        page_size + 1,
-        presence_filter=presence,
-        search=q,
-        offset=(page_number - 1) * page_size,
-        silence_days=config["no_contact_filter_days"],
-    )
-    has_more_devices = len(device_results) > page_size
-    devices = device_results[:page_size]
-
-    def device_page_url(page: int) -> str:
-        return "/multiguard/panel/computers?" + urllib.parse.urlencode({
-            "presence": presence, "q": q, "page_number": page,
-        }) + "#devices"
-
-    device_search_form = f"""
-        <form class="service-search" method="get" action="/multiguard/panel/computers">
-          <input type="hidden" name="presence" value="{_panel_h(presence)}">
-          <label>Wyszukaj model, producenta, numer seryjny, hostname lub zlecenie
-            <input name="q" maxlength="120" value="{_panel_h(q)}"
-              placeholder="np. Lenovo, MG-2026, S/N">
-          </label>
-          <button type="submit">SZUKAJ</button>
-        </form>
-    """
-    device_paging = (
-        f'<a class="button-link compact" href="{device_page_url(page_number - 1)}">← POPRZEDNIA</a>'
-        if page_number > 1 else ""
-    ) + f'<span>Strona {page_number}</span>' + (
-        f'<a class="button-link compact" href="{device_page_url(page_number + 1)}">NASTĘPNA →</a>'
-        if has_more_devices else ""
-    )
-
-
     # WAITING machines have no signed paid licence yet, so they cannot
     # appear in the ACTIVE fleet table. Show them separately, with a direct
     # link to the existing authenticated assignment form.
@@ -1471,7 +1398,11 @@ def multi_guard_panel_computers(
             SELECT installation_id,hostname,manufacturer,model,
                    serial_number,app_version,status,last_seen_at
             FROM guard.pending_installations p
-            WHERE p.status IN ('WAITING','ASSIGNED')
+            WHERE p.status='WAITING' AND p.assigned_license_id IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM guard.license_links ll
+                WHERE ll.installation_id=p.installation_id AND ll.lifecycle <> 'REVOKED'
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM guard.workshop_grants w
                 WHERE w.installation_id=p.installation_id AND w.enabled=TRUE
@@ -1491,7 +1422,7 @@ def multi_guard_panel_computers(
         safe_name = _panel_h(display_name)
         safe_id = str(iid)
         short_id = "MG-" + safe_id.replace("-", "")[:8].upper()
-        status_label = "OCZEKUJE NA LICENCJĘ" if pending["status"] == "WAITING" else "PRZYPISANA — POBIERANIE"
+        status_label = "OCZEKUJE NA LICENCJĘ"
 
         # Keep only the first two visual lines in the grid; the full name
         # remains available in the tooltip and in the owner's edit dialog.
@@ -1510,7 +1441,7 @@ def multi_guard_panel_computers(
                   <h3 id="pending-name-heading-{safe_id}">Edytuj nazwę komputera</h3>
                   <p>Zmienia się tylko nazwa widoczna w panelu. Dane sprzętowe pozostają bez zmian.</p>
                   <input type="hidden" name="csrf_token" value="{archive_csrf}">
-                  <input type="hidden" name="return_to" value="computers">
+                  <input type="hidden" name="return_to" value="licenses">
                   <label for="pending-friendly-name-{safe_id}">Nazwa komputera (maks. 420 znaków)
                     <input id="pending-friendly-name-{safe_id}" name="friendly_name"
                       maxlength="420" value="{safe_name}" autocomplete="off">
@@ -1617,6 +1548,57 @@ def multi_guard_panel_computers(
           </details>
         </section>
     """
+    return pending_section, archive_section
+
+
+@router.get("/panel/computers", response_class=HTMLResponse)
+def multi_guard_panel_computers(
+    presence: str = "all",
+    q: str = "",
+    page_number: int = 1,
+    _: None = Depends(_panel_auth),
+):
+    if len(q) > 120 or not 1 <= page_number <= 5000:
+        raise HTTPException(400, "Nieprawidłowe parametry wyszukiwania.")
+    if presence not in {"all", "silent", "removed"}:
+        raise HTTPException(400, "Nieprawidłowy filtr kontaktu Multi-Guard.")
+    _ensure_schema()
+    config = owner_panel_config()
+    page_size = config["inventory_page_size"]
+    device_results = _fetch_device_rows(
+        page_size + 1,
+        presence_filter=presence,
+        search=q,
+        offset=(page_number - 1) * page_size,
+        silence_days=config["no_contact_filter_days"],
+    )
+    has_more_devices = len(device_results) > page_size
+    devices = device_results[:page_size]
+
+    def device_page_url(page: int) -> str:
+        return "/multiguard/panel/computers?" + urllib.parse.urlencode({
+            "presence": presence, "q": q, "page_number": page,
+        }) + "#devices"
+
+    device_search_form = f"""
+        <form class="service-search" method="get" action="/multiguard/panel/computers">
+          <input type="hidden" name="presence" value="{_panel_h(presence)}">
+          <label>Wyszukaj model, producenta, numer seryjny, hostname lub zlecenie
+            <input name="q" maxlength="120" value="{_panel_h(q)}"
+              placeholder="np. Lenovo, MG-2026, S/N">
+          </label>
+          <button type="submit">SZUKAJ</button>
+        </form>
+    """
+    device_paging = (
+        f'<a class="button-link compact" href="{device_page_url(page_number - 1)}">← POPRZEDNIA</a>'
+        if page_number > 1 else ""
+    ) + f'<span>Strona {page_number}</span>' + (
+        f'<a class="button-link compact" href="{device_page_url(page_number + 1)}">NASTĘPNA →</a>'
+        if has_more_devices else ""
+    )
+
+
     rows_html = []
     for row in devices:
         presence_style, presence_label = _presence_indicator(
@@ -1683,8 +1665,6 @@ def multi_guard_panel_computers(
             <span class="muted">Stan łączności pochodzi z ostatniego raportu agenta.</span>
           </div>
         </section>
-        {pending_section}
-        {archive_section}
         <section class="card" id="devices">
           <div class="section-head">
             <div>
@@ -2320,6 +2300,7 @@ def multi_guard_panel_licenses(
     _: None = Depends(_panel_auth),
 ):
     _ensure_license_schema()
+    pending_section, archive_section = _owner_pending_license_queue()
     with engine.connect() as connection:
         rows = connection.execute(
             text(
@@ -2385,6 +2366,8 @@ def multi_guard_panel_licenses(
 
     return _panel_html(
         f"""
+        {pending_section}
+        {archive_section}
         <section class="card panel-hero license-hero">
           <div class="section-head">
             <div>
@@ -2392,7 +2375,7 @@ def multi_guard_panel_licenses(
               <h1>Licencje Multi-Guard</h1>
               <p>Przegląd wystawionych licencji, kanałów aktualizacji i terminów ważności.</p>
             </div>
-            <a class="button-link" href="/multiguard/panel">NOWA LICENCJA</a>
+            <a class="button-link" href="/multiguard/panel#new-license">NOWA LICENCJA</a>
           </div>
           <div class="table-wrap">
             <table>
