@@ -87,7 +87,7 @@ assert 'class="pending-edit-name"' in runtime_src
 assert 'pending-name-dialog-{safe_id}' in runtime_src
 assert 'name="friendly_name"' in runtime_src
 assert 'maxlength="420" value="{safe_name}"' in runtime_src
-assert 'name="return_to" value="computers"' in runtime_src
+assert 'name="return_to" value="licenses"' in runtime_src
 assert '_panel_h(name)} ·' not in runtime_src
 assert 'detected_name=owner_detected_name(row)' in runtime_src
 assert "display_name = stored_name or detected_name" in license_src
