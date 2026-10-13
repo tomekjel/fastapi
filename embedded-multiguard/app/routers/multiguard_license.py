@@ -2015,7 +2015,7 @@ def acceptance(req: AcceptanceRequest):
     received = {
         (item.kind, item.version, item.sha256.lower()) for item in req.documents
     }
-    if received != expected:
+    if len(req.documents) != len(required) or received != expected:
         raise HTTPException(400, "Zaakceptowane dokumenty nie są aktualnym zestawem.")
 
     started = _utcnow()
