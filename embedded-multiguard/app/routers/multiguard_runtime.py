@@ -1283,7 +1283,11 @@ def multi_guard_panel_dashboard(
             WHERE is_current=TRUE
         """)).mappings().one()
         pending_count = connection.execute(text("""
-            SELECT count(*) FROM guard.pending_installations WHERE status='WAITING'
+            SELECT count(*) FROM guard.pending_installations p
+            WHERE p.status='WAITING' AND NOT EXISTS (
+              SELECT 1 FROM guard.workshop_grants w
+              WHERE w.installation_id=p.installation_id AND w.enabled=TRUE
+            )
         """)).scalar_one()
         alerts_count = connection.execute(text("""
             SELECT count(*) FROM guard.notifications
@@ -1466,10 +1470,14 @@ def multi_guard_panel_computers(
         pending_rows = connection.execute(text("""
             SELECT installation_id,hostname,manufacturer,model,
                    serial_number,app_version,status,last_seen_at
-            FROM guard.pending_installations
-            WHERE status IN ('WAITING','ASSIGNED')
-            ORDER BY CASE WHEN status='WAITING' THEN 0 ELSE 1 END,
-                     last_seen_at DESC
+            FROM guard.pending_installations p
+            WHERE p.status IN ('WAITING','ASSIGNED')
+              AND NOT EXISTS (
+                SELECT 1 FROM guard.workshop_grants w
+                WHERE w.installation_id=p.installation_id AND w.enabled=TRUE
+              )
+            ORDER BY CASE WHEN p.status='WAITING' THEN 0 ELSE 1 END,
+                     p.last_seen_at DESC
             LIMIT 40
         """)).mappings().all()
     import time
