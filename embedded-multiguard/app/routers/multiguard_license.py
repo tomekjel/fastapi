@@ -3006,9 +3006,12 @@ def _owner_keygate_reconciliation_panel() -> str:
     lines = "".join(
         "<li>Instalacja <code>" + _panel_escape(str(row["installation_id"]))
         + "</code> · workspace <code>" + _panel_escape(row["workspace_reference"])
-        + "</code> · KeyGate ID <code>"
+        + "</code> · stan <strong>" + _panel_escape(row["state"])
+        + "</strong> · KeyGate ID <code>"
         + _panel_escape(row.get("keygate_license_id") or "nieznane")
-        + "</code></li>"
+        + "</code> · <a href=\"/multiguard/panel/pending/"
+        + _panel_escape(str(row["installation_id"]))
+        + "\">Szczegóły komputera</a></li>"
         for row in rows
     )
     return (
