@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 19,
-  "target_sha": "ca11cab294d7e31e2eb55d51dc07accde267f779",
-  "summary": "OWNER V12: responsive command-centre navigation and restoration of exact approved Multi-Guard Pro shield asset. No Android/Windows/licensing API changes. Protected by full PostgreSQL/Chromium CI and rollback."
+  "sequence": 20,
+  "target_sha": "82e1506e488528c45b75a105a317b34fa4e93fd3",
+  "summary": "OWNER: restored original Multi-Servis transistor icon, excluded active indefinite service grants from waiting-license tables and dashboard counts, corrected customer licence headings. Required PostgreSQL/Chromium CI, API contract checks, automatic rollback."
 }
