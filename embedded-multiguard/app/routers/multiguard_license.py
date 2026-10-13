@@ -1341,12 +1341,15 @@ def _panel_html(body: str) -> str:
     const initialProfile=profile.value;
     const update=()=>{{
       profile.disabled=!toggle.checked;
-      if(state) state.textContent=toggle.checked ? 'Włączone' : 'Wyłączone';
-      if(save) save.disabled=toggle.checked===initiallyEnabled &&
-        (!toggle.checked || profile.value===initialProfile);
       if(toggle.checked && !['STANDARD','OBSERVATION','INTENSIVE'].includes(profile.value)){{
         profile.value='STANDARD';
       }}
+      const changed=toggle.checked!==initiallyEnabled ||
+        (toggle.checked && profile.value!==initialProfile);
+      if(state) state.textContent=changed
+        ? (toggle.checked ? 'Włączone · niezapisane' : 'Wyłączone · niezapisane')
+        : (toggle.checked ? 'Włączone' : 'Wyłączone');
+      if(save) save.disabled=!changed;
     }};
     toggle.addEventListener('change',update);
     profile.addEventListener('change',update);
