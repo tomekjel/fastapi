@@ -502,6 +502,19 @@ CREATE INDEX IF NOT EXISTS idx_guard_license_links_device
 CREATE INDEX IF NOT EXISTS idx_guard_license_links_lifecycle
     ON guard.license_links(lifecycle);
 
+-- Durable trace of KeyGate DIRECT creation attempts. Keep this independent
+-- of licence_links: an external licence may exist after SQL rollback.
+CREATE TABLE IF NOT EXISTS guard.direct_keygate_attempts (
+    installation_id UUID PRIMARY KEY,
+    workspace_reference TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL CHECK (state IN ('STARTED','CREATED','RECONCILIATION_REQUIRED')),
+    keygate_license_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guard_direct_keygate_attempts_state
+    ON guard.direct_keygate_attempts(state);
+
 CREATE TABLE IF NOT EXISTS guard.license_extensions (
     id UUID PRIMARY KEY,
     license_link_id UUID NOT NULL
@@ -1017,9 +1030,40 @@ def _assign_direct_customer_license(
         # A KeyGate workspace reference identifies the installation, not
         # an imaginary repair order. No service.order record is created.
         reference = "MG-DIRECT-" + installation_id.hex
-        created = _keygate_create_license(
-            reception_number=reference, edition=edition, months=months,
-        )
+        # A separately committed attempt survives rollback of this transaction.
+        # Duplicate submissions fail closed until an OWNER reconciles KeyGate.
+        with engine.begin() as audit:
+            reserved = audit.execute(text("""
+                INSERT INTO guard.direct_keygate_attempts(
+                    installation_id,workspace_reference,state
+                ) VALUES (:installation_id,:reference,'STARTED')
+                ON CONFLICT (installation_id) DO NOTHING
+                RETURNING installation_id
+            """), {"installation_id":installation_id,"reference":reference}).scalar_one_or_none()
+        if reserved is None:
+            raise HTTPException(
+                409, "Poprzednia próba w KeyGate wymaga sprawdzenia przez OWNER "
+                     "przed ponownym utworzeniem licencji."
+            )
+        try:
+            created = _keygate_create_license(
+                reception_number=reference, edition=edition, months=months,
+            )
+        except Exception:
+            # An interrupted HTTP call can succeed remotely. Never auto-retry.
+            with engine.begin() as audit:
+                audit.execute(text("""
+                    UPDATE guard.direct_keygate_attempts
+                    SET state='RECONCILIATION_REQUIRED',updated_at=now()
+                    WHERE installation_id=:id
+                """), {"id":installation_id})
+            raise
+        with engine.begin() as audit:
+            audit.execute(text("""
+                UPDATE guard.direct_keygate_attempts
+                SET state='CREATED',keygate_license_id=:license_id,updated_at=now()
+                WHERE installation_id=:id
+            """), {"id":installation_id,"license_id":str(created["id"])})
         try:
             lic = con.execute(text("""
                 INSERT INTO guard.license_links(
