@@ -136,7 +136,8 @@ def list_caller_diagnostics(
 ):
     """Server-side OWNER diagnostics view; never exposed to STAFF/clients."""
     _ensure_schema()
-    with engine.connect() as db:
+    with engine.begin() as db:
+        db.execute(text("DELETE FROM guard.android_caller_diagnostics WHERE received_at < now() - INTERVAL '7 days'"))
         rows = db.execute(text("""
             SELECT device_id, event_id, occurred_at, source, event_name,
                    active_jobs, latency_ms, error_class
