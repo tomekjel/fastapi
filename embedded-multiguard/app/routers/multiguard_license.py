@@ -1268,7 +1268,7 @@ def _panel_html(body: str) -> str:
     </nav>
     <p class="nav-group-label">Szybkie działania</p>
     <nav aria-label="Działania">
-      <a href="/multiguard/panel"><span class="nav-icon" aria-hidden="true">＋</span>Nowa licencja</a>
+      <a href="/multiguard/panel#new-license"><span class="nav-icon" aria-hidden="true">＋</span>Licencja klienta ze zleceniem</a>
     </nav>
   </aside>
   <div class="workspace-content">
