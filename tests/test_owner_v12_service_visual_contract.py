@@ -36,8 +36,9 @@ class OwnerServiceVisualContract(unittest.TestCase):
         self.assertIn('Wariant serwisowy', self.license)
         self.assertIn("SERWIS · ", self.license)
         self.assertIn('const initiallyEnabled=toggle.checked;', self.license)
-        self.assertIn('if(state) state.textContent=', self.license)
-        self.assertIn('if(save) save.disabled=', self.license)
+        self.assertIn('if(state) state.textContent=changed', self.license)
+        self.assertIn('if(save) save.disabled=!changed;', self.license)
+        self.assertIn('Wyłączone · niezapisane', self.license)
 
 
 if __name__ == "__main__":
