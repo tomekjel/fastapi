@@ -502,4 +502,47 @@ table th,table td {padding:8px 11px}
   .statistics-finance-content {padding:15px}
 }
 
+/* OWNER V12: compact, accessible service monitoring controls. */
+#service-modes .table-wrap {overflow-x:auto}
+#service-modes table {min-width:820px;table-layout:auto}
+#service-modes th:last-child {width:38%}
+#service-modes tbody td {vertical-align:middle}
+#service-modes .owner-service-edition {display:inline-block;padding:5px 12px;
+  border:1px solid rgba(230,188,101,.33);border-radius:8px;color:var(--gold);
+  letter-spacing:.045em;font-size:13px}
+#service-modes .owner-service-controls {display:grid;gap:10px;min-width:270px}
+#service-modes .owner-service-controls form {display:grid;grid-template-columns:1fr auto;
+  gap:12px 16px;align-items:end}
+#service-modes .owner-service-controls form>label:not(.owner-monitor-toggle) {grid-column:1}
+#service-modes .owner-service-controls select {width:100%;min-width:0;margin-top:5px}
+#service-modes .owner-monitor-toggle {grid-column:1 / -1;display:flex;align-items:center;
+  justify-content:space-between;gap:16px;cursor:pointer;padding:7px 0}
+#service-modes .owner-monitor-label {display:grid;gap:2px;color:var(--text);font-size:15px}
+#service-modes .owner-monitor-label small {font-size:13px;color:var(--muted)}
+#service-modes .owner-monitor-toggle input {position:absolute;opacity:0;width:1px;height:1px;
+  pointer-events:none}
+#service-modes .owner-monitor-switch {position:relative;display:inline-block;flex:0 0 48px;
+  height:26px;border-radius:99px;background:#34465b;border:1px solid #61758a;transition:.15s ease}
+#service-modes .owner-monitor-switch::after {content:"";position:absolute;top:3px;left:3px;
+  width:18px;height:18px;border-radius:50%;background:#f1f5fa;transition:transform .15s ease}
+#service-modes .owner-monitor-toggle input:checked + .owner-monitor-switch {
+  background:#1e826d;border-color:#6bcba9}
+#service-modes .owner-monitor-toggle input:checked + .owner-monitor-switch::after {
+  transform:translateX(21px)}
+#service-modes .owner-monitor-toggle input:focus-visible + .owner-monitor-switch {
+  outline:3px solid var(--focus);outline-offset:3px}
+#service-modes .owner-monitor-save {grid-column:2;padding:10px 16px;min-height:41px;
+  align-self:end;background:rgba(230,188,101,.14);border:1px solid rgba(230,188,101,.6);
+  color:var(--gold);white-space:nowrap;font-size:13px;border-radius:9px}
+#service-modes .owner-service-actions {display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+#service-modes .owner-service-actions .button-link,
+#service-modes .owner-service-actions button {margin:0;min-height:36px;font-size:12px;
+  padding:8px 12px;width:auto;border-radius:8px}
+#service-modes .owner-service-actions .pending-archive-trigger {color:#f5bcc5;
+  border-color:rgba(237,64,86,.42);background:rgba(237,64,86,.09)}
+@media(max-width:1000px) {
+  #service-modes .owner-service-controls form {grid-template-columns:minmax(0,1fr)}
+  #service-modes .owner-monitor-save {grid-column:1;justify-self:start}
+}
+
 """
