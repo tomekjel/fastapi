@@ -430,6 +430,20 @@ class OwnerQueueVisibilityTests(unittest.TestCase):
         self.assertTrue(any("status='WAITING'" in q for q in queries))
 
 
+class OwnerDetailReconciliationTests(unittest.TestCase):
+    def test_device_page_blocks_direct_form_during_unresolved_keygate_attempt(self):
+        function = next(
+            node for node in parsed.body
+            if isinstance(node, ast.FunctionDef) and node.name == "multiguard_panel_pending"
+        )
+        source_text = ast.get_source_segment(source, function)
+        self.assertIn("unresolved_attempt", source_text)
+        self.assertIn("direct_buttons =", source_text)
+        self.assertIn("Nie twórz kolejnej licencji", source_text)
+        self.assertIn("guard.direct_keygate_attempts", source_text)
+        self.assertIn("guard.license_links", source_text)
+
+
 class OwnerReconciliationPanelTests(unittest.TestCase):
     def test_owner_sees_interrupted_and_orphaned_keygate_creations(self):
         from contextlib import nullcontext
