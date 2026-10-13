@@ -210,6 +210,72 @@ class AcceptanceGateTests(unittest.TestCase):
                 self.assertEqual(keygate_calls, [])
 
 
+class DiscoveryRegistrationSecurityTests(unittest.TestCase):
+    def test_existing_asus_identity_rejects_foreign_device_or_credential(self):
+        # Production endpoint, fake SQL transaction, no secrets or network.
+        from types import SimpleNamespace
+        from contextlib import nullcontext
+        original = next(
+            node for node in parsed.body
+            if isinstance(node, ast.FunctionDef) and node.name == "discovery_register"
+        )
+        original.decorator_list = []
+        module = ast.Module(body=[original], type_ignores=[])
+        ast.fix_missing_locations(module)
+        updates = []
+        class Result:
+            def __init__(self, row):
+                self.row = row
+            def mappings(self):
+                return self
+            def first(self):
+                return self.row
+        class Connection:
+            def __init__(self, existing):
+                self.existing = existing
+            def execute(self, query, params):
+                if "SELECT *" in str(query):
+                    return Result(self.existing)
+                updates.append(str(query))
+                raise AssertionError("Security check must block database writes")
+        class Engine:
+            def __init__(self, existing):
+                self.existing = existing
+            def begin(self):
+                return nullcontext(Connection(self.existing))
+        installed_id = str(uuid.uuid4())
+        req = SimpleNamespace(
+            installation_id=installed_id, device_id="asus-original",
+            discovery_credential="secret-original",
+        )
+        env = {
+            "DiscoveryRegisterRequest": object,
+            "_ensure_schema": lambda: None,
+            "uuid": uuid,
+            "_hash": lambda value: "sha-" + value,
+            "_utcnow": lambda: None,
+            "engine": None,
+            "text": lambda sql: sql,
+            "HTTPException": FakeHTTPException,
+            "secrets": __import__("secrets"),
+        }
+        exec(compile(module, str(source_file), "exec"), env)
+        registered = {
+            "device_id": "asus-original",
+            "discovery_credential_sha256": "sha-secret-original",
+        }
+        for label, data in [
+            ("device changed", {**registered, "device_id": "other-device"}),
+            ("credential changed", {**registered, "discovery_credential_sha256": "sha-other"}),
+        ]:
+            with self.subTest(label=label):
+                env["engine"] = Engine(data)
+                with self.assertRaises(FakeHTTPException) as failure:
+                    env["discovery_register"](req)
+                self.assertEqual(failure.exception.status_code, 409 if label == "device changed" else 401)
+        self.assertEqual(updates, [])
+
+
 class DiscoveryQueueContractTests(unittest.TestCase):
     def test_unlicensed_computer_is_waiting_and_service_grant_is_signed(self):
         # Execute the real discovery endpoint against an isolated in-memory DB.
