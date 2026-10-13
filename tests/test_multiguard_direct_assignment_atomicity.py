@@ -75,6 +75,8 @@ class SimulatedDatabase:
             def execute(self, sql, params=None):
                 query = str(sql)
                 db.queries.append(query)
+                if "INSERT INTO guard.direct_keygate_attempts" in query:
+                    return Result("reserved")
                 if "FROM guard.pending_installations" in query:
                     return Result({"status": working["status"], "assigned_license_id": working["license"]})
                 if "SELECT id FROM guard.license_links" in query:
@@ -106,6 +108,9 @@ class Result:
         return self.value
 
     def one(self):
+        return self.value
+
+    def scalar_one_or_none(self):
         return self.value
 
     def mappings(self):
