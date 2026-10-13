@@ -507,6 +507,9 @@ CREATE INDEX IF NOT EXISTS idx_guard_license_links_lifecycle
 CREATE TABLE IF NOT EXISTS guard.direct_keygate_attempts (
     installation_id UUID PRIMARY KEY,
     workspace_reference TEXT NOT NULL UNIQUE,
+    edition TEXT,
+    duration_months INTEGER,
+    release_channel TEXT,
     state TEXT NOT NULL CHECK (state IN ('STARTED','CREATED','RECONCILIATION_REQUIRED')),
     keygate_license_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
