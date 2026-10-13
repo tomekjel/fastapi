@@ -19,7 +19,7 @@ jobs:
     steps:
       - name: Verify OWNER computer
         run: |
-          if ($env:RUNNER_NAME -ne 'MultiGuard-Dev') { throw 'Unexpected Windows runner' }
+          if ($env:RUNNER_NAME -ne 'ROG') { throw ('Unexpected backend runner: ' + $env:RUNNER_NAME) }
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
