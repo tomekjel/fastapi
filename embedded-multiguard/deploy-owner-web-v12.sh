@@ -82,8 +82,21 @@ PYTHONPATH="$ROOT" "$PY" "$STAGE/preflight.py"
 # provision, and opt-in workshop/report. Never relax unrelated API guards.
 "$PY" - "$ROUTERS" "$STAGE" <<'PY'
 from pathlib import Path
-import ast,sys
+import ast,copy,sys
 old,new=map(Path,sys.argv[1:])
+# Acceptance has one reviewed hardening: reject duplicate document entries.
+# Permit ONLY this exact condition replacement, not arbitrary handler edits.
+def exact_acceptance_hardening(original,revised):
+    old_check=ast.parse("received != expected",mode="eval").body
+    new_check=ast.parse("len(req.documents) != len(required) or received != expected",mode="eval").body
+    normalized=copy.deepcopy(revised)
+    matches=[node for node in ast.walk(normalized)
+             if isinstance(node,ast.If)
+             and ast.dump(node.test)==ast.dump(new_check)]
+    if len(matches)!=1:
+        return False
+    matches[0].test=old_check
+    return ast.dump(original,include_attributes=False)==ast.dump(normalized,include_attributes=False)
 AUTHORIZED_LICENSE_EVOLUTION=frozenset({
     ("post","/v1/multi-guard/provision"),
     ("post","/v1/multi-guard/discovery/assignment"),
@@ -121,6 +134,10 @@ for name in ("multiguard_license.py","multiguard_runtime.py"):
     for key in before.keys()&after.keys():
         original,revised=before[key],after[key]
         if ast.dump(original,include_attributes=False)==ast.dump(revised,include_attributes=False):
+            continue
+        if (name=="multiguard_license.py"
+            and key==("post","/v1/multi-guard/acceptance")
+            and exact_acceptance_hardening(original,revised)):
             continue
         if name!="multiguard_license.py" or key not in AUTHORIZED_LICENSE_EVOLUTION:
             raise SystemExit(f"BLOCKED: unrelated Android/agent endpoint changed: {name}:{key}")
