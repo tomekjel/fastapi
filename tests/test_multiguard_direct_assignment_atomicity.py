@@ -61,8 +61,9 @@ exec(compile(isolated, str(source_file), "exec"), mg.__dict__)
 class SimulatedDatabase:
     """Transaction simulator: changes persist only if the block exits normally."""
 
-    def __init__(self, fail_workshop_update=False):
+    def __init__(self, fail_workshop_update=False, race_on_assignment_update=False):
         self.fail_workshop_update = fail_workshop_update
+        self.race_on_assignment_update = race_on_assignment_update
         self.state = {"status": "WAITING", "license": None, "grant": True}
         self.attempts = {}
         self.queries = []
@@ -99,6 +100,8 @@ class SimulatedDatabase:
                 if "INSERT INTO guard.license_links" in query:
                     return Result({"keygate_license_id": "FAKE-LICENSE", "plan_code": "multi_guard_pro"})
                 if "UPDATE guard.pending_installations" in query:
+                    if db.race_on_assignment_update:
+                        return Result(None)
                     if working["status"] != "WAITING" or working["license"] is not None:
                         return Result(None)
                     working["status"] = "ASSIGNED"
@@ -239,6 +242,14 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
         self.assertIsNone(db.state["license"])
         # External licence exists in this scenario despite SQL rollback.
         # This is a documented release blocker until reconciliation is implemented.
+
+    def test_racing_assignment_aborts_local_commit_and_requires_reconciliation(self):
+        db = SimulatedDatabase(race_on_assignment_update=True)
+        with self.assertRaises(mg.HTTPException) as failure:
+            self.run_assignment(db)
+        self.assertEqual(failure.exception.status_code, 503)
+        self.assertEqual(db.state, {"status": "WAITING", "license": None, "grant": True})
+        self.assertEqual(next(iter(db.attempts.values()))["state"], "RECONCILIATION_REQUIRED")
 
     def test_retry_after_external_creation_is_blocked(self):
         db = SimulatedDatabase(fail_workshop_update=True)
