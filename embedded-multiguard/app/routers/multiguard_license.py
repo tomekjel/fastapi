@@ -2819,9 +2819,13 @@ def _owner_workshop_manager_panel() -> str:
                     data-owner-monitor-form>
                   <input type="hidden" name="csrf_token" value="{token}">
                   <label class="owner-monitor-toggle">
+                    <span class="owner-monitor-label">Monitorowanie rozszerzone
+                      <small>{"Włączone" if selected!="OFF" else "Wyłączone"}</small>
+                    </span>
                     <input type="checkbox" name="monitoring_enabled" value="yes"
-                      {"checked" if selected!="OFF" else ""} data-owner-monitor-toggle>
-                    Monitorowanie rozszerzone — WŁĄCZONE / WYŁĄCZONE
+                      {"checked" if selected!="OFF" else ""} data-owner-monitor-toggle
+                      aria-label="Włącz monitorowanie rozszerzone dla {display}">
+                    <span class="owner-monitor-switch" aria-hidden="true"></span>
                   </label>
                   <label>Poziom monitorowania
                     <select name="profile" aria-label="Poziom monitorowania dla {display}"
@@ -2829,8 +2833,9 @@ def _owner_workshop_manager_panel() -> str:
                       {options}
                     </select>
                   </label>
-                  <button type="submit">ZAPISZ MONITOROWANIE</button>
+                  <button type="submit" class="owner-monitor-save">ZAPISZ ZMIANY</button>
                 </form>
+                <div class="owner-service-actions">
                 <a class="button-link compact" href="/multiguard/panel/workshop/{iid}/reports">
                   HISTORIA RAPORTÓW
                 </a>
@@ -2838,6 +2843,7 @@ def _owner_workshop_manager_panel() -> str:
                   onclick="document.getElementById('disable-workshop-{iid}').showModal()">
                   WYŁĄCZ TRYB SERWISOWY
                 </button>
+                </div>
                 <dialog class="pending-owner-dialog" id="disable-workshop-{iid}"
                   aria-labelledby="disable-workshop-title-{iid}">
                   <h3 id="disable-workshop-title-{iid}">Wyłączyć tryb serwisowy?</h3>
@@ -2859,7 +2865,7 @@ def _owner_workshop_manager_panel() -> str:
               </div>"""
         trs.append(
             f"<tr><td><a href='/multiguard/panel/pending/{iid}'>{display}</a><br>"
-            + link + "</td><td>" + edition + "</td><td>" + status
+            + link + "</td><td><span class='owner-service-edition'>" + edition + "</span></td><td>" + status
             + "</td><td>" + controls + "</td></tr>"
         )
     return f"""
