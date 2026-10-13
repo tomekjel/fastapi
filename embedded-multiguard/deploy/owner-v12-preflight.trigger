@@ -1,1 +1,2 @@
-Owner approved Multi-Servis V12 web-panel deployment preflight on 2026-10-09. This trigger runs ONLY read-only server contract checks. No API, Android or Multi-Guard client changes.
+2026-10-13 OWNER service-mode release gate.
+Run Chromium/PostgreSQL and deployment guards on this exact base-branch source before raising manifest sequence. Real KeyGate helper tests passed; pinned on-server deploy script refreshed by owner. No production release requested by this trigger.
