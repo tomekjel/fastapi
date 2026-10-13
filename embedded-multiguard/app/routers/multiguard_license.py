@@ -1250,7 +1250,13 @@ def _panel_html(body: str) -> str:
   <aside class="workspace-sidebar" aria-label="Nawigacja Multi-Servis">
     <a class="brand-home" href="/multiguard/panel/dashboard">
       <span class="brand-emblem" aria-hidden="true">
-        <img alt="" width="42" height="42" style="display:block;object-fit:contain" src="data:image/webp;base64,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">
+        <svg viewBox="0 0 64 64" width="43" height="43" xmlns="http://www.w3.org/2000/svg" role="presentation">
+          <defs><linearGradient id="mg-owner-silver" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#f6f8fa"/><stop offset="1" stop-color="#9baab9"/></linearGradient></defs>
+          <circle cx="32" cy="32" r="27" fill="#101c2e" stroke="#63bdec" stroke-width="2"/>
+          <circle cx="32" cy="32" r="21" fill="none" stroke="#8fa5bb" stroke-opacity=".45"/>
+          <path d="M15 20H31M15 44H31M31 14V50M31 22L46 13M31 42L46 51" fill="none" stroke="url(#mg-owner-silver)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M38 42L46 51L36 48" fill="none" stroke="#66c7f7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
       </span>
       <span><span class="brand-name"><span class="brand-multi">Multi</span><span class="brand-servis">-Servis</span></span>
       <span class="brand-caption">CENTRUM ZARZĄDZANIA</span></span>
@@ -1328,14 +1334,25 @@ def _panel_html(body: str) -> str:
   for (const form of document.querySelectorAll('form[data-owner-monitor-form]')) {{
     const toggle=form.querySelector('[data-owner-monitor-toggle]');
     const profile=form.querySelector('[data-owner-monitor-profile]');
+    const state=form.querySelector('[data-owner-monitor-state]');
+    const save=form.querySelector('[data-owner-monitor-save]');
     if (!toggle || !profile) continue;
+    const initiallyEnabled=toggle.checked;
+    const initialProfile=profile.value;
     const update=()=>{{
       profile.disabled=!toggle.checked;
       if(toggle.checked && !['STANDARD','OBSERVATION','INTENSIVE'].includes(profile.value)){{
         profile.value='STANDARD';
       }}
+      const changed=toggle.checked!==initiallyEnabled ||
+        (toggle.checked && profile.value!==initialProfile);
+      if(state) state.textContent=changed
+        ? (toggle.checked ? 'Włączone · niezapisane' : 'Wyłączone · niezapisane')
+        : (toggle.checked ? 'Włączone' : 'Wyłączone');
+      if(save) save.disabled=!changed;
     }};
     toggle.addEventListener('change',update);
+    profile.addEventListener('change',update);
     update();
   }}
 
@@ -2819,9 +2836,13 @@ def _owner_workshop_manager_panel() -> str:
                     data-owner-monitor-form>
                   <input type="hidden" name="csrf_token" value="{token}">
                   <label class="owner-monitor-toggle">
+                    <span class="owner-monitor-label">Monitorowanie rozszerzone
+                      <small data-owner-monitor-state>{"Włączone" if selected!="OFF" else "Wyłączone"}</small>
+                    </span>
                     <input type="checkbox" name="monitoring_enabled" value="yes"
-                      {"checked" if selected!="OFF" else ""} data-owner-monitor-toggle>
-                    Monitorowanie rozszerzone — WŁĄCZONE / WYŁĄCZONE
+                      {"checked" if selected!="OFF" else ""} data-owner-monitor-toggle
+                      aria-label="Włącz monitorowanie rozszerzone dla {display}">
+                    <span class="owner-monitor-switch" aria-hidden="true"></span>
                   </label>
                   <label>Poziom monitorowania
                     <select name="profile" aria-label="Poziom monitorowania dla {display}"
@@ -2829,8 +2850,9 @@ def _owner_workshop_manager_panel() -> str:
                       {options}
                     </select>
                   </label>
-                  <button type="submit">ZAPISZ MONITOROWANIE</button>
+                  <button type="submit" class="owner-monitor-save" data-owner-monitor-save disabled>ZAPISZ ZMIANY</button>
                 </form>
+                <div class="owner-service-actions">
                 <a class="button-link compact" href="/multiguard/panel/workshop/{iid}/reports">
                   HISTORIA RAPORTÓW
                 </a>
@@ -2838,6 +2860,7 @@ def _owner_workshop_manager_panel() -> str:
                   onclick="document.getElementById('disable-workshop-{iid}').showModal()">
                   WYŁĄCZ TRYB SERWISOWY
                 </button>
+                </div>
                 <dialog class="pending-owner-dialog" id="disable-workshop-{iid}"
                   aria-labelledby="disable-workshop-title-{iid}">
                   <h3 id="disable-workshop-title-{iid}">Wyłączyć tryb serwisowy?</h3>
@@ -2859,7 +2882,7 @@ def _owner_workshop_manager_panel() -> str:
               </div>"""
         trs.append(
             f"<tr><td><a href='/multiguard/panel/pending/{iid}'>{display}</a><br>"
-            + link + "</td><td>" + edition + "</td><td>" + status
+            + link + "</td><td><span class='owner-service-edition'>SERWIS · " + edition + "</span></td><td>" + status
             + "</td><td>" + controls + "</td></tr>"
         )
     return f"""
@@ -2871,7 +2894,7 @@ def _owner_workshop_manager_panel() -> str:
            Standardowy, Obserwacja lub Intensywny dla każdego komputera.
            Wyłączenie uprawnienia jest możliwe tylko tutaj.</p>
         <div class="table-wrap"><table style="min-width:900px">
-          <thead><tr><th>Komputer / zlecenie</th><th>Edycja</th>
+          <thead><tr><th>Komputer / zlecenie</th><th>Wariant serwisowy</th>
             <th>Tryb serwisowy</th><th>Monitorowanie i sterowanie</th></tr></thead>
           <tbody>{''.join(trs) or '<tr><td colspan="4">Brak komputerów z trybem serwisowym.</td></tr>'}</tbody>
         </table></div>
