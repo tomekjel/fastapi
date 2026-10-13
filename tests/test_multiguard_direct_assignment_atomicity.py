@@ -212,6 +212,24 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
             keygate.assert_called_once()
         self.assertEqual(db.attempts[str(installation_id)]["state"], "RECONCILIATION_REQUIRED")
 
+    def test_retry_after_uncertain_keygate_network_result_is_blocked(self):
+        db = SimulatedDatabase()
+        installation_id = uuid.uuid4()
+        with (
+            patch.object(mg, "engine", db),
+            patch.object(mg, "_ensure_schema"),
+            patch.object(mg, "_keygate_create_license",
+                         side_effect=RuntimeError("KeyGate response lost")) as keygate,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "KeyGate response lost"):
+                mg._assign_direct_customer_license(installation_id, "PRO", 3, "STABLE")
+            with self.assertRaises(mg.HTTPException) as retry:
+                mg._assign_direct_customer_license(installation_id, "PRO", 3, "STABLE")
+            self.assertEqual(retry.exception.status_code, 409)
+            keygate.assert_called_once()
+        self.assertEqual(db.attempts[str(installation_id)]["state"], "RECONCILIATION_REQUIRED")
+        self.assertEqual(db.state["status"], "WAITING")
+
     def test_sql_failure_rolls_back_pending_assignment(self):
         db = SimulatedDatabase(fail_workshop_update=True)
         with self.assertRaises(mg.HTTPException) as failure:
