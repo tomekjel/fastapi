@@ -210,6 +210,65 @@ class AcceptanceGateTests(unittest.TestCase):
                 self.assertEqual(keygate_calls, [])
 
 
+class OwnerQueueVisibilityTests(unittest.TestCase):
+    def test_owner_pending_list_returns_unlicensed_asus_without_assignment(self):
+        from contextlib import nullcontext
+        original = next(
+            node for node in parsed.body
+            if isinstance(node, ast.FunctionDef) and node.name == "pending_installations"
+        )
+        original.decorator_list = []
+        module = ast.Module(body=[original], type_ignores=[])
+        ast.fix_missing_locations(module)
+        iid = uuid.uuid4()
+        queries = []
+        class QueryResult:
+            def mappings(self):
+                return self
+            def all(self):
+                return [{
+                    "installation_id": iid,
+                    "device_id": "asus-test",
+                    "hostname": "ASUS",
+                    "status": "WAITING",
+                    "app_version": "0.3.42",
+                    "last_seen_at": None,
+                    "assigned_reception_id": None,
+                    "assigned_license_id": None,
+                }]
+        class Connection:
+            def execute(self, query):
+                queries.append(str(query))
+                return QueryResult()
+        class Engine:
+            def connect(self):
+                return nullcontext(Connection())
+        env = {
+            "CurrentUser": object,
+            "Depends": lambda x: None,
+            "require_owner": lambda: None,
+            "_ensure_schema": lambda: None,
+            "engine": Engine(),
+            "text": lambda s: s,
+            "_pending_public": lambda row, match_score=0: {
+                "installationId": str(row["installation_id"]),
+                "status": row["status"],
+                "hostname": row["hostname"],
+                "appVersion": row["app_version"],
+                "online": False,
+                "matchScore": match_score,
+                "lastSeenAt": None,
+            },
+        }
+        exec(compile(module, str(source_file), "exec"), env)
+        result = env["pending_installations"](reception_id="", include_assigned=False)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["hostname"], "ASUS")
+        self.assertEqual(result[0]["status"], "WAITING")
+        self.assertEqual(result[0]["appVersion"], "0.3.42")
+        self.assertTrue(any("status='WAITING'" in q for q in queries))
+
+
 class OwnerPanelContractTests(unittest.TestCase):
     def test_owner_panel_has_both_license_routes_and_indefinite_service(self):
         # AST verifies the actual OWNER-rendering endpoint independently of FastAPI.
