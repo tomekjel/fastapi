@@ -22,9 +22,9 @@ jobs:
           if /I not "%RUNNER_NAME%"=="ROG" exit /b 1
       - uses: actions/checkout@v4
       - name: Validate OWNER Python source and visual contract
-        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: cmd
         run: |
           python -m py_compile embedded-multiguard/app/routers/multiguard_license.py embedded-multiguard/app/routers/multiguard_panel_theme.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m unittest discover -s tests -p "test_owner_v12_service_visual_contract.py" -v
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if errorlevel 1 exit /b 1
+          python -m unittest discover -s tests -p test_owner_v12_service_visual_contract.py -v
+          if errorlevel 1 exit /b 1
