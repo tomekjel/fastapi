@@ -8,6 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 LICENSE = ROOT / "embedded-multiguard/app/routers/multiguard_license.py"
 THEME = ROOT / "embedded-multiguard/app/routers/multiguard_panel_theme.py"
+RUNTIME = ROOT / "embedded-multiguard/app/routers/multiguard_runtime.py"
 
 
 class OwnerServiceVisualContract(unittest.TestCase):
@@ -15,6 +16,7 @@ class OwnerServiceVisualContract(unittest.TestCase):
     def setUpClass(cls):
         cls.license = LICENSE.read_text(encoding="utf-8")
         cls.theme = THEME.read_text(encoding="utf-8")
+        cls.runtime = RUNTIME.read_text(encoding="utf-8")
 
     def test_owner_template_and_styles_compile(self):
         compile(self.license, str(LICENSE), "exec")
@@ -46,15 +48,20 @@ class OwnerServiceVisualContract(unittest.TestCase):
         self.assertIn('csrf_token: str = Form(...)', self.license)
         self.assertIn('_: None = Depends(_panel_auth)', self.license)
 
+    def test_service_grant_never_shows_as_waiting_license(self):
+        self.assertIn("w.installation_id=p.installation_id AND w.enabled=TRUE", self.runtime)
+        self.assertIn("WHERE p.status IN ('WAITING','ASSIGNED')", self.runtime)
+        self.assertIn("SELECT count(*) FROM guard.pending_installations p", self.runtime)
+
     def test_legacy_visual_defects_do_not_return(self):
         self.assertNotIn('Monitorowanie rozszerzone — WŁĄCZONE / WYŁĄCZONE', self.license)
-        self.assertNotIn('data:image/webp;base64,', self.license)
-        self.assertIn('owner-approved-shield', self.theme)
-        self.assertIn('class="owner-approved-shield"', self.license)
-        self.assertIn('data:image/png;base64,', self.license)
+        self.assertIn('data:image/webp;base64,', self.license)
+        self.assertNotIn('class="owner-approved-shield"', self.license)
+        self.assertNotIn('data:image/png;base64,', self.license)
         self.assertNotIn('mg-owner-silver', self.license)
         self.assertIn('owner-service-actions', self.license)
         self.assertIn('Wariant serwisowy', self.license)
+        self.assertIn('Licencja klienta — ze zleceniem serwisowym', self.license)
         self.assertIn("SERWIS · ", self.license)
         self.assertIn('const initiallyEnabled=toggle.checked;', self.license)
         self.assertIn('if(state) state.textContent=changed', self.license)
