@@ -1,7 +1,7 @@
 """Regression tests for assigning a DIRECT Multi-Guard licence.
 
 Run in the backend test environment (with app import path configured):
-    python -m unittest tests.test_multiguard_direct_assignment_atomicity
+    PYTHONPATH=embedded-multiguard python -m unittest discover -s tests -p test_multiguard_direct_assignment_atomicity.py
 No network access or production database is used.
 """
 import unittest
