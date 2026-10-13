@@ -310,6 +310,50 @@ class OwnerQueueVisibilityTests(unittest.TestCase):
         self.assertTrue(any("status='WAITING'" in q for q in queries))
 
 
+class OwnerReconciliationPanelTests(unittest.TestCase):
+    def test_owner_sees_interrupted_and_orphaned_keygate_creations(self):
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+        fn = next(
+            node for node in parsed.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_owner_keygate_reconciliation_panel"
+        )
+        ast.fix_missing_locations(fn)
+        module = ast.Module(body=[fn], type_ignores=[])
+        ast.fix_missing_locations(module)
+        seen = []
+        class DbResult:
+            def mappings(self):
+                return self
+            def all(self):
+                return [
+                    dict(installation_id=uuid.uuid4(),
+                         workspace_reference="MG-DIRECT-test",
+                         state="CREATED", keygate_license_id="KG-123")
+                ]
+        class Db:
+            def execute(self, query):
+                seen.append(str(query))
+                return DbResult()
+        env = dict(
+            _ensure_schema=lambda: None,
+            engine=SimpleNamespace(connect=lambda: nullcontext(Db())),
+            text=lambda query: query,
+            _panel_escape=lambda value: str(value),
+        )
+        exec(compile(module, str(source_file), "exec"), env)
+        rendered = env["_owner_keygate_reconciliation_panel"]()
+        self.assertIn("KG-123", rendered)
+        self.assertIn("Wymagana weryfikacja KeyGate", rendered)
+        sql = seen[0]
+        self.assertIn("RECONCILIATION_REQUIRED", sql)
+        self.assertIn("STARTED", sql)
+        self.assertIn("state='CREATED'", sql)
+        self.assertIn("NOT EXISTS", sql)
+        self.assertIn("guard.license_links", sql)
+
+
 class OwnerPanelContractTests(unittest.TestCase):
     def test_owner_panel_has_both_license_routes_and_indefinite_service(self):
         # AST verifies the actual OWNER-rendering endpoint independently of FastAPI.
