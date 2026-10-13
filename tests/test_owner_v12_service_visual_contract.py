@@ -33,6 +33,11 @@ class OwnerServiceVisualContract(unittest.TestCase):
         self.assertNotIn('data:image/webp;base64,', self.license)
         self.assertIn('mg-owner-silver', self.license)
         self.assertIn('owner-service-actions', self.license)
+        self.assertIn('Wariant serwisowy', self.license)
+        self.assertIn("SERWIS · ", self.license)
+        self.assertIn('const initiallyEnabled=toggle.checked;', self.license)
+        self.assertIn('if(state) state.textContent=', self.license)
+        self.assertIn('if(save) save.disabled=', self.license)
 
 
 if __name__ == "__main__":
