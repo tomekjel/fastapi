@@ -132,6 +132,19 @@ class Result:
         return self
 
 
+class KeyGateLockSafetyTests(unittest.TestCase):
+    def test_external_keygate_call_does_not_hold_pending_row_for_update_lock(self):
+        fn = next(
+            node for node in parsed.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_assign_direct_customer_license"
+        )
+        code = ast.get_source_segment(source, fn)
+        before_external_call = code.split("created = _keygate_create_license(", 1)[0]
+        self.assertNotIn("WHERE installation_id=:id FOR UPDATE", before_external_call)
+        self.assertIn("INSERT INTO guard.direct_keygate_attempts", before_external_call)
+
+
 class DirectAssignmentAtomicityTests(unittest.TestCase):
     def run_assignment(self, database):
         with (
