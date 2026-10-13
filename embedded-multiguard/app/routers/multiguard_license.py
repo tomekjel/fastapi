@@ -1088,13 +1088,18 @@ def _assign_direct_customer_license(
                 "plan":"multi_guard_pro" if edition=="PRO" else "multi_guard",
                 "months":months,"channel":channel,
             }).mappings().one()
-            con.execute(text("""
+            updated = con.execute(text("""
                 UPDATE guard.pending_installations SET
                     status='ASSIGNED',assigned_reception_id=NULL,
                     assigned_license_id=:license_id,
                     assigned_at=now(),updated_at=now()
                 WHERE installation_id=:id
-            """), {"license_id":lic["keygate_license_id"],"id":installation_id})
+                  AND status='WAITING'
+                  AND assigned_license_id IS NULL
+                RETURNING installation_id
+            """), {"license_id":lic["keygate_license_id"],"id":installation_id}).scalar_one_or_none()
+            if updated is None:
+                raise RuntimeError("Instalacja zmieniła status podczas operacji KeyGate.")
             con.execute(text("""
                 UPDATE guard.workshop_grants
                 SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
