@@ -99,8 +99,11 @@ class SimulatedDatabase:
                 if "INSERT INTO guard.license_links" in query:
                     return Result({"keygate_license_id": "FAKE-LICENSE", "plan_code": "multi_guard_pro"})
                 if "UPDATE guard.pending_installations" in query:
+                    if working["status"] != "WAITING" or working["license"] is not None:
+                        return Result(None)
                     working["status"] = "ASSIGNED"
                     working["license"] = "FAKE-LICENSE"
+                    return Result(params["id"])
                 if "UPDATE guard.workshop_grants" in query:
                     if db.fail_workshop_update:
                         raise RuntimeError("synthetic SQL error during grant revocation")
