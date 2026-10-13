@@ -297,7 +297,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert get("/multiguard/panel/statistics?period=custom").status_code==200
     assert get("/multiguard/panel/statistics?period=month&month=not-a-month").status_code in (400,422)
     assert get("/multiguard/panel/statistics?period=quarter&quarter=9").status_code==400
-    assert 'id="pending"' not in license_page.text
+    assert 'id="pending"' not in inventory_page.text
     license_page=get("/multiguard/panel/licenses")
     ensure(license_page.status_code,200,"Licences and waiting installs")
     assert 'id="pending"' in license_page.text
@@ -591,7 +591,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"id":mode_direct}).mappings().one()
     assert grant["enabled"] is True and grant["monitoring_profile"]=="OFF"
     assert grant["associated_reception_id"] is None
-    owner_modes=get("/multiguard/panel")
+    owner_modes=get("/multiguard/panel/workshop")
     ensure(owner_modes.status_code,200,"OWNER central service management")
     assert 'data-owner-monitor-toggle' in owner_modes.text
     assert f'/multiguard/panel/workshop/{mode_direct}/disable' in owner_modes.text
