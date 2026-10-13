@@ -25,15 +25,25 @@ assert '("post","/v1/multi-guard/workshop/report")' in body, "Only reviewed auth
 assert "changed_authorized.issubset(AUTHORIZED_LICENSE_EVOLUTION)" in body, "Web-only incremental releases must allow unchanged licensing APIs"
 assert "ast.dump" in body, "Must compare entire handler ASTs"
 
+def baseline(sha: str, name: str) -> bytes:
+    # Reuse available git history before making any network request.
+    cached=subprocess.run(
+        ["git","show",f"{sha}:embedded-multiguard/app/routers/{name}"],
+        cwd=ROOT.parent,capture_output=True,timeout=20,
+    )
+    if cached.returncode==0:
+        return cached.stdout
+    url=f"https://raw.githubusercontent.com/tomekjel/fastapi/{sha}/embedded-multiguard/app/routers/{name}"
+    request=urllib.request.Request(url,headers={"User-Agent":"Multi-Servis-licence-CI"})
+    with urllib.request.urlopen(request,timeout=25) as source:
+        return source.read()
+
 with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     root=Path(folder)
     old=root/"before"; new=root/"after"
     old.mkdir();new.mkdir()
     for name in NAMES:
-        url=f"https://raw.githubusercontent.com/tomekjel/fastapi/{BASE_SHA}/embedded-multiguard/app/routers/{name}"
-        request=urllib.request.Request(url,headers={"User-Agent":"Multi-Servis-licence-CI"})
-        with urllib.request.urlopen(request,timeout=25) as source:
-            (old/name).write_bytes(source.read())
+        (old/name).write_bytes(baseline(BASE_SHA,name))
         (new/name).write_bytes((ROOT/"app/routers"/name).read_bytes())
 
     def run()->subprocess.CompletedProcess[str]:
@@ -46,10 +56,7 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     # an OWNER-only update must pass without requiring changes to public routes.
     last_deployed="ed0f7506e926861d40294d2e7fdf9b6f376d9f48"
     for name in NAMES:
-        url=f"https://raw.githubusercontent.com/tomekjel/fastapi/{last_deployed}/embedded-multiguard/app/routers/{name}"
-        request=urllib.request.Request(url,headers={"User-Agent":"Multi-Servis-licence-CI"})
-        with urllib.request.urlopen(request,timeout=25) as source:
-            (old/name).write_bytes(source.read())
+        (old/name).write_bytes(baseline(last_deployed,name))
     increment=run()
     assert increment.returncode==0,(increment.stdout,increment.stderr)
     print("PASS: seq6 to OWNER-only update without changing unrelated endpoints.")
@@ -81,6 +88,24 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     assert "interface" in (reject.stdout+reject.stderr)
     print("PASS: modified provision API signature is rejected.")
     path.write_text(original,encoding="utf-8")
+
+    # Acceptance may only add the exact duplicate-document check. Other
+    # body edits, bypasses and interface changes remain blocked.
+    tag="def acceptance(req: AcceptanceRequest):"
+    assert original.count(tag)==1
+    hardened="len(req.documents) != len(required) or received != expected"
+    assert original.count(hardened)==1
+    for mutation in (
+        original.replace(tag,tag+"\n    pass",1),
+        original.replace(tag,"def acceptance(req: AcceptanceRequest, bypass: bool = False):",1),
+        original.replace(hardened,"False",1),
+    ):
+        path.write_text(mutation,encoding="utf-8")
+        reject=run()
+        assert reject.returncode!=0,(reject.stdout,reject.stderr)
+        assert "unrelated" in (reject.stdout+reject.stderr)
+    path.write_text(original,encoding="utf-8")
+    print("PASS: acceptance permits only exact duplicate-document hardening.")
 
     # No change whatsoever is allowed to discovery/register, including
     # an unsafe request-parameter bypass. Only assignment can revive archived
