@@ -172,6 +172,41 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
 
 
 
+class KeyGateApiContractTests(unittest.TestCase):
+    def test_direct_creation_sends_stable_workspace_reference_without_auto_retry(self):
+        original = next(
+            node for node in parsed.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_keygate_create_license"
+        )
+        original.decorator_list = []
+        module = ast.Module(body=[original], type_ignores=[])
+        ast.fix_missing_locations(module)
+        calls = []
+        def request(method, path, **kwargs):
+            calls.append((method, path, kwargs))
+            return {"id": "KEYGATE-ID", "license_key": "KG-TEST"}
+        env = {
+            "Any": Any,
+            "_required_env": lambda name: "TEST-PRODUCT",
+            "_find_plan_id": lambda edition, months: "TEST-PLAN",
+            "_keygate_request": request,
+            "_setting": lambda key, default: default,
+            "HTTPException": FakeHTTPException,
+        }
+        exec(compile(module, str(source_file), "exec"), env)
+        created = env["_keygate_create_license"](
+            reception_number="MG-DIRECT-123", edition="PRO", months=3
+        )
+        self.assertEqual(created["_plan_id"], "TEST-PLAN")
+        self.assertEqual(len(calls), 1)
+        method, path, params = calls[0]
+        self.assertEqual((method, path), ("POST", "/api/v1/admin/licenses"))
+        self.assertTrue(params["admin"])
+        self.assertEqual(params["body"]["external_workspace_id"], "MG-DIRECT-123")
+        self.assertEqual(params["body"]["plan_id"], "TEST-PLAN")
+        self.assertNotIn("valid_until", params["body"])
+
+
 class AcceptanceGateTests(unittest.TestCase):
     def test_duplicate_document_cannot_activate_keygate(self):
         from types import SimpleNamespace
