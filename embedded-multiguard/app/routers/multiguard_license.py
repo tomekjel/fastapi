@@ -2994,6 +2994,11 @@ def _owner_keygate_reconciliation_panel() -> str:
             SELECT installation_id,workspace_reference,state,keygate_license_id
             FROM guard.direct_keygate_attempts
             WHERE state IN ('STARTED','RECONCILIATION_REQUIRED')
+               OR (state='CREATED' AND NOT EXISTS (
+                   SELECT 1 FROM guard.license_links l
+                   WHERE l.installation_id=guard.direct_keygate_attempts.installation_id
+                     AND l.keygate_license_id=guard.direct_keygate_attempts.keygate_license_id
+               ))
             ORDER BY updated_at DESC LIMIT 50
         """)).mappings().all()
     if not rows:
