@@ -1,16 +1,59 @@
 """Regression tests for assigning a DIRECT Multi-Guard licence.
 
 Run in the backend test environment (with app import path configured):
-    PYTHONPATH=embedded-multiguard python -m unittest discover -s tests -p test_multiguard_direct_assignment_atomicity.py
-No network access or production database is used.
+    python -m unittest discover -s tests -p test_multiguard_direct_assignment_atomicity.py
+No network access or production database is used. The real production function is loaded via AST.
 Run only on the owner's verified MultiGuard-Dev runner.
 """
+import ast
+import types
 import unittest
 import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
 
-from app.routers import multiguard_license as mg
+from pathlib import Path
+from typing import Any
+
+
+class FakeHTTPException(Exception):
+    def __init__(self, status_code, detail):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+# Compile the unmodified production function from its AST. These isolated
+# transaction tests do not import the entire FastAPI production backend,
+# connect to KeyGate, or require production-only Python dependencies.
+source_file = (
+    Path(__file__).resolve().parents[1]
+    / "embedded-multiguard"
+    / "app"
+    / "routers"
+    / "multiguard_license.py"
+)
+source = source_file.read_text(encoding="utf-8")
+parsed = ast.parse(source, filename=str(source_file))
+function = next(
+    node for node in parsed.body
+    if isinstance(node, ast.FunctionDef) and node.name == "_assign_direct_customer_license"
+)
+mg = types.ModuleType("isolated_multiguard_licence")
+mg.__dict__.update({
+    "uuid": uuid,
+    "Any": Any,
+    "HTTPException": FakeHTTPException,
+    "text": lambda sql: sql,
+    "_ensure_schema": lambda: None,
+    "_normalize_link": lambda row: row,
+    "_hash": lambda key: "HASH",
+    "logger": types.SimpleNamespace(exception=lambda *args, **kwargs: None),
+})
+isolated = ast.Module(body=[function], type_ignores=[])
+ast.fix_missing_locations(isolated)
+exec(compile(isolated, str(source_file), "exec"), mg.__dict__)
+
 
 
 class SimulatedDatabase:
