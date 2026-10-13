@@ -28,6 +28,22 @@ class OwnerServiceVisualContract(unittest.TestCase):
         self.assertIn('profile.addEventListener(\'change\',update)', self.license)
         self.assertIn('input:focus-visible + .owner-monitor-switch', self.theme)
 
+    def test_monitoring_form_keeps_backend_contract(self):
+        # Visual changes cannot rename form fields or disable CSRF checks.
+        self.assertIn('name="monitoring_enabled" value="yes"', self.license)
+        self.assertIn('name="profile" aria-label=', self.license)
+        self.assertIn('name="csrf_token" value="{token}"', self.license)
+        self.assertIn('data-owner-monitor-form', self.license)
+        self.assertIn("if monitoring_enabled not in", self.license)
+        self.assertIn('profile=profile if monitoring_enabled=="yes" else "OFF"', self.license)
+        self.assertIn('return RedirectResponse("/multiguard/panel#service-modes",status_code=303)', self.license)
+
+    def test_controls_remain_owner_only(self):
+        self.assertIn('def owner_set_workshop_monitoring(', self.license)
+        self.assertIn('def owner_disable_workshop(', self.license)
+        self.assertIn('csrf_token: str = Form(...)', self.license)
+        self.assertIn('_: None = Depends(_panel_auth)', self.license)
+
     def test_legacy_visual_defects_do_not_return(self):
         self.assertNotIn('Monitorowanie rozszerzone — WŁĄCZONE / WYŁĄCZONE', self.license)
         self.assertNotIn('data:image/webp;base64,', self.license)
