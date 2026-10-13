@@ -44,8 +44,12 @@ class SimulatedDatabase:
                     working["grant"] = False
                 return Result(None)
 
-        yield Connection()
-        self.state = working
+        try:
+            yield Connection()
+        except Exception:
+            raise
+        else:
+            self.state = working
 
 
 class Result:
