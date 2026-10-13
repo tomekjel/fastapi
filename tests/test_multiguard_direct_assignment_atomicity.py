@@ -1,0 +1,92 @@
+"""Regression tests for assigning a DIRECT Multi-Guard licence.
+
+Run in the backend test environment (with app import path configured):
+    python -m unittest tests.test_multiguard_direct_assignment_atomicity
+No network access or production database is used.
+"""
+import unittest
+import uuid
+from contextlib import contextmanager
+from unittest.mock import patch
+
+from app.routers import multiguard_license as mg
+
+
+class SimulatedDatabase:
+    """Transaction simulator: changes persist only if the block exits normally."""
+
+    def __init__(self, fail_workshop_update=False):
+        self.fail_workshop_update = fail_workshop_update
+        self.state = {"status": "WAITING", "license": None, "grant": True}
+        self.queries = []
+
+    @contextmanager
+    def begin(self):
+        working = self.state.copy()
+        db = self
+
+        class Connection:
+            def execute(self, sql, params=None):
+                query = str(sql)
+                db.queries.append(query)
+                if "FROM guard.pending_installations" in query:
+                    return Result({"status": working["status"], "assigned_license_id": working["license"]})
+                if "SELECT id FROM guard.license_links" in query:
+                    return Result(None)
+                if "INSERT INTO guard.license_links" in query:
+                    return Result({"keygate_license_id": "FAKE-LICENSE", "plan_code": "multi_guard_pro"})
+                if "UPDATE guard.pending_installations" in query:
+                    working["status"] = "ASSIGNED"
+                    working["license"] = "FAKE-LICENSE"
+                if "UPDATE guard.workshop_grants" in query:
+                    if db.fail_workshop_update:
+                        raise RuntimeError("synthetic SQL error during grant revocation")
+                    working["grant"] = False
+                return Result(None)
+
+        yield Connection()
+        self.state = working
+
+
+class Result:
+    def __init__(self, value):
+        self.value = value
+
+    def first(self):
+        return self.value
+
+    def one(self):
+        return self.value
+
+    def mappings(self):
+        return self
+
+
+class DirectAssignmentAtomicityTests(unittest.TestCase):
+    def run_assignment(self, database):
+        with (
+            patch.object(mg, "engine", database),
+            patch.object(mg, "_ensure_schema"),
+            patch.object(mg, "_keygate_create_license", return_value={
+                "id": "FAKE-LICENSE", "_plan_id": "FAKE-PLAN", "_license_key": "FAKE-KEY"
+            }),
+            patch.object(mg, "_normalize_link", side_effect=lambda link: link),
+        ):
+            return mg._assign_direct_customer_license(uuid.uuid4(), "PRO", 3, "STABLE")
+
+    def test_assigns_paid_rights_and_revokes_service_grant_together(self):
+        db = SimulatedDatabase()
+        result = self.run_assignment(db)
+        self.assertEqual(result["keygate_license_id"], "FAKE-LICENSE")
+        self.assertEqual(db.state, {"status": "ASSIGNED", "license": "FAKE-LICENSE", "grant": False})
+
+    def test_sql_failure_rolls_back_pending_assignment(self):
+        db = SimulatedDatabase(fail_workshop_update=True)
+        with self.assertRaisesRegex(RuntimeError, "synthetic SQL error"):
+            self.run_assignment(db)
+        self.assertEqual(db.state, {"status": "WAITING", "license": None, "grant": True})
+        self.assertTrue(any("UPDATE guard.workshop_grants" in q for q in db.queries))
+
+
+if __name__ == "__main__":
+    unittest.main()
