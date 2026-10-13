@@ -2879,7 +2879,7 @@ def _owner_workshop_manager_panel() -> str:
               </div>"""
         trs.append(
             f"<tr><td><a href='/multiguard/panel/pending/{iid}'>{display}</a><br>"
-            + link + "</td><td><span class='owner-service-edition'>" + edition + "</span></td><td>" + status
+            + link + "</td><td><span class='owner-service-edition'>SERWIS · " + edition + "</span></td><td>" + status
             + "</td><td>" + controls + "</td></tr>"
         )
     return f"""
@@ -2891,7 +2891,7 @@ def _owner_workshop_manager_panel() -> str:
            Standardowy, Obserwacja lub Intensywny dla każdego komputera.
            Wyłączenie uprawnienia jest możliwe tylko tutaj.</p>
         <div class="table-wrap"><table style="min-width:900px">
-          <thead><tr><th>Komputer / zlecenie</th><th>Edycja</th>
+          <thead><tr><th>Komputer / zlecenie</th><th>Wariant serwisowy</th>
             <th>Tryb serwisowy</th><th>Monitorowanie i sterowanie</th></tr></thead>
           <tbody>{''.join(trs) or '<tr><td colspan="4">Brak komputerów z trybem serwisowym.</td></tr>'}</tbody>
         </table></div>
