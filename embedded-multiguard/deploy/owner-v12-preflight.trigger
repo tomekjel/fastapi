@@ -4,3 +4,4 @@ Run Chromium/PostgreSQL and deployment guards on this exact base-branch source b
 2026-10-13 sequence 17 full gate after removing disallowed workflow/test paths and consolidating visual regression.
 2026-10-13 OWNER command-centre dashboard, owner navigation hierarchy and responsive action cards: full Chromium/PostgreSQL validation requested for next release.
 2026-10-13 verify original approved shield from Multi-Guard repository, responsive OWNER command centre, full PostgreSQL and Chromium release gate.
+2026-10-13 release 20: Multi-Servis transistor identity, active service grants excluded from waiting queue and counts, customer license headings. Full PostgreSQL+Chromium gate.
