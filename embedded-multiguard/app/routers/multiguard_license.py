@@ -1015,7 +1015,7 @@ def _assign_direct_customer_license(
     with engine.begin() as con:
         pending = con.execute(text("""
             SELECT * FROM guard.pending_installations
-            WHERE installation_id=:id FOR UPDATE
+            WHERE installation_id=:id
         """), {"id": installation_id}).mappings().first()
         if pending is None:
             raise HTTPException(404, "Komputer nie został zarejestrowany.")
