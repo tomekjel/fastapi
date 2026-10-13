@@ -3028,7 +3028,7 @@ def _owner_keygate_reconciliation_panel() -> str:
     _ensure_schema()
     with engine.connect() as con:
         rows = con.execute(text("""
-            SELECT installation_id,workspace_reference,state,keygate_license_id
+            SELECT installation_id,workspace_reference,state,keygate_license_id,edition,duration_months,release_channel
             FROM guard.direct_keygate_attempts
             WHERE state IN ('STARTED','RECONCILIATION_REQUIRED')
                OR (state='CREATED' AND NOT EXISTS (
@@ -3043,7 +3043,10 @@ def _owner_keygate_reconciliation_panel() -> str:
     lines = "".join(
         "<li>Instalacja <code>" + _panel_escape(str(row["installation_id"]))
         + "</code> · workspace <code>" + _panel_escape(row["workspace_reference"])
-        + "</code> · stan <strong>" + _panel_escape(row["state"])
+        + "</code> · plan " + _panel_escape(row.get("edition") or "—")
+        + " / " + _panel_escape(row.get("duration_months") or "—")
+        + " mies. · kanał " + _panel_escape(row.get("release_channel") or "—")
+        + " · stan <strong>" + _panel_escape(row["state"])
         + "</strong> · KeyGate ID <code>"
         + _panel_escape(row.get("keygate_license_id") or "nieznane")
         + "</code> · <a href=\"/multiguard/panel/pending/"
