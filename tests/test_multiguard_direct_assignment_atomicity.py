@@ -394,6 +394,9 @@ class OwnerReconciliationPanelTests(unittest.TestCase):
         rendered = env["_owner_keygate_reconciliation_panel"]()
         self.assertIn("KG-123", rendered)
         self.assertIn("Wymagana weryfikacja KeyGate", rendered)
+        self.assertIn("CREATED", rendered)
+        self.assertIn("/multiguard/panel/pending/", rendered)
+        self.assertIn("Szczegóły komputera", rendered)
         sql = seen[0]
         self.assertIn("RECONCILIATION_REQUIRED", sql)
         self.assertIn("STARTED", sql)
