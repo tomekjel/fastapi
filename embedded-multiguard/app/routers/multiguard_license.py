@@ -2986,6 +2986,33 @@ def owner_suggest_service_orders(q: str = "", _: None = Depends(_panel_auth)):
     } for row in rows]}
 
 
+def _owner_keygate_reconciliation_panel() -> str:
+    """Read-only OWNER warning; manual reconciliation must precede any retry."""
+    _ensure_schema()
+    with engine.connect() as con:
+        rows = con.execute(text("""
+            SELECT installation_id,workspace_reference,state,keygate_license_id
+            FROM guard.direct_keygate_attempts
+            WHERE state='RECONCILIATION_REQUIRED'
+            ORDER BY updated_at DESC LIMIT 50
+        """)).mappings().all()
+    if not rows:
+        return ""
+    lines = "".join(
+        "<li>Instalacja <code>" + _panel_escape(str(row["installation_id"]))
+        + "</code> · workspace <code>" + _panel_escape(row["workspace_reference"])
+        + "</code> · KeyGate ID <code>"
+        + _panel_escape(row.get("keygate_license_id") or "nieznane")
+        + "</code></li>"
+        for row in rows
+    )
+    return (
+        '<section class="card" role="alert"><h2>Wymagana weryfikacja KeyGate</h2>'
+        '<p>Nie ponawiaj tworzenia licencji. Najpierw uzgodnij stan w KeyGate '
+        'i bazie Multi-Servis.</p><ul>' + lines + '</ul></section>'
+    )
+
+
 @router.get("/multiguard/panel", response_class=HTMLResponse)
 def multiguard_panel(
     _: None = Depends(_panel_auth),
@@ -2993,6 +3020,7 @@ def multiguard_panel(
     return _panel_html(
         f"""
         {_owner_workshop_manager_panel()}
+        {_owner_keygate_reconciliation_panel()}
         <section class="card">
           <div class="eyebrow">MULTI-SERVIS / AKTYWACJA PROGRAMU</div>
           <h1>Nowa licencja Multi-Guard</h1>
