@@ -106,8 +106,10 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
                 "id": "EXTERNAL-ORPHAN", "_plan_id": "FAKE-PLAN", "_license_key": "FAKE-KEY"
             }) as keygate,
         ):
-            with self.assertRaisesRegex(RuntimeError, "synthetic SQL error"):
+            with self.assertRaises(mg.HTTPException) as failure:
                 mg._assign_direct_customer_license(uuid.uuid4(), "PRO", 3, "STABLE")
+        self.assertEqual(failure.exception.status_code, 503)
+        self.assertIn("KeyGate", failure.exception.detail)
         keygate.assert_called_once()
         self.assertEqual(db.state["status"], "WAITING")
         self.assertIsNone(db.state["license"])
@@ -116,8 +118,9 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
 
     def test_sql_failure_rolls_back_pending_assignment(self):
         db = SimulatedDatabase(fail_workshop_update=True)
-        with self.assertRaisesRegex(RuntimeError, "synthetic SQL error"):
+        with self.assertRaises(mg.HTTPException) as failure:
             self.run_assignment(db)
+        self.assertEqual(failure.exception.status_code, 503)
         self.assertEqual(db.state, {"status": "WAITING", "license": None, "grant": True})
         self.assertTrue(any("UPDATE guard.workshop_grants" in q for q in db.queries))
 
