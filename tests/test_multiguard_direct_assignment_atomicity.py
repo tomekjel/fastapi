@@ -254,6 +254,17 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
                 mg._assign_direct_customer_license(installation_id, "PRO", 3, "STABLE")
         self.assertEqual(db.attempts[str(installation_id)]["state"], "STARTED")
         self.assertEqual(db.state["status"], "WAITING")
+        # A second attempt must fail before reaching KeyGate, even if the
+        # first reconciliation-status UPDATE failed and left state STARTED.
+        with (
+            patch.object(mg, "engine", db),
+            patch.object(mg, "_ensure_schema"),
+            patch.object(mg, "_keygate_create_license") as keygate,
+        ):
+            with self.assertRaises(mg.HTTPException) as repeated:
+                mg._assign_direct_customer_license(installation_id, "PRO", 3, "STABLE")
+            self.assertEqual(repeated.exception.status_code, 409)
+            keygate.assert_not_called()
 
     def test_retry_after_uncertain_keygate_network_result_is_blocked(self):
         db = SimulatedDatabase()
