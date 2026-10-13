@@ -34,6 +34,7 @@ jobs:
         run: |
           @echo off
           setlocal EnableDelayedExpansion
+          echo Running real-code isolation regression: OWNER assignment, document acceptance, service grant Standard/Pro.
           set "PYTHONPATH=%GITHUB_WORKSPACE%\embedded-multiguard"
           where python >nul 2>nul
           if not errorlevel 1 (
