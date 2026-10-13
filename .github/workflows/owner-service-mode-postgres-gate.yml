@@ -1,11 +1,7 @@
 name: Multi-Servis SERVICE — isolated PostgreSQL release gate
 on:
-  push:
-    branches: [feature/service-mode-monitoring-20261010]
-    paths:
-      - 'embedded-multiguard/app/routers/multiguard_license.py'
-      - 'embedded-multiguard/tests/test_owner_panel_postgres_integration.py'
-      - '.github/workflows/owner-service-mode-postgres-gate.yml'
+  # Hosted PostgreSQL is an explicit release check, never a per-edit expense.
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
