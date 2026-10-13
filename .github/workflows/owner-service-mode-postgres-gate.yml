@@ -2,6 +2,10 @@ name: Multi-Servis SERVICE — isolated PostgreSQL release gate
 on:
   # Hosted PostgreSQL is an explicit release check, never a per-edit expense.
   workflow_dispatch:
+  # Only an intentional trigger edit starts a hosted check. Source edits do not.
+  push:
+    branches: [feature/service-mode-monitoring-20261010]
+    paths: ['embedded-multiguard/deploy/owner-postgres-test.trigger']
 permissions:
   contents: read
 jobs:
@@ -35,3 +39,5 @@ jobs:
         run: python -m py_compile embedded-multiguard/app/routers/multiguard_license.py embedded-multiguard/tests/test_owner_panel_postgres_integration.py
       - name: Full actual OWNER + PostgreSQL integration test
         run: python embedded-multiguard/tests/test_owner_panel_postgres_integration.py
+      - name: Real PostgreSQL DIRECT concurrency and rollback
+        run: python tests/test_multiguard_direct_postgres_concurrency.py
