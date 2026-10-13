@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 17,
-  "target_sha": "279e543310d942690ee02ae38660bab9c1363a36",
-  "summary": "OWNER V12 web visual refresh: switch, saving status, labels and transistor mark; release gate Chromium/PostgreSQL and guarded rollback; no Android/Windows changes."
+  "sequence": 18,
+  "target_sha": "e13946e846b36d10dff8b834c116bd5e413adebe",
+  "summary": "OWNER command-centre navigation: landing dashboard with accessible direct links to computers, orders, licenses and OWNER financial statistics. Retains existing service monitoring, KeyGate controls and public API. Automatically deploy only after full Chromium + PostgreSQL CI PASS with rollback."
 }
