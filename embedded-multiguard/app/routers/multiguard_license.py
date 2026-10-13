@@ -1328,14 +1328,22 @@ def _panel_html(body: str) -> str:
   for (const form of document.querySelectorAll('form[data-owner-monitor-form]')) {{
     const toggle=form.querySelector('[data-owner-monitor-toggle]');
     const profile=form.querySelector('[data-owner-monitor-profile]');
+    const state=form.querySelector('[data-owner-monitor-state]');
+    const save=form.querySelector('[data-owner-monitor-save]');
     if (!toggle || !profile) continue;
+    const initiallyEnabled=toggle.checked;
+    const initialProfile=profile.value;
     const update=()=>{{
       profile.disabled=!toggle.checked;
+      if(state) state.textContent=toggle.checked ? 'Włączone' : 'Wyłączone';
+      if(save) save.disabled=toggle.checked===initiallyEnabled &&
+        (!toggle.checked || profile.value===initialProfile);
       if(toggle.checked && !['STANDARD','OBSERVATION','INTENSIVE'].includes(profile.value)){{
         profile.value='STANDARD';
       }}
     }};
     toggle.addEventListener('change',update);
+    profile.addEventListener('change',update);
     update();
   }}
 
@@ -2820,7 +2828,7 @@ def _owner_workshop_manager_panel() -> str:
                   <input type="hidden" name="csrf_token" value="{token}">
                   <label class="owner-monitor-toggle">
                     <span class="owner-monitor-label">Monitorowanie rozszerzone
-                      <small>{"Włączone" if selected!="OFF" else "Wyłączone"}</small>
+                      <small data-owner-monitor-state>{"Włączone" if selected!="OFF" else "Wyłączone"}</small>
                     </span>
                     <input type="checkbox" name="monitoring_enabled" value="yes"
                       {"checked" if selected!="OFF" else ""} data-owner-monitor-toggle
@@ -2833,7 +2841,7 @@ def _owner_workshop_manager_panel() -> str:
                       {options}
                     </select>
                   </label>
-                  <button type="submit" class="owner-monitor-save">ZAPISZ ZMIANY</button>
+                  <button type="submit" class="owner-monitor-save" data-owner-monitor-save disabled>ZAPISZ ZMIANY</button>
                 </form>
                 <div class="owner-service-actions">
                 <a class="button-link compact" href="/multiguard/panel/workshop/{iid}/reports">
