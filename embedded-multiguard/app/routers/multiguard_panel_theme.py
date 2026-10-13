@@ -534,6 +534,9 @@ table th,table td {padding:8px 11px}
 #service-modes .owner-monitor-save {grid-column:2;padding:10px 16px;min-height:41px;
   align-self:end;background:rgba(230,188,101,.14);border:1px solid rgba(230,188,101,.6);
   color:var(--gold);white-space:nowrap;font-size:13px;border-radius:9px}
+#service-modes .owner-monitor-save:disabled {opacity:.48;cursor:not-allowed;
+  border-color:var(--line);color:var(--muted);background:var(--surface-soft)}
+#service-modes .owner-monitor-save:disabled:hover {filter:none}
 #service-modes .owner-service-actions {display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 #service-modes .owner-service-actions .button-link,
 #service-modes .owner-service-actions button {margin:0;min-height:36px;font-size:12px;
