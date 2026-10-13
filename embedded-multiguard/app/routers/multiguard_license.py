@@ -1051,12 +1051,17 @@ def _assign_direct_customer_license(
             )
         except Exception:
             # An interrupted HTTP call can succeed remotely. Never auto-retry.
-            with engine.begin() as audit:
-                audit.execute(text("""
-                    UPDATE guard.direct_keygate_attempts
-                    SET state='RECONCILIATION_REQUIRED',updated_at=now()
-                    WHERE installation_id=:id
-                """), {"id":installation_id})
+            # Keep the original KeyGate error even if the audit DB is down:
+            # STARTED is already durable and blocks repeated creation.
+            try:
+                with engine.begin() as audit:
+                    audit.execute(text("""
+                        UPDATE guard.direct_keygate_attempts
+                        SET state='RECONCILIATION_REQUIRED',updated_at=now()
+                        WHERE installation_id=:id
+                    """), {"id":installation_id})
+            except Exception:
+                logger.exception("Could not update ambiguous KeyGate attempt audit")
             raise
         with engine.begin() as audit:
             audit.execute(text("""
