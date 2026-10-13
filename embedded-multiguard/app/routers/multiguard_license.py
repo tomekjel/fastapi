@@ -3084,32 +3084,12 @@ def multiguard_panel(
 ):
     return _panel_html(
         f"""
-        <section class="card owner-overview-hero" aria-labelledby="owner-overview-title">
-          <div class="eyebrow">MULTI-SERVIS / CENTRUM WŁAŚCICIELA</div>
-          <h1 id="owner-overview-title">Centrum zarządzania</h1>
-          <p>Komputery, zlecenia serwisowe i licencje Multi-Guard w jednym miejscu.</p>
-          <div class="owner-overview-grid">
-            <a class="owner-overview-tile" href="/multiguard/panel/computers">
-              <span class="owner-overview-icon" aria-hidden="true">▣</span>
-              <strong>Komputery</strong><span>Urządzenia i dostęp do szczegółów</span>
-              <em>OTWÓRZ →</em>
-            </a>
-            <a class="owner-overview-tile" href="/multiguard/panel/service">
-              <span class="owner-overview-icon" aria-hidden="true">◇</span>
-              <strong>Zlecenia serwisowe</strong><span>Naprawy, notatki i wydania</span>
-              <em>OTWÓRZ →</em>
-            </a>
-            <a class="owner-overview-tile" href="/multiguard/panel/licenses">
-              <span class="owner-overview-icon" aria-hidden="true">▤</span>
-              <strong>Licencje Multi-Guard</strong><span>Aktywacje i uprawnienia</span>
-              <em>OTWÓRZ →</em>
-            </a>
-            <a class="owner-overview-tile" href="/multiguard/panel/statistics">
-              <span class="owner-overview-icon" aria-hidden="true">▥</span>
-              <strong>Statystyki</strong><span>Wyniki serwisu i finanse OWNER</span>
-              <em>OTWÓRZ →</em>
-            </a>
-          </div>
+        <section class="card panel-hero license-hero">
+          <div class="eyebrow">MULTI-SERVIS / LICENCJE KLIENTÓW</div>
+          <h1>Licencje klienta</h1>
+          <p>Nadawanie uprawnień Standard i Pro. Oczekujące instalacje znajdują
+             się na podstronie <a href="/multiguard/panel/licenses#pending">Licencje</a>.
+             Tryb serwisowy jest zarządzany osobno.</p>
         </section>
         {_owner_keygate_reconciliation_panel()}
         <section class="card" id="new-license">
