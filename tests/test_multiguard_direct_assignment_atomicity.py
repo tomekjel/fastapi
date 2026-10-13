@@ -96,6 +96,24 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
         self.assertEqual(db.state, {"status": "WAITING", "license": None, "grant": True})
         self.assertFalse(any("INSERT INTO guard.license_links" in q for q in db.queries))
 
+    def test_sql_failure_after_external_creation_requires_reconciliation(self):
+        """Document cross-system failure: SQL rollback cannot undo KeyGate."""
+        db = SimulatedDatabase(fail_workshop_update=True)
+        with (
+            patch.object(mg, "engine", db),
+            patch.object(mg, "_ensure_schema"),
+            patch.object(mg, "_keygate_create_license", return_value={
+                "id": "EXTERNAL-ORPHAN", "_plan_id": "FAKE-PLAN", "_license_key": "FAKE-KEY"
+            }) as keygate,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "synthetic SQL error"):
+                mg._assign_direct_customer_license(uuid.uuid4(), "PRO", 3, "STABLE")
+        keygate.assert_called_once()
+        self.assertEqual(db.state["status"], "WAITING")
+        self.assertIsNone(db.state["license"])
+        # External licence exists in this scenario despite SQL rollback.
+        # This is a documented release blocker until reconciliation is implemented.
+
     def test_sql_failure_rolls_back_pending_assignment(self):
         db = SimulatedDatabase(fail_workshop_update=True)
         with self.assertRaisesRegex(RuntimeError, "synthetic SQL error"):
