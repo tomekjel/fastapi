@@ -217,6 +217,10 @@ class BackendWindowsContractTests(unittest.TestCase):
         grant["enabled"] = False
         revoked = json.loads(env["_signed_workshop_grant"](pending, grant)["payload"])
         self.assertEqual(revoked["lifecycle"], "UNKNOWN")
+        self.assertEqual(revoked["installationId"], str(installation_id))
+        self.assertEqual(revoked["deviceId"], device_id)
+        self.assertEqual(revoked["acceptedDocuments"], [])
+        self.assertIsNone(revoked["validUntil"])
 
 
 if __name__ == "__main__":
