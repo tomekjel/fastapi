@@ -32,6 +32,11 @@ jobs:
           @echo off
           python -m py_compile tests\test_multiguard_direct_assignment_atomicity.py embedded-multiguard\app\routers\multiguard_license.py
           if errorlevel 1 exit /b 1
+      - name: Detect local tools for isolated PostgreSQL validation
+        run: |
+          @echo off
+          python -c "import shutil; from pathlib import Path; tools=('psql','pg_ctl','postgres','docker'); [print('LOCAL_TOOL '+name+': '+('PRESENT' if shutil.which(name) else 'ABSENT')) for name in tools]; roots=(Path(r'C:\Program Files\PostgreSQL'),Path(r'C:\Program Files (x86)\PostgreSQL')); found=[p for root in roots if root.is_dir() for p in root.glob('*/bin/pg_ctl.exe')]; print('LOCAL_POSTGRES_BINARIES: '+('PRESENT' if found else 'ABSENT'))"
+          if errorlevel 1 exit /b 1
       - name: Run synthetic licence regression suite
         run: |
           @echo off
