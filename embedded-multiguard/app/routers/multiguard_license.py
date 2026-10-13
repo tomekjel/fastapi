@@ -1027,48 +1027,49 @@ def _assign_direct_customer_license(
         """), {"id": installation_id}).first()
         if existing:
             raise HTTPException(409, "Istnieje już powiązanie tej instalacji.")
-        # A KeyGate workspace reference identifies the installation, not
-        # an imaginary repair order. No service.order record is created.
-        reference = "MG-DIRECT-" + installation_id.hex
-        # A separately committed attempt survives rollback of this transaction.
-        # Duplicate submissions fail closed until an OWNER reconciles KeyGate.
-        with engine.begin() as audit:
-            reserved = audit.execute(text("""
-                INSERT INTO guard.direct_keygate_attempts(
-                    installation_id,workspace_reference,state
-                ) VALUES (:installation_id,:reference,'STARTED')
-                ON CONFLICT (installation_id) DO NOTHING
-                RETURNING installation_id
-            """), {"installation_id":installation_id,"reference":reference}).scalar_one_or_none()
-        if reserved is None:
-            raise HTTPException(
-                409, "Poprzednia próba w KeyGate wymaga sprawdzenia przez OWNER "
-                     "przed ponownym utworzeniem licencji."
-            )
+    # A KeyGate workspace reference identifies the installation, not
+    # an imaginary repair order. No service.order record is created.
+    reference = "MG-DIRECT-" + installation_id.hex
+    # A separately committed attempt survives rollback of this transaction.
+    # Duplicate submissions fail closed until an OWNER reconciles KeyGate.
+    with engine.begin() as audit:
+        reserved = audit.execute(text("""
+            INSERT INTO guard.direct_keygate_attempts(
+                installation_id,workspace_reference,state
+            ) VALUES (:installation_id,:reference,'STARTED')
+            ON CONFLICT (installation_id) DO NOTHING
+            RETURNING installation_id
+        """), {"installation_id":installation_id,"reference":reference}).scalar_one_or_none()
+    if reserved is None:
+        raise HTTPException(
+            409, "Poprzednia próba w KeyGate wymaga sprawdzenia przez OWNER "
+                 "przed ponownym utworzeniem licencji."
+        )
+    try:
+        created = _keygate_create_license(
+            reception_number=reference, edition=edition, months=months,
+        )
+    except Exception:
+        # An interrupted HTTP call can succeed remotely. Never auto-retry.
+        # Keep the original KeyGate error even if the audit DB is down:
+        # STARTED is already durable and blocks repeated creation.
         try:
-            created = _keygate_create_license(
-                reception_number=reference, edition=edition, months=months,
-            )
+            with engine.begin() as audit:
+                audit.execute(text("""
+                    UPDATE guard.direct_keygate_attempts
+                    SET state='RECONCILIATION_REQUIRED',updated_at=now()
+                    WHERE installation_id=:id
+                """), {"id":installation_id})
         except Exception:
-            # An interrupted HTTP call can succeed remotely. Never auto-retry.
-            # Keep the original KeyGate error even if the audit DB is down:
-            # STARTED is already durable and blocks repeated creation.
-            try:
-                with engine.begin() as audit:
-                    audit.execute(text("""
-                        UPDATE guard.direct_keygate_attempts
-                        SET state='RECONCILIATION_REQUIRED',updated_at=now()
-                        WHERE installation_id=:id
-                    """), {"id":installation_id})
-            except Exception:
-                logger.exception("Could not update ambiguous KeyGate attempt audit")
-            raise
-        with engine.begin() as audit:
-            audit.execute(text("""
-                UPDATE guard.direct_keygate_attempts
-                SET state='CREATED',keygate_license_id=:license_id,updated_at=now()
-                WHERE installation_id=:id
-            """), {"id":installation_id,"license_id":str(created["id"])})
+            logger.exception("Could not update ambiguous KeyGate attempt audit")
+        raise
+    with engine.begin() as audit:
+        audit.execute(text("""
+            UPDATE guard.direct_keygate_attempts
+            SET state='CREATED',keygate_license_id=:license_id,updated_at=now()
+            WHERE installation_id=:id
+        """), {"id":installation_id,"license_id":str(created["id"])})
+    with engine.begin() as con:
         try:
             lic = con.execute(text("""
                 INSERT INTO guard.license_links(
@@ -1099,30 +1100,30 @@ def _assign_direct_customer_license(
                 SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
                 WHERE installation_id=:id AND enabled=TRUE
             """), {"id":installation_id})
+    except Exception:
+        # KeyGate has already acknowledged creation. The SQL transaction
+        # rolls back, but the external licence cannot be rolled back here.
+        # Do NOT silently retry: doing so can generate duplicate licences.
+        try:
+            with engine.begin() as audit:
+                audit.execute(text("""
+                    UPDATE guard.direct_keygate_attempts
+                    SET state='RECONCILIATION_REQUIRED',updated_at=now()
+                    WHERE installation_id=:id
+                """), {"id":installation_id})
         except Exception:
-            # KeyGate has already acknowledged creation. The SQL transaction
-            # rolls back, but the external licence cannot be rolled back here.
-            # Do NOT silently retry: doing so can generate duplicate licences.
-            try:
-                with engine.begin() as audit:
-                    audit.execute(text("""
-                        UPDATE guard.direct_keygate_attempts
-                        SET state='RECONCILIATION_REQUIRED',updated_at=now()
-                        WHERE installation_id=:id
-                    """), {"id":installation_id})
-            except Exception:
-                logger.exception("Could not persist DIRECT reconciliation state")
-            logger.exception(
-                "Multi-Guard DIRECT needs manual KeyGate reconciliation: "
-                "workspace=%s external_license_id=%s",
-                reference, str(created.get("id", "")),
-            )
-            raise HTTPException(
-                503,
-                "Nie zakończono przypisania licencji. Wymagana weryfikacja "
-                "w KeyGate przed ponowieniem operacji.",
-            ) from None
-    return _normalize_link(dict(lic))
+            logger.exception("Could not persist DIRECT reconciliation state")
+        logger.exception(
+            "Multi-Guard DIRECT needs manual KeyGate reconciliation: "
+            "workspace=%s external_license_id=%s",
+            reference, str(created.get("id", "")),
+        )
+        raise HTTPException(
+            503,
+            "Nie zakończono przypisania licencji. Wymagana weryfikacja "
+            "w KeyGate przed ponowieniem operacji.",
+        ) from None
+return _normalize_link(dict(lic))
 
 
 def _handover_direct_customer(installation_id: uuid.UUID) -> dict[str, Any]:
