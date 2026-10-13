@@ -1098,6 +1098,15 @@ def _assign_direct_customer_license(
             # KeyGate has already acknowledged creation. The SQL transaction
             # rolls back, but the external licence cannot be rolled back here.
             # Do NOT silently retry: doing so can generate duplicate licences.
+            try:
+                with engine.begin() as audit:
+                    audit.execute(text("""
+                        UPDATE guard.direct_keygate_attempts
+                        SET state='RECONCILIATION_REQUIRED',updated_at=now()
+                        WHERE installation_id=:id
+                    """), {"id":installation_id})
+            except Exception:
+                logger.exception("Could not persist DIRECT reconciliation state")
             logger.exception(
                 "Multi-Guard DIRECT needs manual KeyGate reconciliation: "
                 "workspace=%s external_license_id=%s",
