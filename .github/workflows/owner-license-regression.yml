@@ -13,7 +13,7 @@ permissions:
   contents: read
 jobs:
   owner-license-tests:
-    runs-on: [self-hosted, Windows, X64, mg-local-dev]
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 20
     defaults:
       run:
