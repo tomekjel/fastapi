@@ -248,7 +248,12 @@ def service_orders(
         where.append("""
             (s.reception_number ILIKE :query OR s.display_name ILIKE :query
              OR s.model ILIKE :query OR s.manufacturer ILIKE :query
-             OR s.serial_number ILIKE :query OR s.phone_e164 ILIKE :query)
+             OR s.serial_number ILIKE :query OR s.phone_e164 ILIKE :query
+             OR EXISTS (
+               SELECT 1 FROM service.service_order_notes sn
+               WHERE sn.service_order_id=s.id
+                 AND sn.deleted_at IS NULL AND sn.note_text ILIKE :query
+             ))
         """)
         params["query"] = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
     where_sql = "WHERE " + " AND ".join(where) if where else ""
@@ -256,8 +261,17 @@ def service_orders(
     sql = f"""
         SELECT s.id,s.reception_number,s.status,s.received_at,s.completed_at,
                s.manufacturer,s.model,s.serial_number,s.device_type,
-               s.display_name,s.phone_e164
+               s.display_name,s.phone_e164,
+               latest_note.note_text AS latest_note_text,
+               latest_note.visibility AS latest_note_visibility,
+               latest_note.created_at AS latest_note_at
         FROM service.v_service_order_summary s
+        LEFT JOIN LATERAL (
+          SELECT n.note_text,n.visibility,n.created_at
+          FROM service.service_order_notes n
+          WHERE n.service_order_id=s.id AND n.deleted_at IS NULL
+          ORDER BY n.created_at DESC,n.id DESC LIMIT 1
+        ) latest_note ON TRUE
         {where_sql}
         ORDER BY s.received_at DESC
         LIMIT :limit OFFSET :offset
@@ -292,17 +306,26 @@ def service_orders(
     trs = []
     for row in rows:
         model = " ".join(x for x in [row["manufacturer"],row["model"]] if x) or row["device_type"] or "Urządzenie"
+        preview=str(row["latest_note_text"] or "").strip()
+        if len(preview)>170:
+            preview=preview[:167].rstrip()+"…"
+        note_preview=(
+            '<small class="row-sub service-note-preview">'
+            +esc(preview)
+            +('</small>' if preview else '')
+        ) if preview else '<small class="row-sub muted">Brak notatek</small>'
         trs.append(f"""
         <tr>
           <td><a class="strong-link" href="/multiguard/panel/service/{row['id']}">{esc(row['reception_number'])}</a></td>
           <td>{status_badge(row['status'])}</td>
           <td><strong>{esc(model)}</strong><small class="row-sub">{esc(row['serial_number'] or '—')}</small></td>
           <td>{esc(row['display_name'] or '—')}<small class="row-sub">{esc(row['phone_e164'] or '')}</small></td>
+          <td>{note_preview}</td>
           <td class="numbers">{dt(row['received_at'])}</td>
           <td class="numbers">{dt(row['completed_at'])}</td>
           <td><a class="button-link compact" href="/multiguard/panel/service/{row['id']}">PODGLĄD</a></td>
         </tr>""")
-    table = "".join(trs) or '<tr><td colspan="7" class="muted">Brak zleceń dla wybranych filtrów.</td></tr>'
+    table = "".join(trs) or '<tr><td colspan="8" class="muted">Brak zleceń dla wybranych filtrów.</td></tr>'
     def link_for(n: int) -> str:
         return "/multiguard/panel/service?" + urlencode({"status":status,"q":query,"page_number":n,"page_size":page_size})
     prev = f'<a class="button-link compact" href="{link_for(page_number-1)}">← Poprzednie</a>' if page_number>1 else ""
@@ -324,7 +347,7 @@ def service_orders(
         <button type="submit">SZUKAJ</button>
       </form>
       <div class="table-wrap"><table>
-        <thead><tr><th>Numer</th><th>Status</th><th>Sprzęt</th><th>Klient</th><th>Przyjęto</th><th>Wydano</th><th></th></tr></thead>
+        <thead><tr><th>Numer</th><th>Status</th><th>Sprzęt</th><th>Klient</th><th>Ostatnia notatka</th><th>Przyjęto</th><th>Wydano</th><th></th></tr></thead>
         <tbody>{table}</tbody>
       </table></div>
       <div class="pagination">{prev}<span>Strona {page_number}</span>{nxt}</div>
@@ -676,6 +699,12 @@ def service_order_detail(
             SELECT old_status,new_status,changed_at FROM service.service_order_status_history
             WHERE service_order_id=:id ORDER BY changed_at DESC LIMIT 25
         """),{"id":order_id}).mappings().all()
+        order_notes=con.execute(text("""
+            SELECT n.id,n.note_text,n.visibility,n.created_at,n.updated_at
+            FROM service.service_order_notes n
+            WHERE n.service_order_id=:id AND n.deleted_at IS NULL
+            ORDER BY n.created_at DESC,n.id DESC
+        """),{"id":order_id}).mappings().all()
         media=con.execute(text("""
             SELECT m.id,m.media_kind,o.original_filename,o.mime_type,o.size_bytes,m.caption,m.created_at FROM service.service_order_media m
             JOIN core.storage_objects o ON o.id=m.storage_object_id
@@ -703,6 +732,16 @@ def service_order_detail(
         note("Uwagi dla klienta",row["customer_notes"]),
         note("Akcesoria",row["accessories_received"]),
     ])
+    # Every active note, in full, newest first. Archived/deleted notes are
+    # excluded and the OWNER-only page is guarded by _panel_auth.
+    note_history="".join(
+        '<article class="service-note-entry">'
+        f'<div class="service-note-meta"><span>{dt(item["created_at"])}</span>'
+        f'<span>{"Tylko właściciel" if str(item["visibility"])=="OWNER_ONLY" else "Notatka serwisowa"}</span></div>'
+        f'<p>{esc(item["note_text"])}</p>'
+        '</article>'
+        for item in order_notes
+    ) or '<p class="muted">Nie ma jeszcze zapisanych notatek do tego zlecenia.</p>'
     hist="".join(f'<tr><td>{dt(x["changed_at"])}</td><td>{status_badge(x["old_status"])}</td><td>→</td><td>{status_badge(x["new_status"])}</td></tr>' for x in history)
     photo_positions = {}
     for candidate in media:
@@ -767,7 +806,12 @@ def service_order_detail(
       <div class="detail-facts">{facts}</div>
     </section>
     {issue_action}
-    <section class="card"><h2>Opis i notatki</h2><div class="notes-grid">{notes}</div></section>
+    <section class="card owner-service-notes" id="service-notes">
+      <div class="section-head"><div><div class="eyebrow">ZAPISY Z ANDROIDA</div>
+        <h2>Notatki do zlecenia ({len(order_notes)})</h2></div></div>
+      <div class="service-notes-timeline">{note_history}</div>
+    </section>
+    <section class="card"><h2>Opis przyjęcia i dodatkowe uwagi</h2><div class="notes-grid">{notes}</div></section>
     <details class="card finance-disclosure"><summary><span>Finanse zlecenia</span><span class="finance-disclosure-hint">Dane właściciela · kliknij, aby rozwinąć ▾</span></summary><div class="metrics">{fin_cards}</div><p>Kwota usługi jest uwzględniana w zestawieniu wydanych zleceń dopiero po wydaniu sprzętu.</p></details>
     <section class="card"><h2>Historia statusów</h2><div class="table-wrap"><table><thead><tr><th>Data</th><th>Poprzedni</th><th></th><th>Nowy</th></tr></thead><tbody>{hist or '<tr><td colspan="4">Brak historii.</td></tr>'}</tbody></table></div></section>
     <section class="card"><h2>Zdjęcia i dokumenty ({len(media)})</h2><p>Chroniony podgląd właściciela: miniatury obrazów i pobieranie pozostałych plików. Materiały są odczytywane wyłącznie ze zlecenia, nie zapisujemy ich w publicznym katalogu WWW.</p><div class="table-wrap"><table><thead><tr><th>Podgląd</th><th>Rodzaj</th><th>Plik</th><th>Opis</th><th>Data</th><th>Otwórz</th></tr></thead><tbody>{media_rows or '<tr><td colspan="6">Brak plików.</td></tr>'}</tbody></table></div></section>

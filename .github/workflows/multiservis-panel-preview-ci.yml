@@ -2,6 +2,10 @@ name: Multi-Servis WEB — compact dashboard, finance & handover integration tes
 on:
   # Owner code changes do not burn hosted CI time on each push.
   # Full browser + PostgreSQL regression tests execute only for deliberate release-gate triggers.
+  # Deliberate release trigger only; ordinary source edits use owner ROG.
+  push:
+    branches: [feature/service-mode-monitoring-20261010]
+    paths: ['embedded-multiguard/deploy/owner-web-test.trigger']
   workflow_dispatch:
 
 jobs:
@@ -324,6 +328,8 @@ jobs:
               print("PASS: dashboard, computers and device show exactly one selected sidebar item")
               browser.close()
           PY
+      - name: Test actual OWNER confirmation and monitoring UI in Chromium
+        run: python embedded-multiguard/tests/test_owner_service_mode_browser.py
       - name: Upload browser-rendered owner panel previews
         uses: actions/upload-artifact@v4
         with:

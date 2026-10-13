@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 10,
-  "target_sha": "757fc297bbcf149dedea339ff0c5f98b67f37034",
-  "summary": "OWNER WEB: lista oczekujacych: nazwa w dwoch liniach z edycja pod ikona olowka, dwa przyciski obok siebie, a usuwanie wymaga dodatkowego zatwierdzenia w oknie Czy jestes pewien?. Bez zmian Android/Windows. PostgreSQL, Chromium i testy bezpieczenstwa PASS 38080468121."
+  "sequence": 13,
+  "target_sha": "f7186463c64b711d8933590c95dae6c5af5772b7",
+  "summary": "OWNER WWW: notatki z Androida widoczne w zleceniach (historia, ostatnia notatka, wyszukiwanie); zachowane istniejące poprawki V12, finanse, licencje i zdjęcia. PostgreSQL/Chromium CI PASS. Tylko OWNER web, backup i rollback."
 }
