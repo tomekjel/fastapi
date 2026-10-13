@@ -1069,8 +1069,8 @@ def _assign_direct_customer_license(
             SET state='CREATED',keygate_license_id=:license_id,updated_at=now()
             WHERE installation_id=:id
         """), {"id":installation_id,"license_id":str(created["id"])})
-    with engine.begin() as con:
-        try:
+    try:
+        with engine.begin() as con:
             lic = con.execute(text("""
                 INSERT INTO guard.license_links(
                     reception_id,reception_number,service_device_id,
@@ -1123,7 +1123,7 @@ def _assign_direct_customer_license(
             "Nie zakończono przypisania licencji. Wymagana weryfikacja "
             "w KeyGate przed ponowieniem operacji.",
         ) from None
-return _normalize_link(dict(lic))
+    return _normalize_link(dict(lic))
 
 
 def _handover_direct_customer(installation_id: uuid.UUID) -> dict[str, Any]:
