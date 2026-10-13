@@ -174,6 +174,7 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
         self.assertEqual(failure.exception.status_code, 503)
         self.assertEqual(db.state, {"status": "WAITING", "license": None, "grant": True})
         self.assertTrue(any("UPDATE guard.workshop_grants" in q for q in db.queries))
+        self.assertTrue(any("UPDATE guard.direct_keygate_attempts" in q for q in db.queries))
 
 
 
