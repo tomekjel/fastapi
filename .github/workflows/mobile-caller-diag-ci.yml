@@ -1,0 +1,28 @@
+name: OWNER Android diagnostics contract (no deployment)
+
+on:
+  pull_request:
+    branches:
+      - multiservis-panel-multiguard-gold-crimson-v1
+    paths:
+      - "embedded-multiguard/app/routers/mobile_caller_diagnostics.py"
+      - "embedded-multiguard/install.sh"
+      - "tests/test_mobile_caller_diagnostics_contract.py"
+      - ".github/workflows/mobile-caller-diag-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python and shell syntax
+        run: |
+          set -euo pipefail
+          python3 -m py_compile embedded-multiguard/app/routers/mobile_caller_diagnostics.py
+          bash -n embedded-multiguard/install.sh
+      - name: Security and rollback contracts
+        run: |
+          python3 -m unittest discover -s tests -p 'test_mobile_caller_diagnostics_contract.py' -v
