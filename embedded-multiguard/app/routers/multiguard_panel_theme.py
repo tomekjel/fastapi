@@ -548,4 +548,26 @@ table th,table td {padding:8px 11px}
   #service-modes .owner-monitor-save {grid-column:1;justify-self:start}
 }
 
+/* OWNER command centre: legible actions instead of a raw table as landing page. */
+.owner-overview-hero {background:linear-gradient(122deg,#16283d 0%,#101c2c 75%);
+  border:1px solid rgba(155,201,217,.22);padding:27px 30px}
+.owner-overview-hero h1 {font-size:clamp(26px,2.4vw,37px);margin:8px 0 9px}
+.owner-overview-hero>p {margin-bottom:22px}
+.owner-overview-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.owner-overview-tile {display:grid;gap:7px;min-height:170px;padding:17px 16px;
+  border-radius:13px;border:1px solid rgba(154,176,196,.24);background:#0c192a;
+  color:var(--text);text-decoration:none;transition:transform .14s,border-color .14s}
+.owner-overview-tile:hover {transform:translateY(-2px);border-color:var(--gold);color:var(--text)}
+.owner-overview-icon {font-size:23px;line-height:1;color:var(--gold)}
+.owner-overview-tile strong {font-size:17px;font-weight:500}
+.owner-overview-tile span:not(.owner-overview-icon) {font-size:13px;color:var(--muted)}
+.owner-overview-tile em {font-style:normal;letter-spacing:.06em;color:var(--cyan);
+  font-size:12px;margin-top:auto}
+@media(max-width:1100px) {.owner-overview-grid {grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px) {
+  .owner-overview-hero {padding:20px 15px}
+  .owner-overview-grid {grid-template-columns:1fr}
+  .owner-overview-tile {min-height:115px}
+}
+
 """
