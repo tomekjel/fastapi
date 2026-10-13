@@ -5,6 +5,7 @@ import calendar
 import hashlib
 import html
 import json
+import logging
 import os
 import secrets
 import threading
@@ -28,6 +29,7 @@ from app.database import engine
 from app.security import CurrentUser, require_owner, require_staff
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["multi-guard-license"])
 _panel_security = HTTPBasic(auto_error=False)
 
@@ -1018,35 +1020,50 @@ def _assign_direct_customer_license(
         created = _keygate_create_license(
             reception_number=reference, edition=edition, months=months,
         )
-        lic = con.execute(text("""
-            INSERT INTO guard.license_links(
-                reception_id,reception_number,service_device_id,
-                sale_kind,installation_id,
-                keygate_license_id,keygate_plan_id,license_key_hash,
-                plan_code,duration_months,release_channel,lifecycle
-            ) VALUES (
-                NULL,:reference,NULL,'DIRECT',:installation_id,
-                :license_id,:plan_id,:key_hash,:plan,:months,:channel,'UNASSIGNED'
-            ) RETURNING *
-        """), {
-            "reference":reference, "installation_id":installation_id,
-            "license_id":str(created["id"]), "plan_id":created["_plan_id"],
-            "key_hash":_hash(created["_license_key"]),
-            "plan":"multi_guard_pro" if edition=="PRO" else "multi_guard",
-            "months":months,"channel":channel,
-        }).mappings().one()
-        con.execute(text("""
-            UPDATE guard.pending_installations SET
-                status='ASSIGNED',assigned_reception_id=NULL,
-                assigned_license_id=:license_id,
-                assigned_at=now(),updated_at=now()
-            WHERE installation_id=:id
-        """), {"license_id":lic["keygate_license_id"],"id":installation_id})
-        con.execute(text("""
-            UPDATE guard.workshop_grants
-            SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
-            WHERE installation_id=:id AND enabled=TRUE
-        """), {"id":installation_id})
+        try:
+            lic = con.execute(text("""
+                INSERT INTO guard.license_links(
+                    reception_id,reception_number,service_device_id,
+                    sale_kind,installation_id,
+                    keygate_license_id,keygate_plan_id,license_key_hash,
+                    plan_code,duration_months,release_channel,lifecycle
+                ) VALUES (
+                    NULL,:reference,NULL,'DIRECT',:installation_id,
+                    :license_id,:plan_id,:key_hash,:plan,:months,:channel,'UNASSIGNED'
+                ) RETURNING *
+            """), {
+                "reference":reference, "installation_id":installation_id,
+                "license_id":str(created["id"]), "plan_id":created["_plan_id"],
+                "key_hash":_hash(created["_license_key"]),
+                "plan":"multi_guard_pro" if edition=="PRO" else "multi_guard",
+                "months":months,"channel":channel,
+            }).mappings().one()
+            con.execute(text("""
+                UPDATE guard.pending_installations SET
+                    status='ASSIGNED',assigned_reception_id=NULL,
+                    assigned_license_id=:license_id,
+                    assigned_at=now(),updated_at=now()
+                WHERE installation_id=:id
+            """), {"license_id":lic["keygate_license_id"],"id":installation_id})
+            con.execute(text("""
+                UPDATE guard.workshop_grants
+                SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
+                WHERE installation_id=:id AND enabled=TRUE
+            """), {"id":installation_id})
+        except Exception:
+            # KeyGate has already acknowledged creation. The SQL transaction
+            # rolls back, but the external licence cannot be rolled back here.
+            # Do NOT silently retry: doing so can generate duplicate licences.
+            logger.exception(
+                "Multi-Guard DIRECT needs manual KeyGate reconciliation: "
+                "workspace=%s external_license_id=%s",
+                reference, str(created.get("id", "")),
+            )
+            raise HTTPException(
+                503,
+                "Nie zakończono przypisania licencji. Wymagana weryfikacja "
+                "w KeyGate przed ponowieniem operacji.",
+            ) from None
     return _normalize_link(dict(lic))
 
 
