@@ -148,6 +148,9 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
         db = SimulatedDatabase()
         result = self.run_assignment(db)
         self.assertEqual(result["keygate_license_id"], "FAKE-LICENSE")
+        self.assertEqual(
+            next(iter(db.attempts.values()))["state"], "CREATED"
+        )
         self.assertEqual(db.state, {"status": "ASSIGNED", "license": "FAKE-LICENSE", "grant": False})
 
     def test_keygate_failure_does_not_assign_local_rights(self):
@@ -161,6 +164,9 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
                 mg._assign_direct_customer_license(uuid.uuid4(), "PRO", 3, "STABLE")
         self.assertEqual(db.state, {"status": "WAITING", "license": None, "grant": True})
         self.assertFalse(any("INSERT INTO guard.license_links" in q for q in db.queries))
+        self.assertEqual(
+            next(iter(db.attempts.values()))["state"], "RECONCILIATION_REQUIRED"
+        )
 
     def test_sql_failure_after_external_creation_requires_reconciliation(self):
         """Document cross-system failure: SQL rollback cannot undo KeyGate."""
@@ -177,6 +183,9 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
         self.assertEqual(failure.exception.status_code, 503)
         self.assertIn("KeyGate", failure.exception.detail)
         keygate.assert_called_once()
+        self.assertEqual(
+            next(iter(db.attempts.values()))["state"], "RECONCILIATION_REQUIRED"
+        )
         self.assertEqual(db.state["status"], "WAITING")
         self.assertIsNone(db.state["license"])
         # External licence exists in this scenario despite SQL rollback.
@@ -190,6 +199,9 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
         self.assertEqual(db.state, {"status": "WAITING", "license": None, "grant": True})
         self.assertTrue(any("UPDATE guard.workshop_grants" in q for q in db.queries))
         self.assertTrue(any("UPDATE guard.direct_keygate_attempts" in q for q in db.queries))
+        self.assertEqual(
+            next(iter(db.attempts.values()))["state"], "RECONCILIATION_REQUIRED"
+        )
 
 
 
