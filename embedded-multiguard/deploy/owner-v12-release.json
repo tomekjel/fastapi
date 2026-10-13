@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 18,
-  "target_sha": "e13946e846b36d10dff8b834c116bd5e413adebe",
-  "summary": "OWNER command-centre navigation: landing dashboard with accessible direct links to computers, orders, licenses and OWNER financial statistics. Retains existing service monitoring, KeyGate controls and public API. Automatically deploy only after full Chromium + PostgreSQL CI PASS with rollback."
+  "sequence": 19,
+  "target_sha": "ca11cab294d7e31e2eb55d51dc07accde267f779",
+  "summary": "OWNER V12: responsive command-centre navigation and restoration of exact approved Multi-Guard Pro shield asset. No Android/Windows/licensing API changes. Protected by full PostgreSQL/Chromium CI and rollback."
 }
