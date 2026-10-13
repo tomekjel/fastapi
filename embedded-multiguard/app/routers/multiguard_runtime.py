@@ -971,6 +971,9 @@ def _fetch_device_rows(
                     gi.installation_external_id,
                     gi.service_device_id,
                     gi.plan_code,
+                    gi.created_at AS installed_at,
+                    COALESCE(w.enabled,FALSE) AS service_mode_enabled,
+                    w.edition AS service_edition,
                     gi.lifecycle,
                     gi.valid_until,
                     gi.last_seen_at,
@@ -999,6 +1002,8 @@ def _fetch_device_rows(
                     ON d.id=gi.service_device_id
                 LEFT JOIN guard.pending_installations p
                     ON p.installation_id=gi.installation_external_id
+                LEFT JOIN guard.workshop_grants w
+                    ON w.installation_id=gi.installation_external_id
                 LEFT JOIN guard.owner_installation_labels owner_alias
                     ON owner_alias.installation_external_id=gi.installation_external_id
                 LEFT JOIN guard.agent_uninstalls au
@@ -1075,9 +1080,11 @@ def _fetch_device_rows(
                       COALESCE(ll.reception_number,'') ILIKE :search_like
                   )
                 ORDER BY
-                    -- Client-initiated uninstalls stay accessible, at the
-                    -- bottom of the inventory instead of disappearing.
+                    -- Active service rights first, then the newest installations;
+                    -- last-known activity is not the installation date.
+                    CASE WHEN COALESCE(w.enabled,FALSE) THEN 0 ELSE 1 END,
                     CASE WHEN au.installation_id IS NOT NULL THEN 1 ELSE 0 END,
+                    gi.created_at DESC NULLS LAST,
                     CASE COALESCE(owner_notes.priority,'NORMAL')
                         WHEN 'URGENT' THEN 0 WHEN 'WATCH' THEN 1 ELSE 2 END,
                     CASE gi.health_level
@@ -1284,7 +1291,11 @@ def multi_guard_panel_dashboard(
         """)).mappings().one()
         pending_count = connection.execute(text("""
             SELECT count(*) FROM guard.pending_installations p
-            WHERE p.status='WAITING' AND NOT EXISTS (
+            WHERE p.status='WAITING' AND p.assigned_license_id IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM guard.license_links ll
+                WHERE ll.installation_id=p.installation_id AND ll.lifecycle <> 'REVOKED'
+              ) AND NOT EXISTS (
               SELECT 1 FROM guard.workshop_grants w
               WHERE w.installation_id=p.installation_id AND w.enabled=TRUE
             )
@@ -1612,7 +1623,9 @@ def multi_guard_panel_computers(
             "YELLOW": "warn",
             "GREEN": "good",
         }.get(health, "muted")
-        plan = "PRO" if str(row["plan_code"]).upper() == "PRO" else "STANDARD"
+        plan = ("PRO" if str(row["service_edition"] or row["plan_code"]).upper() == "PRO"
+                else "STANDARD")
+        in_service = bool(row["service_mode_enabled"])
         owner_priority = str(row["owner_priority"] or "NORMAL")
         owner_attention = (
             '<br><span class="badge mg-red">PILNE — OBSERWUJ</span>'
@@ -1632,7 +1645,7 @@ def multi_guard_panel_computers(
                 <b class="owner-machine-display">{_panel_h(row['friendly_name'] or _device_label(row))}</b><br>
                 <span class="muted">{_panel_h(row['serial_number'] or row['hostname'] or '')}</span>{owner_attention}
               </td>
-              <td><span class="badge {'mg-gold' if plan=='PRO' else 'mg-red'}">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(_human_license_state(row['lifecycle']))}</span></td>
+              <td><span class="badge {'mg-gold' if plan=='PRO' else 'mg-red'}">{_panel_h(plan)}</span><br><span class="muted">{'TRYB SERWISOWY' if in_service else _panel_h(_human_license_state(row['lifecycle']))}</span></td>
               <td><span class="badge {health_class}">{_panel_h(health)}</span></td>
               <td>{_panel_h(row['app_version'] or '—')}</td>
               <td><span class="presence-label"><span class="presence-dot presence-{presence_style}" aria-hidden="true"></span>{_panel_h(presence_label)}</span></td>
