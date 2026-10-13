@@ -22,7 +22,7 @@ jobs:
           if /I not "%RUNNER_NAME%"=="ROG" exit /b 1
       - uses: actions/checkout@v4
       - name: Validate OWNER Python source and visual contract
-        shell: powershell
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           python -m py_compile embedded-multiguard/app/routers/multiguard_license.py embedded-multiguard/app/routers/multiguard_panel_theme.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
