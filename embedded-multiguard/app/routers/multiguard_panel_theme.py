@@ -571,4 +571,19 @@ table th,table td {padding:8px 11px}
   .owner-overview-tile {min-height:115px}
 }
 
+
+/* OWNER / Zdalna pomoc — panoramic layout with truthful backend state. */
+.owner-remote-columns {display:grid;grid-template-columns:minmax(270px,34%) minmax(0,1fr);gap:12px;align-items:start}
+.owner-remote-columns>.card {margin-bottom:0;min-height:330px}
+.owner-remote-list {margin:12px 0 0;padding:0;list-style:none;max-height:calc(100vh - 230px);overflow-y:auto}
+.owner-remote-list li {display:flex;align-items:center;flex-wrap:wrap;gap:5px 12px;padding:9px 3px;border-bottom:1px solid var(--line)}
+.owner-remote-list li>a {font-family:"Cascadia Code",Consolas,monospace;white-space:nowrap}
+.owner-remote-list li>span {min-width:120px;flex:1;color:var(--text)}
+.owner-remote-list li>small {flex-basis:100%;margin-left:0}
+@media(max-width:850px) {
+  .owner-remote-columns {grid-template-columns:1fr}
+  .owner-remote-columns>.card {min-height:0}
+  .owner-remote-list {max-height:360px}
+}
+
 """
