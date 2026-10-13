@@ -40,4 +40,10 @@ This does not prove live OWNER acceptance/assignment against real KeyGate, Windo
 
 The broad development branch contains root tests and additional workflows/triggers outside the pinned server agent allowlist. A release package must include only permitted OWNER files. The pinned on-server deployment script also needs the reviewed exact acceptance hardening exception; a repository edit alone does not update that pinned file.
 
-Remove the two disposable test licences, six test plans, test product and temporary API key after preserving this report. Cleanup is not yet complete. Production Multi-Guard product 9843d5fd-f090-4534-9d32-d66b64999acb and ADMIN FULL licence remain outside the cleanup scope.
+Cleanup performed: temporary API key removed through the admin UI and its former token now returns HTTP 401. The local token file and licence-key values were removed from scratch. Four unused plans were deleted: Standard 6m/12m and Pro 3m/12m. Both test licences remain revoked with no active device activations.
+
+Cleanup limitation: KeyGate 246c418 has no admin licence deletion endpoint or UI action. Its DeleteProduct explicitly rejects products with any licences (HAS_LICENSES), and DeletePlan rejects plans referenced by licences. Therefore the TEST product and Standard 3m/Pro 6m plans remain as historical fixture records; do not claim they were deleted. Full removal would require a separately reviewed server/database maintenance procedure. Production Multi-Guard product 9843d5fd-f090-4534-9d32-d66b64999acb and ADMIN FULL licence were untouched.
+
+## Release package
+
+Draft PR #16 packages only permitted OWNER paths at initial revision 605e224dab495a1655d4f4801f9cb87772522a42. The original agent allowlist accepted its diff from sequence-13 target f7186463c64b711d8933590c95dae6c5af5772b7. The release manifest sequence is unchanged, so this does not deploy production.
