@@ -3,6 +3,7 @@
 Run in the backend test environment (with app import path configured):
     PYTHONPATH=embedded-multiguard python -m unittest discover -s tests -p test_multiguard_direct_assignment_atomicity.py
 No network access or production database is used.
+Run only on the owner's verified MultiGuard-Dev runner.
 """
 import unittest
 import uuid
