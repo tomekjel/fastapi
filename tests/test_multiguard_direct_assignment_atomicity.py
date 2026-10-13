@@ -171,5 +171,53 @@ class DirectAssignmentAtomicityTests(unittest.TestCase):
         self.assertTrue(any("UPDATE guard.workshop_grants" in q for q in db.queries))
 
 
+
+class BackendWindowsContractTests(unittest.TestCase):
+    def test_workshop_lease_contains_windows_required_fields(self):
+        # Verify the real backend JSON builder rather than a hand-written fixture.
+        import json
+        import base64
+        from datetime import datetime, timezone
+
+        builder = next(
+            node for node in parsed.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_signed_workshop_grant"
+        )
+        class FakeSigner:
+            def sign(self, data):
+                return b"test-signature"
+        env = {
+            "Any": Any,
+            "json": json,
+            "base64": base64,
+            "_signing_key": lambda: FakeSigner(),
+            "_iso": lambda dt: dt.isoformat(),
+            "_utcnow": lambda: datetime.now(timezone.utc),
+        }
+        module = ast.Module(body=[builder], type_ignores=[])
+        ast.fix_missing_locations(module)
+        exec(compile(module, str(source_file), "exec"), env)
+        installation_id = uuid.uuid4()
+        device_id = "device-test"
+        pending = {"installation_id": installation_id, "device_id": device_id}
+        grant = {"edition": "PRO", "release_channel": "STABLE", "enabled": True}
+        envelope = env["_signed_workshop_grant"](pending, grant)
+        payload = json.loads(envelope["payload"])
+        required = {
+            "schemaVersion", "licenseId", "serviceDeviceId", "installationId",
+            "deviceId", "planCode", "lifecycle", "validFrom", "validUntil",
+            "acceptedAt", "acceptedDocuments", "serverTime",
+        }
+        self.assertTrue(required <= payload.keys())
+        self.assertEqual(payload["lifecycle"], "WORKSHOP")
+        self.assertEqual(payload["planCode"], "multi_guard_pro")
+        self.assertEqual(payload["installationId"], str(installation_id))
+        self.assertEqual(payload["deviceId"], device_id)
+        self.assertEqual(base64.b64decode(envelope["signatureB64"]), b"test-signature")
+        grant["enabled"] = False
+        revoked = json.loads(env["_signed_workshop_grant"](pending, grant)["payload"])
+        self.assertEqual(revoked["lifecycle"], "UNKNOWN")
+
+
 if __name__ == "__main__":
     unittest.main()
