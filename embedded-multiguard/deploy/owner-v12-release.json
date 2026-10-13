@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 14,
-  "target_sha": "7b46e847b9737846a210fe0d928741813061e41d",
-  "summary": "OWNER WWW: bezterminowy tryb serwisowy, prawa płatne 3/6/12 mies., atomowe przypisanie i audyt KeyGate, ścisła akceptacja 3 dokumentów. KeyGate API oraz PostgreSQL/Chromium PASS. Zachowane notatki, finanse i zdjęcia; backup i rollback."
+  "sequence": 15,
+  "target_sha": "f7186463c64b711d8933590c95dae6c5af5772b7",
+  "summary": "HOLD: public /health returns HTTP 200 with status error and UndefinedColumn in its schema check. Preserve seq13 source if still installed; forward-only agent blocks any downgrade if seq14 was applied. Confirm actual container state before further rollout."
 }
