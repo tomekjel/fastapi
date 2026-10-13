@@ -15,20 +15,29 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        shell: powershell
+        shell: cmd
     steps:
       - name: Verify OWNER computer
         run: |
-          if ($env:RUNNER_NAME -ne 'ROG') { throw ('Unexpected backend runner: ' + $env:RUNNER_NAME) }
+          @echo off
+          if /I not "%RUNNER_NAME%"=="ROG" (echo ERROR: Unexpected backend runner %RUNNER_NAME% & exit /b 1)
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
           clean: false
       - name: Run synthetic licence regression suite
         run: |
-          $env:PYTHONPATH = Join-Path $env:GITHUB_WORKSPACE 'embedded-multiguard'
-          if (Get-Command python -ErrorAction SilentlyContinue) {
+          @echo off
+          set "PYTHONPATH=%GITHUB_WORKSPACE%\embedded-multiguard"
+          where python >nul 2>nul
+          if not errorlevel 1 (
             python -m unittest discover -s tests -p test_multiguard_direct_assignment_atomicity.py -v
-          } elseif (Get-Command py -ErrorAction SilentlyContinue) {
+            exit /b %ERRORLEVEL%
+          )
+          where py >nul 2>nul
+          if not errorlevel 1 (
             py -3 -m unittest discover -s tests -p test_multiguard_direct_assignment_atomicity.py -v
-          } else { throw 'Python is unavailable on MultiGuard-Dev' }
+            exit /b %ERRORLEVEL%
+          )
+          echo ERROR: Python not available on ROG
+          exit /b 1
