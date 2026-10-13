@@ -194,11 +194,20 @@ class AcceptanceGateTests(unittest.TestCase):
         }
         exec(compile(module, str(source_file), "exec"), env)
         accepted = [SimpleNamespace(**item) for item in required]
-        req = SimpleNamespace(documents=accepted + [accepted[0]])
-        with self.assertRaises(FakeHTTPException) as error:
-            env["acceptance"](req)
-        self.assertEqual(error.exception.status_code, 400)
-        self.assertEqual(keygate_calls, [])
+        invalid_sets = {
+            "duplicate": accepted + [accepted[0]],
+            "missing": accepted[:2],
+            "wrong_hash": accepted[:2] + [
+                SimpleNamespace(kind="terms", version="1", sha256="00" * 32)
+            ],
+        }
+        for scenario, documents in invalid_sets.items():
+            with self.subTest(scenario=scenario):
+                req = SimpleNamespace(documents=documents)
+                with self.assertRaises(FakeHTTPException) as error:
+                    env["acceptance"](req)
+                self.assertEqual(error.exception.status_code, 400)
+                self.assertEqual(keygate_calls, [])
 
 
 class BackendWindowsContractTests(unittest.TestCase):
