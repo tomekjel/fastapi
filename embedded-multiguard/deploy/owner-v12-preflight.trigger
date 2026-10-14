@@ -16,3 +16,4 @@ Run Chromium/PostgreSQL and deployment guards on this exact base-branch source b
 2026-10-14 PR #21 compact service row real PostgreSQL-rendered Chromium contract (max 116px), owner service edition switch and guard; no release.
 
 2026-10-14 PR #22 ONE isolated PostgreSQL+Chromium preflight: workshop PRO Beta 0.3.42 discovery auth, client consent, MeshCentral, OWNER search by service order number; never deploy production.
+2026-10-14 PR #22 retest isolated beta workshop PRO, ORDER NUMBER search, corrected UTC timestamp and immutable runtime hash. No release manifest modification.
