@@ -1307,6 +1307,64 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
                 UPDATE guard.installations SET lifecycle='ACTIVE'
                 WHERE id=:id AND lifecycle='EXPIRED'
             """), {'id':install_b})
+        # Stale CONNECT_READY sharing must be revoked before auto-expiry.
+        auto_expired_id=uuid.uuid4()
+        with engine.begin() as db:
+            db.execute(text("""
+                INSERT INTO guard.remote_sessions (
+                    id,support_request_id,installation_id,service_device_id,
+                    requested_by_name,status,expires_at,mesh_public_id,
+                    mesh_share_expires_at,granted_capabilities)
+                VALUES (:id,:support,:install,:device,'CI auto-expire',
+                    'CONNECT_READY',now()+interval '1 day',
+                    'ci-auto-expire',now()-interval '1 minute',
+                    '["desktop"]'::jsonb)
+            """), {'id':auto_expired_id,'support':support_id,
+                   'install':install_b,'device':pc_b})
+        original_revoke=remote.meshcentral.revoke_share
+        def auto_expire_unavailable(*args):
+            raise remote.meshcentral.MeshCentralError('CI MeshCtrl offline')
+        remote.meshcentral.revoke_share=auto_expire_unavailable
+        try:
+            from fastapi import HTTPException as CIExpiryError
+            try:
+                with engine.begin() as db:
+                    remote._expire_and_find_open(db,install_b)
+                raise AssertionError('MeshCentral outage must block SQL expiry')
+            except CIExpiryError as exc:
+                assert exc.status_code==502
+            with engine.connect() as db:
+                status=db.execute(text("""
+                    SELECT status,mesh_public_id FROM guard.remote_sessions
+                    WHERE id=:id
+                """),{'id':auto_expired_id}).mappings().one()
+            assert status['status']=='CONNECT_READY'
+            assert status['mesh_public_id']=='ci-auto-expire'
+        finally:
+            remote.meshcentral.revoke_share=original_revoke
+        auto_close_calls=[]
+        def auto_expire_revoke(node_id,public_id):
+            assert node_id=='ci-node-123' and public_id=='ci-auto-expire'
+            auto_close_calls.append(public_id)
+        remote.meshcentral.revoke_share=auto_expire_revoke
+        try:
+            with engine.begin() as db:
+                assert remote._expire_and_find_open(db,install_b) is None
+        finally:
+            remote.meshcentral.revoke_share=original_revoke
+        assert auto_close_calls==['ci-auto-expire']
+        with engine.connect() as db:
+            status=db.execute(text("""
+                SELECT status,mesh_public_id,ended_at FROM guard.remote_sessions
+                WHERE id=:id
+            """),{'id':auto_expired_id}).mappings().one()
+            audited=db.execute(text("""
+                SELECT count(*) FROM guard.remote_session_events
+                WHERE remote_session_id=:id AND event_type='SESSION_EXPIRED'
+            """),{'id':auto_expired_id}).scalar_one()
+        assert status['status']=='EXPIRED' and status['mesh_public_id'] is None
+        assert status['ended_at'] is not None and audited==1
+
         # Both expiry decisions must commit EXPIRED with an audit event.
         ensure(c.post('/multiguard/panel/remote/request',auth=auth,
                       data=remote_form,follow_redirects=False).status_code,303,

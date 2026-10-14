@@ -245,24 +245,54 @@ def _audit(
 
 def _expire_and_find_open(connection, installation_id):
     now = datetime.now(timezone.utc)
-    connection.execute(
+    # Auto-expiry is processed on the next poll/request (no background
+    # timer). Never mark a session EXPIRED while its remote URL still works.
+    expired = connection.execute(
         text(
             """
-            UPDATE guard.remote_sessions
-            SET status='EXPIRED', ended_at=COALESCE(ended_at,:now)
-            WHERE installation_id=:installation_id
+            SELECT rs.id,rs.mesh_public_id,gi.mesh_node_id
+            FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE rs.installation_id=:installation_id
               AND (
-                (status IN ('REQUESTED','CONSENTED') AND expires_at<:now)
-                OR (
-                    status IN ('CONNECT_READY','ACTIVE')
-                    AND mesh_share_expires_at IS NOT NULL
-                    AND mesh_share_expires_at<:now
-                )
+                (rs.status IN ('REQUESTED','CONSENTED') AND rs.expires_at<:now)
+                OR (rs.status IN ('CONNECT_READY','ACTIVE')
+                    AND rs.mesh_share_expires_at IS NOT NULL
+                    AND rs.mesh_share_expires_at<:now)
               )
+            ORDER BY rs.requested_at,rs.id
+            FOR UPDATE OF rs
             """
         ),
         {"installation_id": installation_id, "now": now},
-    )
+    ).mappings().all()
+    for item in expired:
+        if item["mesh_public_id"]:
+            if not item["mesh_node_id"]:
+                raise HTTPException(
+                    502, "Brak MeshCentral ID — nie potwierdzono wygaśnięcia sesji."
+                )
+            try:
+                meshcentral.revoke_share(item["mesh_node_id"], item["mesh_public_id"])
+            except meshcentral.MeshCentralError as exc:
+                raise HTTPException(
+                    502, "Nie potwierdzono zamknięcia wygasłego linku MeshCentral."
+                ) from exc
+        connection.execute(
+            text(
+                """
+                UPDATE guard.remote_sessions
+                SET status='EXPIRED',
+                    ended_at=COALESCE(ended_at,:now),
+                    last_activity_at=:now,
+                    mesh_public_id=NULL,
+                    mesh_share_expires_at=NULL
+                WHERE id=:id
+                """
+            ),
+            {"id": item["id"], "now": now},
+        )
+        _audit(connection, item["id"], "SESSION_EXPIRED", "BACKEND", "Multi-Servis")
     return connection.execute(
         text(
             """
