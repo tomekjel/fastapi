@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 20,
-  "target_sha": "82e1506e488528c45b75a105a317b34fa4e93fd3",
-  "summary": "OWNER: restored original Multi-Servis transistor icon, excluded active indefinite service grants from waiting-license tables and dashboard counts, corrected customer licence headings. Required PostgreSQL/Chromium CI, API contract checks, automatic rollback."
+  "sequence": 21,
+  "target_sha": "00427956fada689964e759ae288484319ca60e59",
+  "summary": "OWNER V12: complete license controls, remote support and MeshCentral safeguards; verified PostgreSQL + Chromium; protected backend-only rollout with backup, rollback and API checks."
 }
