@@ -7,13 +7,6 @@ on:
     branches: [multiservis-panel-multiguard-gold-crimson-v1, owner-licenses-queue-20261014, fix/owner-service-compact-edition-20261014, feature/workshop-pro-remote-owner-20261014]
     paths:
       - 'embedded-multiguard/deploy/owner-v12-preflight.trigger'
-  pull_request:
-    branches: [multiservis-panel-multiguard-gold-crimson-v1]
-    paths:
-      - 'embedded-multiguard/app/routers/**'
-      - 'embedded-multiguard/tests/**'
-      - 'embedded-multiguard/deploy-owner-web-v12.sh'
-      - '.github/workflows/multiservis-panel-preview-ci.yml'
   workflow_dispatch:
 
 jobs:
