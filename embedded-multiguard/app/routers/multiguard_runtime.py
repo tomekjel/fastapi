@@ -2798,8 +2798,16 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
         chosen = None
         if selected:
             chosen = con.execute(text("""
-                SELECT id,installation_external_id,mesh_node_id,lifecycle,valid_until
-                FROM guard.installations WHERE id=:id AND plan_code='PRO' AND is_current=TRUE
+                SELECT gi.id,gi.installation_external_id,gi.mesh_node_id,gi.lifecycle,
+                       gi.valid_until,
+                       EXISTS (
+                         SELECT 1 FROM guard.license_plan_changes pc
+                         JOIN guard.license_links ll ON ll.id=pc.license_link_id
+                         WHERE ll.installation_id=gi.installation_external_id
+                           AND pc.status='PENDING'
+                       ) AS plan_change_pending
+                FROM guard.installations gi
+                WHERE gi.id=:id AND gi.plan_code='PRO' AND gi.is_current=TRUE
             """),{"id":selected}).mappings().first()
             if not chosen:
                 raise HTTPException(404,"Nie znaleziono bieżącego komputera Pro.")
@@ -2826,6 +2834,8 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
             controls += '<p>Komputer nie ma jeszcze skonfigurowanego połączenia zdalnego.</p>'
         elif chosen['lifecycle'] != 'ACTIVE' or (chosen['valid_until'] and chosen['valid_until'] <= datetime.now(timezone.utc)):
             controls += '<p>Uruchomienie sesji wymaga aktywnej licencji Pro.</p>'
+        elif chosen['plan_change_pending']:
+            controls += '<p>Trwa zmiana edycji licencji. Dokończ operację w zakładce Licencje, zanim uruchomisz zdalną pomoc.</p>'
         else:
             for request in requests:
                 controls += action('/multiguard/panel/remote/request','POPROŚ O ZGODĘ NA SESJĘ',
@@ -2839,7 +2849,10 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
               'ACTIVE':'Aktywna','DENIED':'Odmowa','ENDED':'Zakończona','EXPIRED':'Wygasła','ERROR':'Błąd'}
     for session in sessions:
         buttons = ''
-        if session['status'] in {'CONSENTED','CONNECT_READY','ACTIVE'}:
+        if (chosen and chosen['lifecycle']=='ACTIVE'
+                and (not chosen['valid_until'] or chosen['valid_until']>datetime.now(timezone.utc))
+                and not chosen['plan_change_pending']
+                and session['status'] in {'CONSENTED','CONNECT_READY','ACTIVE'}):
             buttons += action(f'/multiguard/panel/remote/{session["id"]}/connect','OTWÓRZ PULPIT')
         if session['status'] in {'REQUESTED','CONSENTED','CONNECT_READY','ACTIVE'}:
             buttons += action(f'/multiguard/panel/remote/{session["id"]}/end','ZAKOŃCZ SESJĘ')
@@ -2875,9 +2888,16 @@ def _owner_remote_actor(csrf_token):
 
 
 def _owner_remote_eligible(connection, installation_id):
-    row=connection.execute(text("""SELECT id FROM guard.installations
-        WHERE id=:id AND is_current=TRUE AND plan_code='PRO' AND lifecycle='ACTIVE'
-          AND (valid_until IS NULL OR valid_until>now())"""),{'id':installation_id}).first()
+    row=connection.execute(text("""SELECT gi.id FROM guard.installations gi
+        WHERE gi.id=:id AND gi.is_current=TRUE
+          AND gi.plan_code='PRO' AND gi.lifecycle='ACTIVE'
+          AND (gi.valid_until IS NULL OR gi.valid_until>now())
+          AND NOT EXISTS (
+              SELECT 1 FROM guard.license_plan_changes pc
+              JOIN guard.license_links ll ON ll.id=pc.license_link_id
+              WHERE ll.installation_id=gi.installation_external_id
+                AND pc.status='PENDING'
+          )"""),{'id':installation_id}).first()
     if not row:
         raise HTTPException(403,'Sesja wymaga aktywnej licencji Pro.')
 

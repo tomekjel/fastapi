@@ -1198,6 +1198,40 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             FROM guard.installations WHERE id=:internal_id
         """),{'order_id':order_b,'device_id':pc_b,'key_hash':'7'*64,
               'cred':'1'*64,'internal_id':install_b})
+    # During a Standard/Pro conversion, both the OWNER workspace and the
+    # underlying routes must fail closed. No fake "request consent" action.
+    with engine.begin() as db:
+        linked=db.execute(text("""
+            SELECT id,keygate_plan_id,valid_until FROM guard.license_links
+            WHERE reception_id=:order_id
+        """),{"order_id":order_b}).mappings().one()
+        pending_remote_op=uuid.uuid4()
+        db.execute(text("""
+            INSERT INTO guard.license_plan_changes(
+                id,license_link_id,old_plan_code,new_plan_code,
+                old_keygate_plan_id,new_keygate_plan_id,
+                expected_valid_until,reason,status
+            ) VALUES (:op,:link,'multi_guard_pro','multi_guard',
+                     :old_plan,'ci-standard-remote',
+                     :expires,'CI test niedokonczonej zmiany','PENDING')
+        """), {"op":pending_remote_op,"link":linked["id"],
+                "old_plan":linked["keygate_plan_id"],
+                "expires":linked["valid_until"]})
+    pending_remote_page=get(f'/multiguard/panel/remote?selected={install_b}')
+    ensure(pending_remote_page.status_code,200,'Pending plan remote workspace')
+    assert 'Trwa zmiana edycji licencji' in pending_remote_page.text
+    assert 'POPROŚ O ZGODĘ NA SESJĘ' not in pending_remote_page.text
+    pending_remote_form={'support_id':str(support_id),
+                         'csrf_token':license._workshop_csrf()}
+    ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                  data=pending_remote_form).status_code,403,
+           'OWNER cannot request consent during pending plan change')
+    with engine.begin() as db:
+        db.execute(text("""
+            DELETE FROM guard.license_plan_changes
+            WHERE id=:id AND status='PENDING'
+        """), {"id":pending_remote_op})
+
     ensure(get('/multiguard/panel/remote',False).status_code,401,'Private remote page')
     remote_page=get(f'/multiguard/panel/remote?selected={install_b}')
     ensure(remote_page.status_code,200,'Remote workspace')
