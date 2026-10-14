@@ -579,7 +579,12 @@ table th,table td {padding:8px 11px}
 .owner-license-number {overflow-wrap:anywhere;word-break:normal}
 
 .owner-inventory-table td {padding:10px 12px;vertical-align:middle;white-space:nowrap}
-.owner-inventory-table .owner-machine-display,.inventory-hardware {display:block;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.owner-inventory-table .owner-machine-display {
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  max-width:360px;max-height:2.8em;overflow:hidden;text-overflow:ellipsis;
+  white-space:normal;overflow-wrap:anywhere;line-height:1.4
+}
+.inventory-hardware {display:block;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .inventory-hardware {color:var(--muted);font-size:13px}
 .owner-remote-layout {display:grid;grid-template-columns:minmax(240px,30%) minmax(0,1fr);gap:16px}
 .owner-remote-layout table {min-width:0;width:100%;table-layout:fixed}

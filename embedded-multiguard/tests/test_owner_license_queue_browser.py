@@ -35,6 +35,24 @@ with sync_playwright() as p:
         assert page.locator('#pending').count() == 0
         assert page.locator('#devices').count() == 1
         assert page.locator('.owner-inventory-table').count() == 1
+        machine_name = page.locator('.owner-inventory-table .owner-machine-display').first
+        assert machine_name.count() == 1, "Inventory must keep a readable editable name"
+        assert machine_name.evaluate('(el) => getComputedStyle(el).whiteSpace') == 'normal'
+        assert machine_name.evaluate('(el) => getComputedStyle(el).webkitLineClamp') == '2'
+        # A very long manufacturer/model may take two lines, never only one
+        # and never three; verify on both wide and narrow browser viewports.
+        name_lines = machine_name.evaluate("""el => {
+            const original = el.textContent;
+            el.textContent = 'Multi-Servis ' + 'ASUS-ROG-ZEPHYRUS-'.repeat(20);
+            const lineHeight = parseFloat(getComputedStyle(el).lineHeight);
+            const totalHeight = el.getBoundingClientRect().height;
+            el.textContent = original;
+            return totalHeight / lineHeight;
+        }""")
+        assert 1.8 <= name_lines <= 2.2, (
+            "Editable computer name must occupy up to two lines, not one or three",
+            name_lines,
+        )
         page.screenshot(path=str(folder / f'computers-{width}.png'),full_page=True)
         page.goto('https://owner.test/multiguard/panel/service-mode')
         assert page.locator('[data-owner-monitor-toggle]').count() >= 1
