@@ -95,6 +95,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
 
     license=importlib.import_module("app.routers.multiguard_license")
     runtime=importlib.import_module("app.routers.multiguard_runtime")
+    workshop=importlib.import_module("app.routers.multiguard_workshop_remote")
     service=importlib.import_module("app.routers.multiguard_service_panel")
     settings=importlib.import_module("app.routers.multiguard_panel_settings")
     devices=importlib.import_module("app.routers.multiguard_panel_devices")
@@ -104,6 +105,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     # Real SQL initializers run against fresh ephemeral PostgreSQL.
     license._ensure_schema()
     runtime._ensure_schema()
+    workshop._schema()
     settings._schema()
     devices._schema()
     triage._schema()
@@ -253,7 +255,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             })
 
     app=FastAPI()
-    for mod in (license,runtime,service,settings,devices,triage,diagnostic):
+    for mod in (license,runtime,workshop,service,settings,devices,triage,diagnostic):
         app.include_router(mod.router)
     c=TestClient(app,raise_server_exceptions=True)
     auth=("owner_ci","isolated-only-no-real-secret")
@@ -674,6 +676,128 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"id":mode_direct}).scalar_one()
     assert service_state["edition"]=="PRO" and service_state["monitoring_profile"]=="OFF"
     assert service_state["enabled"] and service_audit>=3 and keygate_links==0
+    # 0.3.42 WORKSHOP PRO: registered discovery identity, consent, and
+    # independent MeshCentral share. It never creates a KeyGate licence.
+    from datetime import datetime as _workshop_time, timezone as _workshop_tz
+    def workshop_body():
+        return {
+            "requestId":str(uuid.uuid4()),"nonce":str(uuid.uuid4()),
+            "sentAt":_workshop_time.now(_workshop_tz.utc).isoformat(),
+            "installationId":str(mode_direct),
+            "deviceId":"ci-mode-direct-device",
+            "discoveryCredential":mode_secret,
+        }
+    owned=get('/multiguard/panel/remote?q=CI-Mode')
+    ensure(owned.status_code,200,"Remote searchable workshop PRO")
+    assert f'selected={mode_direct}' in owned.text
+    assert 'SERWIS · PRO' in owned.text
+    assert 'Wyszukaj po nazwie, modelu, ID lub numerze zlecenia' in owned.text
+    assert 'CI-Mode' in owned.text
+    assert get('/multiguard/panel/remote?q=CI-Mode',False).status_code==401
+    invalid_credential={**workshop_body(),"discoveryCredential":"wrong-but-long-enough-123456789012345"}
+    ensure(c.post('/multiguard/agent/workshop/remote/poll',
+                  json=invalid_credential).status_code,401,"Workshop discovery required")
+    expired_credential={**workshop_body(),"sentAt":"2020-01-01T00:00:00Z"}
+    ensure(c.post('/multiguard/agent/workshop/remote/poll',
+                  json=expired_credential).status_code,401,"Workshop expired request refused")
+    ensure(c.post('/multiguard/agent/workshop/remote/poll',
+                  json=workshop_body()).status_code,200,"Workshop agent poll")
+    node_url=f"/multiguard/panel/remote/workshop/{mode_direct}/mesh-bind"
+    ensure(c.post(node_url,auth=auth,
+                  data={"csrf_token":"bad","mesh_node_id":"node/ci-mode-direct"},
+                  follow_redirects=False).status_code,403,"Mesh bind needs CSRF")
+    ensure(c.post(node_url,auth=auth,
+                  data={"csrf_token":token,"mesh_node_id":"node/ci-mode-direct"},
+                  follow_redirects=False).status_code,303,"Bind synthetic workshop node")
+    owner_request=f"/multiguard/panel/remote/workshop/{mode_direct}/request"
+    ensure(c.post(owner_request,auth=auth,
+                  data={"csrf_token":token},follow_redirects=False).status_code,
+           303,"Owner can request workshop session without support ticket")
+    polled=c.post('/multiguard/agent/workshop/remote/poll',json=workshop_body())
+    ensure(polled.status_code,200,"Beta client poll receives workshop session")
+    sid=polled.json()["session"]["sessionId"]
+    assert polled.json()["session"]["status"]=="REQUESTED"
+    assert polled.json()["session"]["supportRequestId"]==sid
+    denied=c.post('/multiguard/agent/workshop/remote/decision',json={
+        **workshop_body(),"sessionId":sid,"allowDesktop":False,"allowFiles":False
+    })
+    ensure(denied.status_code,200,"Client explicit session denial")
+    assert denied.json()["session"]["status"]=="DENIED"
+    ensure(c.post(owner_request,auth=auth,data={"csrf_token":token},
+                  follow_redirects=False).status_code,303,"Fresh request after refusal")
+    polled=c.post('/multiguard/agent/workshop/remote/poll',json=workshop_body())
+    sid=polled.json()["session"]["sessionId"]
+    allowed=c.post('/multiguard/agent/workshop/remote/decision',json={
+        **workshop_body(),"sessionId":sid,"allowDesktop":True,"allowFiles":False
+    })
+    ensure(allowed.status_code,200,"Client consents to desktop")
+    assert allowed.json()["session"]["status"]=="CONSENTED"
+    share_actions=[]
+    original_share=workshop.meshcentral.create_share
+    original_revoke=workshop.meshcentral.revoke_share
+    def fake_share(node,label,caps,duration):
+        assert node=="node/ci-mode-direct" and list(caps)==["desktop"]
+        share_actions.append("create")
+        return workshop.meshcentral.MeshShare(
+            "ci-workshop-share","https://mesh.example.test/sharing?ci=1"
+        )
+    def fake_revoke(node,share_id):
+        assert node=="node/ci-mode-direct"
+        share_actions.append("revoke:"+share_id)
+    workshop.meshcentral.create_share=fake_share
+    workshop.meshcentral.revoke_share=fake_revoke
+    try:
+        opened=c.post(
+            f"/multiguard/panel/remote/workshop/session/{sid}/connect",
+            auth=auth,data={"csrf_token":token},follow_redirects=False
+        )
+        ensure(opened.status_code,200,"Consented workshop desktop")
+        assert "owner-remote-desktop" in opened.text
+        assert share_actions==["create"]
+        ensure(c.post(
+            f"/multiguard/panel/remote/workshop/session/{sid}/end",
+            auth=auth,data={"csrf_token":token},follow_redirects=False
+        ).status_code,303,"Owner closes MeshCentral workshop share")
+        assert share_actions==["create","revoke:ci-workshop-share"]
+        # A PRO->STANDARD switch must revoke a still-open desktop URL
+        # synchronously, not wait for a 60s client poll.
+        forced_sid=uuid.uuid4()
+        with engine.begin() as db:
+            db.execute(text("""
+                INSERT INTO guard.workshop_remote_sessions(
+                    id,installation_id,status,expires_at,mesh_public_id,
+                    mesh_share_expires_at,granted_capabilities)
+                VALUES(:sid,:iid,'ACTIVE',now()+interval '1 hour',
+                    'ci-open-on-downgrade',now()+interval '1 hour',
+                    '["desktop"]'::jsonb)
+            """),{"sid":forced_sid,"iid":mode_direct})
+        ensure(c.post(edition_url,auth=auth,data={
+            "edition":"STANDARD","csrf_token":token
+        },follow_redirects=False).status_code,303,"Service downgrade revokes external share")
+        assert "revoke:ci-open-on-downgrade" in share_actions
+        with engine.connect() as db:
+            revoked=db.execute(text("""
+                SELECT status,mesh_public_id FROM guard.workshop_remote_sessions
+                WHERE id=:sid
+            """),{"sid":forced_sid}).mappings().one()
+        assert revoked["status"]=="EXPIRED" and revoked["mesh_public_id"] is None
+        ensure(c.post('/multiguard/agent/workshop/remote/poll',
+                      json=workshop_body()).status_code,200,"Standard agent poll")
+        assert c.post('/multiguard/agent/workshop/remote/poll',
+                      json=workshop_body()).json()["session"] is None
+        ensure(c.post(edition_url,auth=auth,data={
+            "edition":"PRO","csrf_token":token
+        },follow_redirects=False).status_code,303,"Restore workshop PRO")
+    finally:
+        workshop.meshcentral.create_share=original_share
+        workshop.meshcentral.revoke_share=original_revoke
+    with engine.connect() as db:
+        assert db.execute(text("""
+            SELECT COUNT(*) FROM guard.license_links
+            WHERE installation_id=:iid
+        """),{"iid":mode_direct}).scalar_one()==0
+    print("PASS: Workshop PRO discovery authentication, consent, no KeyGate, MeshCentral closure and immediate downgrade safety.")
+
     ensure(get('/multiguard/panel/service-mode',False).status_code,401,'Private service mode')
     # Granted discovery-only installations must be in Computers, once, above paid ones.
     service_inventory=get('/multiguard/panel/computers').text
@@ -775,6 +899,20 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"id":mode_order}).mappings().one()
     assert association["associated_reception_id"]==mode_order_id
     assert association["monitoring_profile"]=="OFF" and association["enabled"]
+    # Search linked service-mode machines by reception number, never by
+    # another machine's unrelated order; restore the original edition after.
+    ensure(c.post(f"/multiguard/panel/workshop/{mode_order}/edition",auth=auth,
+                  data={"edition":"PRO","csrf_token":token},
+                  follow_redirects=False).status_code,303,
+           "Temporary service PRO for order lookup")
+    by_order=get("/multiguard/panel/remote?q=CI-2026-01234")
+    ensure(by_order.status_code,200,"Remote lookup by service order number")
+    assert f'selected={mode_order}' in by_order.text
+    assert 'Zlecenie CI-2026-01234' in by_order.text
+    assert f'selected={mode_direct}' not in by_order.text
+    ensure(c.post(f"/multiguard/panel/workshop/{mode_order}/edition",auth=auth,
+                  data={"edition":"STANDARD","csrf_token":token},
+                  follow_redirects=False).status_code,303,"Restore service order STANDARD")
     print("PASS: unified OWNER service flow, signed revocation, monitoring OFF/ON, reports, order autocomplete.")
 
     # A true direct sale must never insert a repair order. KeyGate is

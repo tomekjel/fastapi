@@ -4,7 +4,7 @@ on:
   # Full browser + PostgreSQL regression tests execute only for deliberate release-gate triggers.
   # Deliberate release trigger only; ordinary source edits use owner ROG.
   push:
-    branches: [multiservis-panel-multiguard-gold-crimson-v1, owner-licenses-queue-20261014, fix/owner-service-compact-edition-20261014]
+    branches: [multiservis-panel-multiguard-gold-crimson-v1, owner-licenses-queue-20261014, fix/owner-service-compact-edition-20261014, feature/workshop-pro-remote-owner-20261014]
     paths:
       - 'embedded-multiguard/deploy/owner-v12-preflight.trigger'
   workflow_dispatch:
@@ -25,6 +25,7 @@ jobs:
             embedded-multiguard/app/routers/multiguard_license.py \
             embedded-multiguard/app/routers/multiguard_runtime.py \
             embedded-multiguard/app/routers/multiguard_remote.py \
+            embedded-multiguard/app/routers/multiguard_workshop_remote.py \
             embedded-multiguard/app/routers/multiguard_meshcentral.py \
             embedded-multiguard/app/routers/multiguard_updates.py \
             embedded-multiguard/app/routers/multiguard_service_panel.py \

@@ -14,3 +14,6 @@ Run Chromium/PostgreSQL and deployment guards on this exact base-branch source b
 2026-10-14 PR #21 isolated OWNER UI hotfix gate: two-line service rows, in-place workshop STANDARD/PRO upgrade, no KeyGate mutation; PostgreSQL/Chromium only, no production release.
 2026-10-14 PR #21 final isolated rerun after fixing owner device paid form guard; review exact-license pin, service edition switch and responsive service table.
 2026-10-14 PR #21 compact service row real PostgreSQL-rendered Chromium contract (max 116px), owner service edition switch and guard; no release.
+
+2026-10-14 PR #22 ONE isolated PostgreSQL+Chromium preflight: workshop PRO Beta 0.3.42 discovery auth, client consent, MeshCentral, OWNER search by service order number; never deploy production.
+2026-10-14 PR #22 retest isolated beta workshop PRO, ORDER NUMBER search, corrected UTC timestamp and immutable runtime hash. No release manifest modification.

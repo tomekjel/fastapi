@@ -3181,6 +3181,8 @@ def owner_change_workshop_edition(
     if edition not in {"STANDARD", "PRO"}:
         raise HTTPException(400, "Wariant serwisowy musi być Standard albo Pro.")
     _ensure_schema()
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
     with engine.begin() as con:
         grant = con.execute(text("""
             SELECT edition,release_channel,monitoring_profile,enabled
@@ -3189,6 +3191,10 @@ def owner_change_workshop_edition(
         if not grant or not grant["enabled"]:
             raise HTTPException(409, "Brak aktywnego trybu serwisowego.")
         if grant["edition"] != edition:
+            if grant["edition"] == "PRO" and edition == "STANDARD":
+                # Revoke any live MeshCentral share before removing PRO
+                # entitlement; one transaction and no pending KeyGate task.
+                workshop.close_before_rights_change(con, installation_id)
             con.execute(text("""
                 UPDATE guard.workshop_grants SET edition=:edition,updated_at=now()
                 WHERE installation_id=:id
@@ -3223,12 +3229,30 @@ def owner_disable_workshop(
         raise HTTPException(403, "Wygasły lub nieprawidłowy formularz.")
     if confirmation != "CONFIRM_DISABLE":
         raise HTTPException(400, "Wyłączenie wymaga osobnego potwierdzenia.")
-    grant = _workshop_grant(installation_id)
-    if not grant or not grant["enabled"]:
-        raise HTTPException(409, "Tryb serwisowy nie jest aktywny.")
-    _set_workshop_grant(
-        installation_id,grant["edition"],grant["release_channel"],False,
-    )
+    _ensure_schema()
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    with engine.begin() as con:
+        grant = con.execute(text("""
+            SELECT edition,release_channel,monitoring_profile,enabled
+            FROM guard.workshop_grants WHERE installation_id=:id FOR UPDATE
+        """), {"id":installation_id}).mappings().first()
+        if not grant or not grant["enabled"]:
+            raise HTTPException(409, "Tryb serwisowy nie jest aktywny.")
+        workshop.close_before_rights_change(con,installation_id)
+        con.execute(text("""
+            UPDATE guard.workshop_grants
+            SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
+            WHERE installation_id=:id
+        """),{"id":installation_id})
+        before = dict(grant)
+        after = {**before,"enabled":False,"monitoring_profile":"OFF"}
+        con.execute(text("""
+            INSERT INTO guard.workshop_grant_audit(
+                installation_id,before_state,after_state)
+            VALUES (:id,CAST(:before AS jsonb),CAST(:after AS jsonb))
+        """),{"id":installation_id,"before":json.dumps(before),
+               "after":json.dumps(after)})
     return RedirectResponse("/multiguard/panel/service-mode#service-modes",status_code=303)
 
 
