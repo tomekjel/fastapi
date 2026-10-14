@@ -2776,30 +2776,83 @@ def event_detail(
         "service_device_id": str(row["service_device_id"]),
     }
 def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: str = ""):
-    """OWNER HTML over the existing consent-based remote session implementation."""
+    """OWNER remote inventory: commercial PRO and signed, indefinite WORKSHOP PRO."""
     import time
     from app.routers import multiguard_remote as remote
+    from app.routers import multiguard_workshop_remote as workshop
     from app.routers.multiguard_panel_settings import _csrf_token
     remote._ensure_schema()
+    workshop._schema()
     token = _csrf_token(int(time.time() // 3600))
+    query = (q or "").strip()
+    pattern = "%" + query.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "%"
+    without_dashes = "%" + query.replace("-", "").replace("%", r"\%").replace("_", r"\_") + "%"
     with engine.connect() as con:
-        machines = con.execute(text("""
+        commercial = [dict(r) for r in con.execute(text("""
             SELECT gi.id,gi.installation_external_id,gi.mesh_node_id,gi.lifecycle,
                    gi.valid_until,COALESCE(d.manufacturer,p.manufacturer) AS manufacturer,
-                   COALESCE(d.model,p.model) AS model,labels.friendly_name
+                   COALESCE(d.model,p.model) AS model,p.hostname,
+                   labels.friendly_name,
+                   (SELECT so.reception_number
+                      FROM guard.license_links ll
+                      JOIN service.service_orders so ON so.id=ll.reception_id
+                     WHERE ll.installation_id=gi.installation_external_id
+                     LIMIT 1) AS reception_number
             FROM guard.installations gi
             LEFT JOIN core.devices d ON d.id=gi.service_device_id
-            LEFT JOIN guard.pending_installations p ON p.installation_id=gi.installation_external_id
-            LEFT JOIN guard.owner_installation_labels labels ON labels.installation_external_id=gi.installation_external_id
+            LEFT JOIN guard.pending_installations p
+                ON p.installation_id=gi.installation_external_id
+            LEFT JOIN guard.owner_installation_labels labels
+                ON labels.installation_external_id=gi.installation_external_id
             WHERE gi.is_current=TRUE AND gi.plan_code='PRO'
-              AND (:empty OR replace(gi.installation_external_id::text,'-','') ILIKE :q)
+              AND (:empty OR replace(gi.installation_external_id::text,'-','') ILIKE :idq
+                   OR COALESCE(labels.friendly_name,'') ILIKE :q
+                   OR COALESCE(d.model,p.model,'') ILIKE :q
+                   OR COALESCE(d.manufacturer,p.manufacturer,'') ILIKE :q
+                   OR COALESCE(p.hostname,'') ILIKE :q
+                   OR EXISTS (
+                     SELECT 1 FROM guard.license_links ll
+                     JOIN service.service_orders so ON so.id=ll.reception_id
+                     WHERE ll.installation_id=gi.installation_external_id
+                       AND so.reception_number ILIKE :q
+                   ))
             ORDER BY gi.created_at DESC,gi.id LIMIT 250
-        """), {"empty":not q,"q":"%"+q.replace('-','').replace('%',r'\%').replace('_',r'\_')+"%"}).mappings().all()
+        """),{"empty":not query,"q":pattern,"idq":without_dashes}).mappings()]
+        service = [dict(r) for r in con.execute(text("""
+            SELECT p.installation_id AS id,p.installation_id AS installation_external_id,
+                   node.mesh_node_id,'ACTIVE'::text AS lifecycle,
+                   NULL::timestamptz AS valid_until,p.manufacturer,p.model,
+                   p.hostname,labels.friendly_name,
+                   (SELECT so.reception_number FROM service.service_orders so
+                      WHERE so.id=g.associated_reception_id) AS reception_number
+            FROM guard.pending_installations p
+            JOIN guard.workshop_grants g ON g.installation_id=p.installation_id
+            LEFT JOIN guard.workshop_mesh_nodes node
+              ON node.installation_id=p.installation_id
+            LEFT JOIN guard.owner_installation_labels labels
+              ON labels.installation_external_id=p.installation_id
+            WHERE g.enabled=TRUE AND g.edition='PRO'
+              AND p.status NOT IN ('ASSIGNED','PROVISIONED','ARCHIVED','UNINSTALLED')
+              AND (:empty OR replace(p.installation_id::text,'-','') ILIKE :idq
+                   OR COALESCE(labels.friendly_name,'') ILIKE :q
+                   OR COALESCE(p.hostname,'') ILIKE :q
+                   OR COALESCE(p.manufacturer,'') ILIKE :q
+                   OR COALESCE(p.model,'') ILIKE :q
+                   OR EXISTS (
+                     SELECT 1 FROM service.service_orders so
+                      WHERE so.id=g.associated_reception_id
+                        AND so.reception_number ILIKE :q
+                   ))
+            ORDER BY p.last_seen_at DESC,p.installation_id LIMIT 250
+        """),{"empty":not query,"q":pattern,"idq":without_dashes}).mappings()]
+        machines = [dict(m,workshop=False) for m in commercial] + [
+            dict(m,workshop=True) for m in service
+        ]
         chosen = None
         if selected:
-            chosen = con.execute(text("""
+            record = con.execute(text("""
                 SELECT gi.id,gi.installation_external_id,gi.mesh_node_id,gi.lifecycle,
-                       gi.valid_until,
+                       gi.valid_until,FALSE AS workshop,
                        EXISTS (
                          SELECT 1 FROM guard.license_plan_changes pc
                          JOIN guard.license_links ll ON ll.id=pc.license_link_id
@@ -2809,62 +2862,129 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
                 FROM guard.installations gi
                 WHERE gi.id=:id AND gi.plan_code='PRO' AND gi.is_current=TRUE
             """),{"id":selected}).mappings().first()
+            if record:
+                chosen = dict(record)
+            else:
+                record = con.execute(text("""
+                    SELECT p.installation_id AS id,
+                           p.installation_id AS installation_external_id,
+                           node.mesh_node_id,'ACTIVE'::text AS lifecycle,
+                           NULL::timestamptz AS valid_until,
+                           TRUE AS workshop,FALSE AS plan_change_pending
+                    FROM guard.pending_installations p
+                    JOIN guard.workshop_grants g ON g.installation_id=p.installation_id
+                    LEFT JOIN guard.workshop_mesh_nodes node
+                      ON node.installation_id=p.installation_id
+                    WHERE p.installation_id=:id AND g.enabled=TRUE AND g.edition='PRO'
+                      AND p.status NOT IN ('ASSIGNED','PROVISIONED','ARCHIVED','UNINSTALLED')
+                """),{"id":selected}).mappings().first()
+                if record:
+                    chosen = dict(record)
             if not chosen:
-                raise HTTPException(404,"Nie znaleziono bieżącego komputera Pro.")
-        sessions = con.execute(text("""
-            SELECT id,status,requested_at,ended_at FROM guard.remote_sessions
-            WHERE installation_id=:id ORDER BY requested_at DESC LIMIT 40
-        """),{"id":selected}).mappings().all() if chosen else []
-        requests = con.execute(text("""
-            SELECT id,subject FROM guard.support_requests
-            WHERE installation_id=:id AND status NOT IN ('RESOLVED','CANCELLED')
-            ORDER BY created_at DESC LIMIT 20
-        """),{"id":selected}).mappings().all() if chosen else []
-    links = ''.join(
-        f'<tr><td><a href="/multiguard/panel/remote?selected={m["id"]}">'
-        f'{_panel_h(_short_installation_id(m["installation_external_id"]))}</a></td>'
-        f'<td title="{_panel_h(m["friendly_name"] or "")}">{_panel_h(" ".join(str(v) for v in (m["manufacturer"],m["model"]) if v) or m["friendly_name"] or "Komputer")}</td></tr>'
-        for m in machines)
+                raise HTTPException(404,"Nie znaleziono komputera z aktywnym Pro.")
+        if chosen and chosen["workshop"]:
+            sessions = con.execute(text("""
+                SELECT id,status,requested_at,ended_at
+                FROM guard.workshop_remote_sessions WHERE installation_id=:id
+                ORDER BY requested_at DESC LIMIT 40
+            """),{"id":selected}).mappings().all()
+            requests = con.execute(text("""
+                SELECT id,subject FROM guard.workshop_support_requests
+                WHERE installation_id=:id ORDER BY created_at DESC LIMIT 10
+            """),{"id":selected}).mappings().all()
+        else:
+            sessions = con.execute(text("""
+                SELECT id,status,requested_at,ended_at FROM guard.remote_sessions
+                WHERE installation_id=:id ORDER BY requested_at DESC LIMIT 40
+            """),{"id":selected}).mappings().all() if chosen else []
+            requests = con.execute(text("""
+                SELECT id,subject FROM guard.support_requests
+                WHERE installation_id=:id AND status NOT IN ('RESOLVED','CANCELLED')
+                ORDER BY created_at DESC LIMIT 20
+            """),{"id":selected}).mappings().all() if chosen else []
     def action(path, label, fields=''):
-        return f'<form method="post" action="{path}"><input type="hidden" name="csrf_token" value="{token}">{fields}<button type="submit">{label}</button></form>'
-    controls = ''
+        return (f'<form method="post" action="{path}">'
+                f'<input type="hidden" name="csrf_token" value="{token}">'
+                f'{fields}<button type="submit">{label}</button></form>')
+    links = ""
+    for m in machines[:500]:
+        label = ("SERWIS · PRO" if m["workshop"] else "KLIENT · PRO")
+        name = (m["friendly_name"] or m.get("hostname")
+                or " ".join(str(x) for x in (m["manufacturer"],m["model"]) if x)
+                or "Komputer")
+        reception = (f' · Zlecenie {_panel_h(m["reception_number"])}'
+                     if m.get("reception_number") else "")
+        links += (f'<tr><td><a href="/multiguard/panel/remote?selected={m["id"]}">'
+                  f'{_panel_h(name)}</a><small>ID: {_panel_h(_short_installation_id(m["installation_external_id"]))}{reception}</small></td>'
+                  f'<td>{label}</td><td>{_panel_h(" ".join(str(x) for x in (m["manufacturer"],m["model"]) if x))}</td></tr>')
+    controls = '<p>Wybierz komputer z listy.</p>'
     if chosen:
-        controls = '<h2>'+_panel_h(_short_installation_id(chosen['installation_external_id']))+'</h2>'
-        if not chosen['mesh_node_id']:
+        controls = '<h2>'+_panel_h(_short_installation_id(chosen["installation_external_id"]))+'</h2>'
+        if chosen["workshop"]:
+            if not chosen["mesh_node_id"]:
+                controls += '<p>Brak przypisanego węzła MeshCentral. Wpisz pełny identyfikator node/… z MeshCentral.</p>'
+            controls += action(
+                f'/multiguard/panel/remote/workshop/{selected}/mesh-bind',
+                "POWIĄŻ MESH",
+                f'<label>Węzeł MeshCentral<input name="mesh_node_id" maxlength="300" '
+                f'value="{_panel_h(chosen["mesh_node_id"] or "")}" '
+                f'placeholder="node/..." required></label>'
+            )
+            if chosen["mesh_node_id"]:
+                controls += action(
+                    f'/multiguard/panel/remote/workshop/{selected}/request',
+                    "POPROŚ O ZGODĘ NA SESJĘ")
+            if requests:
+                controls += '<p>Ostatnie zgłoszenia klienta:</p>'
+                for request in requests[:5]:
+                    controls += f'<p>{_panel_h(request["subject"])}</p>'
+        elif not chosen["mesh_node_id"]:
             controls += '<p>Komputer nie ma jeszcze skonfigurowanego połączenia zdalnego.</p>'
-        elif chosen['lifecycle'] != 'ACTIVE' or (chosen['valid_until'] and chosen['valid_until'] <= datetime.now(timezone.utc)):
+        elif chosen["lifecycle"] != "ACTIVE" or (
+            chosen["valid_until"] and chosen["valid_until"] <= datetime.now(timezone.utc)
+        ):
             controls += '<p>Uruchomienie sesji wymaga aktywnej licencji Pro.</p>'
-        elif chosen['plan_change_pending']:
-            controls += '<p>Trwa zmiana edycji licencji. Dokończ operację w zakładce Licencje, zanim uruchomisz zdalną pomoc.</p>'
+        elif chosen["plan_change_pending"]:
+            controls += '<p>Trwa zmiana edycji licencji. Najpierw dokończ ją w zakładce Licencje.</p>'
         else:
             for request in requests:
                 controls += action('/multiguard/panel/remote/request','POPROŚ O ZGODĘ NA SESJĘ',
-                    f'<input type="hidden" name="support_id" value="{request["id"]}"><span>{_panel_h(request["subject"])}</span>')
+                    f'<input type="hidden" name="support_id" value="{request["id"]}">'
+                    f'<span>{_panel_h(request["subject"])}</span>')
             if not requests:
                 controls += '<p>Brak otwartego zgłoszenia pomocy z tego komputera.</p>'
-    else:
-        controls = '<p>Wybierz komputer z listy.</p>'
     history = []
-    statuses={'REQUESTED':'Oczekuje na zgodę','CONSENTED':'Zgoda udzielona','CONNECT_READY':'Gotowa do połączenia',
-              'ACTIVE':'Aktywna','DENIED':'Odmowa','ENDED':'Zakończona','EXPIRED':'Wygasła','ERROR':'Błąd'}
+    statuses = {'REQUESTED':'Oczekuje na zgodę','CONSENTED':'Zgoda udzielona',
+                'CONNECT_READY':'Gotowa do połączenia','ACTIVE':'Aktywna',
+                'DENIED':'Odmowa','ENDED':'Zakończona','EXPIRED':'Wygasła','ERROR':'Błąd'}
     for session in sessions:
         buttons = ''
-        if (chosen and chosen['lifecycle']=='ACTIVE'
-                and (not chosen['valid_until'] or chosen['valid_until']>datetime.now(timezone.utc))
-                and not chosen['plan_change_pending']
-                and session['status'] in {'CONSENTED','CONNECT_READY','ACTIVE'}):
-            buttons += action(f'/multiguard/panel/remote/{session["id"]}/connect','OTWÓRZ PULPIT')
-        if session['status'] in {'REQUESTED','CONSENTED','CONNECT_READY','ACTIVE'}:
-            buttons += action(f'/multiguard/panel/remote/{session["id"]}/end','ZAKOŃCZ SESJĘ')
-        history.append(f'<tr><td>{_panel_dt(session["requested_at"])}</td><td>{statuses[session["status"]]}</td><td>{buttons}</td></tr>')
+        is_workshop = bool(chosen and chosen["workshop"])
+        endpoint = (f'/multiguard/panel/remote/workshop/session/{session["id"]}'
+                    if is_workshop else f'/multiguard/panel/remote/{session["id"]}')
+        can_connect = (
+            chosen and chosen["lifecycle"]=="ACTIVE"
+            and (not chosen["valid_until"] or chosen["valid_until"]>datetime.now(timezone.utc))
+            and not chosen["plan_change_pending"]
+            and session["status"] in {"CONSENTED","CONNECT_READY","ACTIVE"}
+        )
+        if can_connect:
+            buttons += action(endpoint+'/connect','OTWÓRZ PULPIT')
+        if session["status"] in {"REQUESTED","CONSENTED","CONNECT_READY","ACTIVE"}:
+            buttons += action(endpoint+'/end','ZAKOŃCZ SESJĘ')
+        history.append(f'<tr><td>{_panel_dt(session["requested_at"])}</td>'
+                       f'<td>{statuses.get(session["status"],session["status"])}</td>'
+                       f'<td>{buttons}</td></tr>')
     desktop = ('<iframe id="owner-remote-desktop" class="owner-remote-frame" title="Zdalny pulpit" '
                f'src="{_panel_h(desktop_url)}" referrerpolicy="no-referrer" allowfullscreen></iframe>'
                '<button type="button" onclick="document.getElementById(\'owner-remote-desktop\').requestFullscreen()">PEŁNY EKRAN</button>'
                if desktop_url else '<p>Zdalny pulpit pojawi się po zgodzie klienta i otwarciu sesji.</p>')
-    return HTMLResponse(_panel_html(f'''<section class="card"><h1>Zdalna pomoc</h1></section>
+    return HTMLResponse(_panel_html(f'''<section class="card"><h1>Zdalna pomoc</h1>
+        <p>Licencje klienta Pro oraz bezterminowe uprawnienia serwisowe Pro.</p></section>
         <div class="owner-remote-layout"><section class="card"><h2>Komputery Pro</h2>
-        <form method="get"><label>Wyszukaj po ID<input name="q" maxlength="64" value="{_panel_h(q)}"></label><button>SZUKAJ</button></form>
-        <div class="table-wrap"><table><tbody>{links or '<tr><td>Brak komputerów Pro.</td></tr>'}</tbody></table></div></section>
+        <form method="get"><label>Wyszukaj po nazwie, modelu, ID lub numerze zlecenia
+        <input name="q" maxlength="64" value="{_panel_h(q)}"></label><button>SZUKAJ</button></form>
+        <div class="table-wrap"><table><tbody>{links or '<tr><td>Brak pasujących komputerów Pro.</td></tr>'}</tbody></table></div></section>
         <section class="card">{controls}{desktop}<p>Blokada myszy i klawiatury klienta nie jest jeszcze dostępna w panelu.</p>
         <a href="/multiguard/panel/remote{('?selected='+str(selected)) if selected else ''}">ODŚWIEŻ STAN</a>
         <h2>Historia sesji</h2><div class="table-wrap"><table><tbody>{''.join(history) or '<tr><td>Brak sesji.</td></tr>'}</tbody></table></div>
@@ -2900,6 +3020,59 @@ def _owner_remote_eligible(connection, installation_id):
           )"""),{'id':installation_id}).first()
     if not row:
         raise HTTPException(403,'Sesja wymaga aktywnej licencji Pro.')
+
+
+@router.post('/panel/remote/workshop/{installation_id}/mesh-bind')
+def owner_workshop_mesh_bind(
+    installation_id: uuid.UUID,
+    mesh_node_id: str = Form(...),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from fastapi.responses import RedirectResponse
+    from app.routers import multiguard_workshop_remote as workshop
+    _owner_remote_actor(csrf_token)
+    workshop.bind_for_owner(installation_id,mesh_node_id)
+    return RedirectResponse(f'/multiguard/panel/remote?selected={installation_id}',status_code=303)
+
+
+@router.post('/panel/remote/workshop/{installation_id}/request')
+def owner_workshop_remote_request(
+    installation_id: uuid.UUID,csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from fastapi.responses import RedirectResponse
+    from app.routers import multiguard_workshop_remote as workshop
+    _owner_remote_actor(csrf_token)
+    workshop.request_for_owner(installation_id)
+    return RedirectResponse(f'/multiguard/panel/remote?selected={installation_id}',status_code=303)
+
+
+@router.post('/panel/remote/workshop/session/{session_id}/connect',response_class=HTMLResponse)
+def owner_workshop_remote_connect(
+    session_id: uuid.UUID,csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers import multiguard_workshop_remote as workshop
+    _owner_remote_actor(csrf_token)
+    result=workshop.connect_for_owner(session_id)
+    with engine.connect() as db:
+        iid=db.execute(text("""
+            SELECT installation_id FROM guard.workshop_remote_sessions WHERE id=:id
+        """),{"id":session_id}).scalar_one()
+    return _owner_remote_workspace(iid,'',result["url"])
+
+
+@router.post('/panel/remote/workshop/session/{session_id}/end')
+def owner_workshop_remote_end(
+    session_id: uuid.UUID,csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from fastapi.responses import RedirectResponse
+    from app.routers import multiguard_workshop_remote as workshop
+    _owner_remote_actor(csrf_token)
+    iid=workshop.end_for_owner(session_id)
+    return RedirectResponse(f'/multiguard/panel/remote?selected={iid}',status_code=303)
 
 
 @router.post('/panel/remote/request')

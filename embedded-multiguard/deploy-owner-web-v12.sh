@@ -26,6 +26,7 @@ ROUTER_FILES=(
   multiguard_license.py
   multiguard_runtime.py
   multiguard_remote.py
+  multiguard_workshop_remote.py
   multiguard_meshcentral.py
   multiguard_service_panel.py
   multiguard_panel_theme.py
@@ -90,7 +91,7 @@ old,new=map(Path,sys.argv[1:])
 # specifically reviewed OWNER changes. Pin the WHOLE MODULE bytes so no
 # unrelated handler mutation can sneak past the AST guard.
 REVIEWED_BACKEND_BLOBS={
-    "multiguard_license.py": "22377cd47ef4fcf6b2e917fe49f7d738dade2b22",
+    "multiguard_license.py": "a900dc594c7964f739ac008ac26f766c530bb7f9",
     "multiguard_runtime.py": "c96715ce650c4e82e0c9dce864b71578653efea6",
 }
 REVIEWED_EVOLUTION={
@@ -204,7 +205,7 @@ import sys
 path=Path(sys.argv[1]);source=path.read_text(encoding="utf-8")
 modules=(
  "multiguard_license","multiguard_runtime","multiguard_remote",
- "multiguard_service_panel","multiguard_panel_settings",
+ "multiguard_workshop_remote","multiguard_service_panel","multiguard_panel_settings",
  "multiguard_panel_devices","multiguard_panel_triage","multiguard_panel_diagnostics",
 )
 # Do not rewrite Android routes, dependency injection, auth or existing functions.
@@ -277,6 +278,11 @@ must_have=[
 "/multiguard/agent/remote/poll",
 "/multiguard/agent/remote/decision",
 "/multiguard/agent/remote/end",
+"/multiguard/agent/workshop/remote/poll",
+"/multiguard/agent/workshop/remote/decision",
+"/multiguard/agent/workshop/remote/end",
+"/multiguard/agent/workshop/support-request",
+"/multiguard/panel/remote/workshop/{installation_id}/request",
 "/multiguard/remote-sessions",
 "/multiguard/remote-sessions/{session_id}/connect",
 "/multiguard/remote-sessions/{session_id}/end",
