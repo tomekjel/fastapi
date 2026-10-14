@@ -63,7 +63,7 @@ def _run(args: list[str]) -> str:
 
     output = (completed.stdout or "").strip()
     error = (completed.stderr or "").strip()
-    if completed.returncode not in (0, 1):
+    if completed.returncode != 0:
         raise MeshCentralError(
             (error or output or f"meshctrl exit {completed.returncode}")[:600]
         )
@@ -116,15 +116,22 @@ def create_share(
 
 
 def revoke_share(node_id: str, public_id: str) -> None:
+    """Fail closed unless MeshCtrl explicitly confirms removal with OK.
+
+    The upstream removeDeviceShare response prints precisely its result
+    (OK on success, a reason on failure). Neither an empty CLI response nor
+    a substring such as "NOT OK" is proof that the share was revoked.
+    """
     if not node_id.strip() or not public_id.strip():
-        return
+        raise MeshCentralError("Brak identyfikatora węzła lub linku MeshCentral.")
     output = _run(
         _base_command() + [
             "--id", node_id.strip(),
             "--remove", public_id.strip(),
         ]
     )
-    if output and "OK" not in output.upper():
+    if output.strip().upper() != "OK":
         raise MeshCentralError(
-            f"Nie potwierdzono usunięcia linku MeshCentral: {output[:500]}"
+            "Nie potwierdzono usunięcia linku MeshCentral: "
+            + (output[:500] if output else "brak odpowiedzi")
         )
