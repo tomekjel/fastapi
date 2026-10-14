@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 23,
-  "target_sha": "11967db4d813b31043bf22b376a5c66c9cb63edd",
-  "summary": "OWNER V12: Workshop PRO consent-based remote assistance for Multi-Guard 0.3.42 BETA; find computers by name, model, installation ID or service order number; protected remote sessions; PostgreSQL and Chromium PASS."
+  "sequence": 24,
+  "target_sha": "714f4d5a265e13a41f43c10ea239a747a62125b5",
+  "summary": "OWNER V12: one-click consent-first remote UI; no manual Mesh node field; protected MeshAgent self-enrollment for installed agents. Chromium/PostgreSQL CI PASS. Windows client not released."
 }
