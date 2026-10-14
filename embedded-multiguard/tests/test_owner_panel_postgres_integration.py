@@ -571,6 +571,8 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     mode_page=get(f"/multiguard/panel/pending/{mode_direct}")
     ensure(mode_page.status_code,200,"Unified OWNER computer form")
     assert mode_page.text.count('value="SERVICE"')==2
+    assert mode_page.text.count('value="NONE"')==2
+    assert "POZOSTAW BEZ LICENCJI" in mode_page.text
     assert 'Tryb warsztatowy' not in mode_page.text
     assert 'id="workshop-mode"' not in mode_page.text
     assert 'data-service-approve' in mode_page.text
@@ -584,6 +586,30 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     form={"edition":"PRO","months":"SERVICE","release_channel":"STABLE",
           "service_confirm":"CONFIRM_WORKSHOP","csrf_token":token}
     direct_url=f"/multiguard/panel/pending/{mode_direct}/direct"
+    order_url=f"/multiguard/panel/pending/{mode_order}/assign"
+    no_license={"edition":"STANDARD","months":"NONE","release_channel":"STABLE",
+                "csrf_token":token}
+    ensure(c.post(direct_url,data=no_license).status_code,401,"No licence OWNER Basic")
+    ensure(c.post(direct_url,auth=auth,
+                  data={**no_license,"csrf_token":"bad"}).status_code,403,
+           "No licence requires CSRF")
+    for url in (direct_url,order_url):
+        response=c.post(url,auth=auth,data=no_license,follow_redirects=False)
+        ensure(response.status_code,303,"Explicit no-licence selection")
+        assert response.headers["location"]=="/multiguard/panel/licenses#pending"
+    with engine.connect() as db:
+        for iid in (mode_direct,mode_order):
+            assert db.execute(text("""
+              SELECT status FROM guard.pending_installations
+              WHERE installation_id=:iid
+            """),{"iid":iid}).scalar_one()=="WAITING"
+            assert db.execute(text("""
+              SELECT count(*) FROM guard.license_links WHERE installation_id=:iid
+            """),{"iid":iid}).scalar_one()==0
+            assert db.execute(text("""
+              SELECT count(*) FROM guard.workshop_grants
+              WHERE installation_id=:iid AND enabled=TRUE
+            """),{"iid":iid}).scalar_one()==0
     ensure(c.post(direct_url,data=form).status_code,401,"Service OWNER Basic")
     ensure(c.post(direct_url,auth=auth,
                   data={**form,"csrf_token":"bad"}).status_code,403,"Service CSRF")
@@ -699,7 +725,6 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     order_form={"reception_number":"CI-2026-01234","edition":"STANDARD",
                 "months":"SERVICE","release_channel":"STABLE",
                 "csrf_token":token,"service_confirm":"CONFIRM_WORKSHOP"}
-    order_url=f"/multiguard/panel/pending/{mode_order}/assign"
     ensure(c.post(order_url,auth=auth,
           data={**order_form,"service_confirm":""}).status_code,400,
            "Order mode requires explicit confirmation")

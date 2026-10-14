@@ -1315,7 +1315,10 @@ def _panel_html(body: str) -> str:
     const normalLabel=submit.textContent.trim();
     const refresh=()=>{{
       approval.value='';
-      submit.textContent=period.value==='SERVICE' ? 'WŁĄCZ TRYB SERWISOWY' : normalLabel;
+      submit.textContent=period.value==='SERVICE' ? 'WŁĄCZ TRYB SERWISOWY'
+        : period.value==='NONE' ? 'POZOSTAW BEZ LICENCJI' : normalLabel;
+      const reception=form.querySelector('input[name="reception_number"]');
+      if(reception) reception.required=period.value!=='NONE';
     }};
     period.addEventListener('change',refresh);
     refresh();
@@ -2468,6 +2471,42 @@ def handover_direct_license_api(
     return _public_status(_handover_direct_customer(installation_id))
 
 
+def _leave_pending_without_license(installation_id: uuid.UUID) -> None:
+    """Explicit OWNER choice: no grant, no KeyGate call, no state mutation.
+
+    Never display an existing or uncertain paid/service grant as absent.
+    A real revoke is a distinct audited operation, not an assignment option.
+    """
+    _ensure_schema()
+    with engine.connect() as con:
+        state = con.execute(text("""
+            SELECT p.status,p.assigned_license_id,p.assigned_reception_id,
+                   EXISTS (
+                     SELECT 1 FROM guard.license_links l
+                     WHERE l.installation_id=p.installation_id
+                   ) AS has_license,
+                   EXISTS (
+                     SELECT 1 FROM guard.workshop_grants w
+                     WHERE w.installation_id=p.installation_id AND w.enabled=TRUE
+                   ) AS has_service,
+                   EXISTS (
+                     SELECT 1 FROM guard.direct_keygate_attempts a
+                     WHERE a.installation_id=p.installation_id
+                       AND a.state IN ('STARTED','CREATED','RECONCILIATION_REQUIRED')
+                   ) AS uncertain_keygate
+            FROM guard.pending_installations p
+            WHERE p.installation_id=:id
+        """), {"id": installation_id}).mappings().first()
+    if not state:
+        raise HTTPException(404, "Nie znaleziono oczekującej instalacji.")
+    if (state["status"] != "WAITING" or state["assigned_license_id"]
+            or state["assigned_reception_id"] or state["has_license"]
+            or state["has_service"] or state["uncertain_keygate"]):
+        raise HTTPException(409,
+            "Komputer ma już przypisane uprawnienia lub niezakończoną operację. "
+            "Brak licencji dla istniejącego uprawnienia wymaga osobnego cofnięcia.")
+
+
 @router.post("/multiguard/panel/pending/{installation_id}/direct",
              response_class=HTMLResponse)
 def assign_direct_license_web(
@@ -2483,6 +2522,10 @@ def assign_direct_license_web(
     from fastapi.responses import RedirectResponse
     if not _token_valid(csrf_token):
         raise HTTPException(403, "Wygasły formularz.")
+    if months == "NONE":
+        _leave_pending_without_license(installation_id)
+        return RedirectResponse("/multiguard/panel/licenses#pending", status_code=303,
+                                headers={"Cache-Control":"private, no-store"})
     if months == "SERVICE":
         if service_confirm != "CONFIRM_WORKSHOP":
             raise HTTPException(400, "Tryb serwisowy wymaga dodatkowego potwierdzenia.")
@@ -2495,7 +2538,7 @@ def assign_direct_license_web(
         target="/multiguard/panel/service-mode#service-modes"
     else:
         if months not in {"3","6","12"}:
-            raise HTTPException(400, "Wybierz okres 3, 6, 12 lub tryb serwisowy.")
+            raise HTTPException(400, "Wybierz okres 3, 6, 12, tryb serwisowy albo brak licencji.")
         _assign_direct_customer_license(installation_id,edition,int(months),release_channel)
         target=f"/multiguard/panel/pending/{installation_id}#client-license"
     return RedirectResponse(
@@ -2642,11 +2685,13 @@ def multiguard_panel_pending(
                 <option value="6">6 miesięcy</option>
                 <option value="12" selected>12 miesięcy</option>
                 <option value="SERVICE">🔧 Tryb serwisowy (bezterminowy)</option>
+                <option value="NONE">Brak licencji — pozostaw bez uprawnień</option>
               </select></label>
               <label>Kanał<select name="release_channel">
                 <option value="STABLE">Stabilna</option>
                 <option value="PILOT">Beta</option>
               </select></label>
+              <p class="muted">„Brak licencji” pozostawia komputer w kolejce. Nie cofa już wydanych uprawnień.</p>
               <button type="submit" data-owner-service-submit>PRZYPISZ LICENCJĘ KLIENTA</button>
               {_owner_confirm_service_dialog(f"confirm-direct-{installation_id}")}
             </form>
@@ -2715,6 +2760,7 @@ def multiguard_panel_pending(
                   <option value="6">6 miesięcy</option>
                   <option value="12" selected>12 miesięcy</option>
                   <option value="SERVICE">🔧 Tryb serwisowy (bezterminowy)</option>
+                <option value="NONE">Brak licencji — pozostaw bez uprawnień</option>
                 </select>
               </label>
               <label>Kanał
@@ -2724,6 +2770,7 @@ def multiguard_panel_pending(
                 </select>
               </label>
             </div>
+            <p class="muted">„Brak licencji” nie przypisuje zlecenia i pozostawia komputer w kolejce.</p>
             <button type="submit" data-owner-service-submit>PRZYPISZ I PRZYGOTUJ LICENCJĘ</button>
             {_owner_confirm_service_dialog(f"confirm-order-{installation_id}")}
           </form></section>
@@ -2755,6 +2802,11 @@ def multiguard_panel_pending_assign(
     except ValueError as exc:
         raise HTTPException(400, "Nieprawidłowe ID instalacji.") from exc
 
+    if months == "NONE":
+        _leave_pending_without_license(iid)
+        return RedirectResponse("/multiguard/panel/licenses#pending", status_code=303,
+                                headers={"Cache-Control":"private, no-store"})
+
     reception = _reception_by_number(reception_number)
     if months == "SERVICE":
         if service_confirm != "CONFIRM_WORKSHOP":
@@ -2773,7 +2825,7 @@ def multiguard_panel_pending_assign(
             headers={"Cache-Control":"private, no-store"},
         )
     if months not in {"3","6","12"}:
-        raise HTTPException(400,"Wybierz okres 3, 6, 12 lub tryb serwisowy.")
+        raise HTTPException(400,"Wybierz okres 3, 6, 12, tryb serwisowy albo brak licencji.")
     link = _assign_pending_to_reception(
         iid,reception["id"],edition,int(months),release_channel,
     )
