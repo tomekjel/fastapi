@@ -25,6 +25,8 @@ SAVED_MANIFEST="$BACKUP/existing-file-manifest.txt"
 ROUTER_FILES=(
   multiguard_license.py
   multiguard_runtime.py
+  multiguard_remote.py
+  multiguard_meshcentral.py
   multiguard_service_panel.py
   multiguard_panel_theme.py
   multiguard_panel_settings.py
@@ -171,7 +173,7 @@ from pathlib import Path
 import sys
 path=Path(sys.argv[1]);source=path.read_text(encoding="utf-8")
 modules=(
- "multiguard_license","multiguard_runtime",
+ "multiguard_license","multiguard_runtime","multiguard_remote",
  "multiguard_service_panel","multiguard_panel_settings",
  "multiguard_panel_devices","multiguard_panel_triage","multiguard_panel_diagnostics",
 )
@@ -242,6 +244,12 @@ must_have=[
 "/multiguard/panel/incident/{event_id}",
 "/multiguard/agent/heartbeat",
 "/multiguard/agent/event",
+"/multiguard/agent/remote/poll",
+"/multiguard/agent/remote/decision",
+"/multiguard/agent/remote/end",
+"/multiguard/remote-sessions",
+"/multiguard/remote-sessions/{session_id}/connect",
+"/multiguard/remote-sessions/{session_id}/end",
 "/multiguard/releases/{target}/{arch}/{current_version}",
 ]
 missing=[name for name in must_have if name not in paths]
