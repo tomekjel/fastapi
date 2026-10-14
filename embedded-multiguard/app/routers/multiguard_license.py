@@ -3815,6 +3815,8 @@ def _revoke_owner_license(link_id: uuid.UUID, operation_id: uuid.UUID,
     if not 3 <= len(reason) <= 1000:
         raise HTTPException(400, "Podaj powód cofnięcia (3–1000 znaków).")
     _ensure_schema()
+    from app.routers import multiguard_remote as remote
+    remote._ensure_schema()
     with engine.begin() as con:
         row = con.execute(text(
             "SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE"
@@ -3842,6 +3844,39 @@ def _revoke_owner_license(link_id: uuid.UUID, operation_id: uuid.UUID,
             remote = _keygate_license(link["keygate_license_id"])
         if str(remote.get("status", "")).strip().lower() != "revoked":
             raise HTTPException(502, "KeyGate nie potwierdził cofnięcia licencji.")
+        if link.get("installation_id"):
+            sessions = con.execute(text("""
+                SELECT rs.id,rs.mesh_public_id,gi.mesh_node_id
+                FROM guard.remote_sessions rs
+                JOIN guard.installations gi ON gi.id=rs.installation_id
+                WHERE gi.installation_external_id=:installation_id
+                  AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+                FOR UPDATE OF rs,gi
+            """), {"installation_id": link["installation_id"]}).mappings().all()
+            for session in sessions:
+                if session["mesh_public_id"]:
+                    if not session["mesh_node_id"]:
+                        raise HTTPException(502, "Brak identyfikatora MeshCentral do zakończenia sesji.")
+                    try:
+                        from app.routers import multiguard_meshcentral as meshcentral
+                        meshcentral.revoke_share(session["mesh_node_id"],
+                                                 session["mesh_public_id"])
+                    except meshcentral.MeshCentralError as exc:
+                        raise HTTPException(
+                            502, "Licencja cofnięta w KeyGate, ale nie potwierdzono "
+                            "zamknięcia zdalnego pulpitu. Ponów tę samą operację."
+                        ) from exc
+                con.execute(text("""
+                    UPDATE guard.remote_sessions
+                    SET status='ENDED',ended_at=now(),last_activity_at=now(),
+                        mesh_public_id=NULL,mesh_share_expires_at=NULL
+                    WHERE id=:id
+                """), {"id": session["id"]})
+                con.execute(text("""
+                    INSERT INTO guard.remote_session_events
+                        (remote_session_id,event_type,actor_type,actor_label)
+                    VALUES (:id,'LICENSE_REVOKED','BACKEND','Multi-Servis')
+                """), {"id": session["id"]})
         updated = con.execute(text("""
             UPDATE guard.license_links
             SET lifecycle='REVOKED',updated_at=now()

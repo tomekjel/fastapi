@@ -155,6 +155,17 @@ def _iso(value):
     return value.isoformat() if value else None
 
 
+def _has_active_remote_pro(installation, now: datetime) -> bool:
+    """Only a current, unexpired PRO entitlement may use remote support."""
+    return (
+        str(installation["plan_code"]).upper() == "PRO"
+        and installation["lifecycle"] == "ACTIVE"
+        and (installation["valid_until"] is None
+             or installation["valid_until"] > now)
+        and (installation.get("is_current", True) is True)
+    )
+
+
 def _owner_label(user: CurrentUser) -> tuple[Optional[uuid.UUID], str]:
     raw_id = getattr(user, "id", None)
     try:
@@ -276,7 +287,7 @@ def agent_remote_poll(body: AgentRemoteAuthBody):
                 "service_device_id nie pasuje do powiązania instalacji.",
             )
 
-        if str(installation["plan_code"]).upper() != "PRO":
+        if not _has_active_remote_pro(installation, now):
             return {
                 "requestId": body.requestId,
                 "serverTime": now.isoformat(),
@@ -315,6 +326,8 @@ def agent_remote_decision(body: AgentRemoteDecisionBody):
             body.deviceId,
             body.installationCredential,
         )
+        if not _has_active_remote_pro(installation, now) and body.allowDesktop:
+            raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         row = connection.execute(
             text(
                 """
@@ -532,7 +545,8 @@ def create_remote_session(
                 """
                 SELECT
                     sr.id,sr.installation_id,sr.service_device_id,sr.subject,
-                    gi.plan_code,gi.lifecycle,gi.mesh_node_id
+                    gi.plan_code,gi.lifecycle,gi.valid_until,gi.is_current,
+                    gi.mesh_node_id,sr.status AS support_status
                 FROM guard.support_requests sr
                 JOIN guard.installations gi ON gi.id=sr.installation_id
                 WHERE sr.id=:support_request_id
@@ -543,8 +557,10 @@ def create_remote_session(
 
         if not support:
             raise HTTPException(404, "Nie znaleziono zgłoszenia Multi-Guard.")
-        if str(support["plan_code"]).upper() != "PRO":
-            raise HTTPException(403, "Zdalna pomoc wymaga Multi-Guard Pro.")
+        if not _has_active_remote_pro(support, now):
+            raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
+        if support["support_status"] in {"RESOLVED", "CANCELLED"}:
+            raise HTTPException(409, "Zgłoszenie pomocy jest już zamknięte.")
         if not support["mesh_node_id"]:
             raise HTTPException(
                 409,
@@ -674,12 +690,13 @@ def remote_session_connect(
         row = connection.execute(
             text(
                 """
-                SELECT rs.*,gi.mesh_node_id,sr.subject
+                SELECT rs.*,gi.mesh_node_id,gi.plan_code,gi.lifecycle,
+                       gi.valid_until,gi.is_current,sr.subject
                 FROM guard.remote_sessions rs
                 JOIN guard.installations gi ON gi.id=rs.installation_id
                 JOIN guard.support_requests sr ON sr.id=rs.support_request_id
                 WHERE rs.id=:session_id
-                FOR UPDATE
+                FOR UPDATE OF rs,gi
                 """
             ),
             {"session_id": session_uuid},
@@ -687,6 +704,8 @@ def remote_session_connect(
 
         if not row:
             raise HTTPException(404, "Nie znaleziono sesji.")
+        if not _has_active_remote_pro(row, now):
+            raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         if row["status"] not in {"CONSENTED", "CONNECT_READY", "ACTIVE"}:
             raise HTTPException(
                 409,
@@ -769,6 +788,15 @@ def remote_session_connect(
 
     try:
         with engine.begin() as connection:
+            current = connection.execute(text("""
+                SELECT rs.status,gi.plan_code,gi.lifecycle,gi.valid_until,gi.is_current
+                FROM guard.remote_sessions rs
+                JOIN guard.installations gi ON gi.id=rs.installation_id
+                WHERE rs.id=:sid FOR UPDATE OF rs,gi
+            """), {"sid": session_uuid}).mappings().first()
+            if (not current or not _has_active_remote_pro(current, datetime.now(timezone.utc))
+                    or current["status"] not in {"CONSENTED", "CONNECT_READY", "ACTIVE"}):
+                raise HTTPException(403, "Licencja lub zgoda wygasła podczas otwierania pulpitu.")
             connection.execute(
                 text(
                     """

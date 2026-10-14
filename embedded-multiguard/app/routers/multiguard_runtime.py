@@ -299,6 +299,7 @@ def _load_installation(connection, installation_external_id: uuid.UUID):
                 credential_sha256,
                 plan_code,
                 lifecycle,
+                valid_until,
                 release_channel
             FROM guard.installations
             WHERE installation_external_id=:installation_id
