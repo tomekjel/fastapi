@@ -1,0 +1,27 @@
+name: Multi-Servis OWNER remote policy - offline only
+on:
+  push:
+    branches: [feature/owner-v12-unattended-policy-20261015]
+    paths:
+      - 'embedded-multiguard/app/routers/multiguard_remote_policy.py'
+      - 'embedded-multiguard/tests/test_remote_consent_policy.py'
+      - '.github/workflows/owner-remote-policy-offline.yml'
+permissions:
+  contents: read
+jobs:
+  policy-tests:
+    name: Pro consent vs owned-device unattended policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Syntax and fail-closed permission matrix (no network, no DB)
+        run: |
+          python -m py_compile embedded-multiguard/app/routers/multiguard_remote_policy.py
+          python -m unittest discover -s embedded-multiguard/tests -p 'test_remote_consent_policy.py' -v
+          echo 'PASS: offline security policy only; no server deployment, no MeshCentral modifications'
