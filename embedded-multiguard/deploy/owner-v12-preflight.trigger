@@ -6,3 +6,4 @@ Run Chromium/PostgreSQL and deployment guards on this exact base-branch source b
 2026-10-13 verify original approved shield from Multi-Guard repository, responsive OWNER command centre, full PostgreSQL and Chromium release gate.
 2026-10-13 release 20: Multi-Servis transistor identity, active service grants excluded from waiting queue and counts, customer license headings. Full PostgreSQL+Chromium gate.
 2026-10-14 PR #20 isolated release gate only: PostgreSQL, Chromium, adapter tests, OWNER deployer checks. Do not publish a manifest or deploy production from this branch.
+2026-10-14 PR #20 rerun: exact reviewed backend guard + JSON-mode heartbeat serialization. Synthetic PostgreSQL, Chromium and MeshCtrl only; no production deployment.
