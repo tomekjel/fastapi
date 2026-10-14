@@ -19,3 +19,4 @@ Run Chromium/PostgreSQL and deployment guards on this exact base-branch source b
 2026-10-14 PR #22 retest isolated beta workshop PRO, ORDER NUMBER search, corrected UTC timestamp and immutable runtime hash. No release manifest modification.
 2026-10-14 OWNER sequence 24 candidate: full PostgreSQL/Chromium release gate after tested merge PR #23; remote one-click UI with consent and safe MeshAgent registration. This trigger does NOT deploy.
 2026-10-14 PR #24: isolated MeshCentral mg-bridge token-file auth, no systemd secrets or production deploy. Run full PostgreSQL/Chromium gate and MeshCtrl security tests.
+2026-10-14 seq26 candidate: MeshCentral token-file bootstrap receives path in argv (no secret), not environment; full PostgreSQL/Chromium release gate and security tests only.
