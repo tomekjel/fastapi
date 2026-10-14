@@ -1069,6 +1069,22 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             (id,local_request_id,installation_id,service_device_id,subject,description,created_at)
             VALUES (:id,:local,:install,:device,'CI zdalna pomoc','Synthetic only',now())"""),
             {'id':support_id,'local':uuid.uuid4(),'install':install_b,'device':pc_b})
+        # The PRO installation has one real synthetic link, enabling a full
+        # KeyGate-revoke -> MeshCentral-share-close contract regression.
+        db.execute(text("""
+            INSERT INTO guard.license_links(
+                reception_id,reception_number,service_device_id,
+                keygate_license_id,keygate_plan_id,license_key_hash,
+                plan_code,duration_months,release_channel,lifecycle,
+                installation_id,device_id,credential_sha256,valid_until)
+            SELECT :order_id,'CI-REMOTE-LIC',:device_id,
+                   'ci-keygate-remote-pro','ci-keygate-plan',:key_hash,
+                   'multi_guard_pro',12,'STABLE','ACTIVE',
+                   installation_external_id,'test-dh',:cred,
+                   now()+interval '1 day'
+            FROM guard.installations WHERE id=:internal_id
+        """),{'order_id':order_b,'device_id':pc_b,'key_hash':'7'*64,
+              'cred':'1'*64,'internal_id':install_b})
     ensure(get('/multiguard/panel/remote',False).status_code,401,'Private remote page')
     remote_page=get(f'/multiguard/panel/remote?selected={install_b}')
     ensure(remote_page.status_code,200,'Remote workspace')
@@ -1107,6 +1123,89 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         assert mesh_calls==['create','revoke']
         with engine.connect() as db:
             assert db.execute(text('SELECT status FROM guard.remote_sessions WHERE id=:id'),{'id':sid}).scalar_one()=='ENDED'
+
+        # A renewed consented session MUST be closed when the PRO licence is
+        # revoked. This uses synthetic KeyGate and MeshCentral transports.
+        with engine.begin() as db:
+            db.execute(text("UPDATE guard.installations SET lifecycle='ACTIVE' WHERE id=:id"),{'id':install_b})
+        ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                      data=remote_form,follow_redirects=False).status_code,303,
+               'Second help session')
+        with engine.begin() as db:
+            sid2=db.execute(text("""
+                SELECT id FROM guard.remote_sessions WHERE support_request_id=:id
+                ORDER BY requested_at DESC LIMIT 1
+            """),{'id':support_id}).scalar_one()
+            assert sid2!=sid
+            db.execute(text("""
+                UPDATE guard.remote_sessions SET status='CONSENTED',
+                    granted_capabilities='["desktop"]'::jsonb WHERE id=:id
+            """),{'id':sid2})
+        connect2=f'/multiguard/panel/remote/{sid2}/connect'
+        ensure(c.post(connect2,auth=auth,
+                      data={'csrf_token':remote_csrf}).status_code,200,
+               'Second consented desktop')
+        assert mesh_calls==['create','revoke','create']
+        link_for_remote=license._link_by_reception_id(order_b)
+        assert link_for_remote and link_for_remote['lifecycle']=='ACTIVE'
+        remote_keygate={'state':'active','revocations':0}
+        saved_get,saved_revoke=license._keygate_license,license._keygate_revoke
+        def remote_test_get(license_id):
+            assert license_id=='ci-keygate-remote-pro'
+            return {'status':remote_keygate['state']}
+        def remote_test_revoke(license_id):
+            assert license_id=='ci-keygate-remote-pro'
+            remote_keygate['revocations']+=1
+            remote_keygate['state']='revoked'
+        license._keygate_license=remote_test_get
+        license._keygate_revoke=remote_test_revoke
+        try:
+            revoke_payload={'operation_id':str(uuid.uuid4()),
+                            'expected_end':license._iso(link_for_remote['valid_until']),
+                            'reason':'CI: zakonczenie licencji Pro i sesji zdalnej',
+                            'confirmed':'yes','csrf_token':license._workshop_csrf()}
+            revoke_path=f"/multiguard/panel/license/manage/{link_for_remote['id']}/revoke"
+            ensure(c.post(revoke_path,auth=auth,data=revoke_payload,
+                          follow_redirects=False).status_code,303,
+                   'Revoke Pro and close MeshCentral')
+            assert mesh_calls==['create','revoke','create','revoke']
+            assert remote_keygate['revocations']==1
+            with engine.connect() as db:
+                closed=db.execute(text("""
+                    SELECT status,mesh_public_id,ended_at FROM guard.remote_sessions
+                    WHERE id=:id
+                """),{'id':sid2}).mappings().one()
+                current=db.execute(text("""
+                    SELECT lifecycle FROM guard.installations WHERE id=:id
+                """),{'id':install_b}).scalar_one()
+                audit_count=db.execute(text("""
+                    SELECT count(*) FROM guard.remote_session_events
+                    WHERE remote_session_id=:id AND event_type='LICENSE_REVOKED'
+                """),{'id':sid2}).scalar_one()
+            assert closed['status']=='ENDED' and closed['mesh_public_id'] is None
+            assert closed['ended_at'] is not None and current=='REVOKED'
+            assert audit_count==1
+            ensure(c.post(connect2,auth=auth,
+                          data={'csrf_token':remote_csrf}).status_code,403,
+                   'OWNER cannot reopen remote after licence revoke')
+            from types import SimpleNamespace as _Actor
+            from fastapi import HTTPException as _HttpError
+            try:
+                remote.remote_session_connect(str(sid2),_Actor(display_name='OWNER CI'))
+                raise AssertionError('Direct API must block revoked Pro entitlement')
+            except _HttpError as exc:
+                assert exc.status_code==403
+            ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                          data=remote_form).status_code,403,
+                   'OWNER cannot create a session after licence revoke')
+            ensure(c.post(revoke_path,auth=auth,data=revoke_payload,
+                          follow_redirects=False).status_code,303,
+                   'Revocation retry idempotent')
+            assert remote_keygate['revocations']==1
+            assert mesh_calls==['create','revoke','create','revoke']
+        finally:
+            license._keygate_license=saved_get
+            license._keygate_revoke=saved_revoke
         if os.environ.get('OWNER_TEST_HTML_DIR'):
             (output/'remote.html').write_text(remote_page.text,encoding='utf-8')
     finally:
