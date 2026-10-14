@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 24,
-  "target_sha": "714f4d5a265e13a41f43c10ea239a747a62125b5",
-  "summary": "OWNER V12: one-click consent-first remote UI; no manual Mesh node field; protected MeshAgent self-enrollment for installed agents. Chromium/PostgreSQL CI PASS. Windows client not released."
+  "sequence": 25,
+  "target_sha": "f953b14a22c5bded78358cd8f426a8d4cc1ca6f2",
+  "summary": "OWNER V12 MeshCentral bridge: protected login-token JSON, no credential argv, autodetection on LXC103; all PostgreSQL, browser and token-auth CI PASS. Windows client unchanged."
 }
