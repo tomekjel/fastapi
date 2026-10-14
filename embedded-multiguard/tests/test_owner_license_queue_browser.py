@@ -57,6 +57,23 @@ with sync_playwright() as p:
         page.goto('https://owner.test/multiguard/panel/service-mode')
         assert page.locator('[data-owner-monitor-toggle]').count() >= 1
         assert page.locator('.workspace-sidebar [aria-current="page"]').inner_text().strip().endswith('Tryb serwisowy')
+        rows = page.locator('#service-modes .owner-service-row')
+        assert rows.count() >= 1, "Service grants must render as compact rows"
+        heights = rows.evaluate_all('(els) => els.map(el => el.getBoundingClientRect().height)')
+        assert all(height <= 116 for height in heights), (
+            "Service entry must stay at most two compact lines, not an expanded card",
+            width, heights,
+        )
+        assert page.locator('#service-modes .owner-service-table').evaluate(
+            "(el)=>getComputedStyle(el).tableLayout") == "fixed"
+        variant = rows.first.locator('[data-owner-edition-form] select[name="edition"]')
+        save_variant = rows.first.locator('[data-owner-edition-save]')
+        old_variant = variant.input_value()
+        assert save_variant.is_disabled()
+        variant.select_option('STANDARD' if old_variant == 'PRO' else 'PRO')
+        assert save_variant.is_enabled()
+        variant.select_option(old_variant)
+        assert save_variant.is_disabled(), "Unchanged service plan must not submit"
         page.screenshot(path=str(folder / f'service-mode-{width}.png'),full_page=True)
         page.goto('https://owner.test/multiguard/panel/remote')
         assert page.locator('.owner-remote-layout').count()==1
