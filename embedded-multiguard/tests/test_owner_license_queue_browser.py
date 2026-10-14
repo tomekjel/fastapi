@@ -67,7 +67,7 @@ with sync_playwright() as p:
         assert page.locator('#license-plan-change input[name="target_edition"]').count()==1
         page.locator('#license-shortening summary').click()
         assert page.locator('input[name="new_last_day"]').is_visible()
-        confirmation = page.locator('input[name="confirmed"]')
+        confirmation = page.locator('#license-shortening input[name="confirmed"]')
         assert confirmation.evaluate('(el)=>el.required')
         assert confirmation.evaluate('(el)=>el.closest("label").classList.contains("owner-license-confirm-label")')
         check_box = confirmation.bounding_box()
