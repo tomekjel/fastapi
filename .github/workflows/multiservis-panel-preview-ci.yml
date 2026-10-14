@@ -4,7 +4,7 @@ on:
   # Full browser + PostgreSQL regression tests execute only for deliberate release-gate triggers.
   # Deliberate release trigger only; ordinary source edits use owner ROG.
   push:
-    branches: [multiservis-panel-multiguard-gold-crimson-v1, owner-licenses-queue-20261014, fix/owner-service-compact-edition-20261014, feature/workshop-pro-remote-owner-20261014]
+    branches: [multiservis-panel-multiguard-gold-crimson-v1, owner-licenses-queue-20261014, fix/owner-service-compact-edition-20261014, feature/workshop-pro-remote-owner-20261014, fix/owner-meshcentral-token-auth-20261014]
     paths:
       - 'embedded-multiguard/deploy/owner-v12-preflight.trigger'
   workflow_dispatch:
@@ -38,6 +38,8 @@ jobs:
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_meshcentral_share_revocation.py' -v
       - name: Verify secure MeshAgent node self-registration
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_meshcentral_auto_enrollment.py' -v
+      - name: Verify MeshCentral login-token file security
+        run: python -m unittest discover -s embedded-multiguard/tests -p 'test_meshcentral_token_auth.py' -v
       - name: Verify OWNER V12 service visual contract
         run: python embedded-multiguard/tests/test_owner_v12_service_visual_contract.py
       - name: Validate reversible backend installer syntax
