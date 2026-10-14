@@ -1268,10 +1268,33 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         ensure(c.post(connect,auth=auth,data={'csrf_token':remote_csrf}).status_code,403,'Expired licence cannot reconnect')
         end=f'/multiguard/panel/remote/{sid}/end'
         ensure(c.post(end,auth=auth,data={'csrf_token':'bad'}).status_code,403,'End requires CSRF')
-        ensure(c.post(end,auth=auth,data={'csrf_token':remote_csrf},follow_redirects=False).status_code,303,'Owner ends session')
+        def failed_mesh_revoke(*_):
+            raise remote.meshcentral.MeshCentralError('CI: mesh not available')
+        previous_revoke=remote.meshcentral.revoke_share
+        remote.meshcentral.revoke_share=failed_mesh_revoke
+        try:
+            ensure(c.post(end,auth=auth,data={'csrf_token':remote_csrf},
+                          follow_redirects=False).status_code,502,
+                   'Failed Mesh revoke must not close a still-live remote link')
+            with engine.connect() as db:
+                still_open=db.execute(text("""
+                    SELECT status,mesh_public_id FROM guard.remote_sessions
+                    WHERE id=:id
+                """),{'id':sid}).mappings().one()
+            assert still_open['status']=='CONNECT_READY'
+            assert still_open['mesh_public_id']=='ci-share'
+        finally:
+            remote.meshcentral.revoke_share=previous_revoke
+        ensure(c.post(end,auth=auth,data={'csrf_token':remote_csrf},
+                      follow_redirects=False).status_code,303,'Owner ends session')
         assert mesh_calls==['create','revoke']
         with engine.connect() as db:
-            assert db.execute(text('SELECT status FROM guard.remote_sessions WHERE id=:id'),{'id':sid}).scalar_one()=='ENDED'
+            final_status=db.execute(text("""
+                SELECT status,mesh_public_id,ended_at
+                FROM guard.remote_sessions WHERE id=:id
+            """),{'id':sid}).mappings().one()
+        assert final_status['status']=='ENDED'
+        assert final_status['mesh_public_id'] is None and final_status['ended_at']
 
         # Keep the preceding negative entitlement test intact. A fresh
         # consent-expiration test needs an ACTIVE licence: otherwise OWNER's

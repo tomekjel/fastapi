@@ -492,12 +492,31 @@ def agent_remote_end(body: AgentRemoteEndBody):
         if not row:
             raise HTTPException(404, "Nie znaleziono sesji zdalnej.")
 
-        if row["status"] not in {"ENDED", "DENIED", "EXPIRED"}:
+        # The client sees "ended" only after the remote share is
+        # demonstrably gone. A Mesh failure keeps the session retryable.
+        public_id = row["mesh_public_id"]
+        mesh_node_id = row["mesh_node_id"]
+        if public_id:
+            if not mesh_node_id:
+                raise HTTPException(502,
+                    "Nie można potwierdzić zakończenia zdalnego pulpitu.")
+            try:
+                meshcentral.revoke_share(mesh_node_id, public_id)
+            except meshcentral.MeshCentralError as exc:
+                raise HTTPException(
+                    502, "Nie unieważniono linku MeshCentral. Ponów zakończenie."
+                ) from exc
+
+        if row["status"] not in {"ENDED", "DENIED", "EXPIRED"} or public_id:
             connection.execute(
                 text(
                     """
                     UPDATE guard.remote_sessions
-                    SET status='ENDED',ended_at=:now,last_activity_at=:now
+                    SET status='ENDED',
+                        ended_at=COALESCE(ended_at,:now),
+                        last_activity_at=:now,
+                        mesh_public_id=NULL,
+                        mesh_share_expires_at=NULL
                     WHERE id=:session_id
                     """
                 ),
@@ -511,38 +530,6 @@ def agent_remote_end(body: AgentRemoteEndBody):
                 "Multi-Guard",
                 {"reason": body.reason[:80]},
             )
-
-        public_id = row["mesh_public_id"]
-        mesh_node_id = row["mesh_node_id"]
-
-    if public_id and mesh_node_id:
-        try:
-            meshcentral.revoke_share(mesh_node_id, public_id)
-        except meshcentral.MeshCentralError as exc:
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        """
-                        UPDATE guard.remote_sessions
-                        SET last_error=:error
-                        WHERE id=:session_id
-                        """
-                    ),
-                    {"error": str(exc)[:1000], "session_id": body.sessionId},
-                )
-                _audit(
-                    connection,
-                    body.sessionId,
-                    "MESH_REVOKE_FAILED",
-                    "MESH",
-                    "MeshCentral",
-                    {"error": str(exc)[:500]},
-                )
-            raise HTTPException(
-                502,
-                "Sesja została zakończona, ale nie potwierdzono "
-                f"unieważnienia linku MeshCentral: {exc}",
-            ) from exc
 
     return {
         "requestId": body.requestId,
@@ -902,39 +889,46 @@ def remote_session_end(
         if not row:
             raise HTTPException(404, "Nie znaleziono sesji.")
 
-        connection.execute(
-            text(
-                """
-                UPDATE guard.remote_sessions
-                SET
-                    status='ENDED',
-                    ended_at=COALESCE(ended_at,:now),
-                    last_activity_at=:now
-                WHERE id=:session_id
-                """
-            ),
-            {"now": now, "session_id": session_uuid},
-        )
-        _audit(
-            connection,
-            session_uuid,
-            "TECHNICIAN_ENDED",
-            "TECHNICIAN",
-            user_label,
-        )
-
+        # Never mark a remote session ENDED while its MeshCentral link
+        # might still be usable. On failure leave state retryable.
         public_id = row["mesh_public_id"]
         node_id = row["mesh_node_id"]
+        if public_id:
+            if not node_id:
+                raise HTTPException(502,
+                    "Brak MeshCentral ID. Nie można potwierdzić zakończenia sesji.")
+            try:
+                meshcentral.revoke_share(node_id, public_id)
+            except meshcentral.MeshCentralError as exc:
+                raise HTTPException(
+                    502,
+                    "Nie udało się unieważnić linku MeshCentral. "
+                    "Sesja nadal wymaga zakończenia; ponów operację."
+                ) from exc
 
-    if public_id and node_id:
-        try:
-            meshcentral.revoke_share(node_id, public_id)
-        except meshcentral.MeshCentralError as exc:
-            raise HTTPException(
-                502,
-                "Sesja została zakończona, ale nie potwierdzono "
-                f"unieważnienia linku MeshCentral: {exc}",
-            ) from exc
+        if row["status"] != "ENDED" or public_id:
+            connection.execute(
+                text(
+                    """
+                    UPDATE guard.remote_sessions
+                    SET
+                        status='ENDED',
+                        ended_at=COALESCE(ended_at,:now),
+                        last_activity_at=:now,
+                        mesh_public_id=NULL,
+                        mesh_share_expires_at=NULL
+                    WHERE id=:session_id
+                    """
+                ),
+                {"now": now, "session_id": session_uuid},
+            )
+            _audit(
+                connection,
+                session_uuid,
+                "TECHNICIAN_ENDED",
+                "TECHNICIAN",
+                user_label,
+            )
 
     return {"status": "ok"}
 
