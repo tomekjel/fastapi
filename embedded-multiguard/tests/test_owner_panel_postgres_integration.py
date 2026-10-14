@@ -693,6 +693,11 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert 'SERWIS · PRO' in owned.text
     assert 'Wyszukaj po nazwie, modelu, ID lub numerze zlecenia' in owned.text
     assert 'CI-Mode' in owned.text
+    before_node=get(f'/multiguard/panel/remote?selected={mode_direct}')
+    ensure(before_node.status_code,200,"Workshop inventory without technical node")
+    assert 'Połączenie nie jest jeszcze dostępne' in before_node.text
+    assert 'POWIĄŻ MESH' not in before_node.text
+    assert 'name="mesh_node_id"' not in before_node.text
     assert get('/multiguard/panel/remote?q=CI-Mode',False).status_code==401
     invalid_credential={**workshop_body(),"discoveryCredential":"wrong-but-long-enough-123456789012345"}
     ensure(c.post('/multiguard/agent/workshop/remote/poll',
@@ -709,6 +714,10 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     ensure(c.post(node_url,auth=auth,
                   data={"csrf_token":token,"mesh_node_id":"node/ci-mode-direct"},
                   follow_redirects=False).status_code,303,"Bind synthetic workshop node")
+    one_click=get(f'/multiguard/panel/remote?selected={mode_direct}')
+    ensure(one_click.status_code,200,"OWNER one click ready after agent bind")
+    assert 'POŁĄCZ</button>' in one_click.text
+    assert 'POWIĄŻ MESH' not in one_click.text
     owner_request=f"/multiguard/panel/remote/workshop/{mode_direct}/request"
     ensure(c.post(owner_request,auth=auth,
                   data={"csrf_token":token},follow_redirects=False).status_code,
@@ -718,6 +727,8 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     sid=polled.json()["session"]["sessionId"]
     assert polled.json()["session"]["status"]=="REQUESTED"
     assert polled.json()["session"]["supportRequestId"]==sid
+    waiting=get(f'/multiguard/panel/remote?selected={mode_direct}')
+    assert 'setTimeout(function(){window.location.reload()},2500)' in waiting.text
     denied=c.post('/multiguard/agent/workshop/remote/decision',json={
         **workshop_body(),"sessionId":sid,"allowDesktop":False,"allowFiles":False
     })
@@ -732,6 +743,9 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     })
     ensure(allowed.status_code,200,"Client consents to desktop")
     assert allowed.json()["session"]["status"]=="CONSENTED"
+    ready_page=get(f'/multiguard/panel/remote?selected={mode_direct}')
+    assert 'owner-remote-auto-connect' in ready_page.text
+    assert f'/multiguard/panel/remote/workshop/session/{sid}/connect' in ready_page.text
     share_actions=[]
     original_share=workshop.meshcentral.create_share
     original_revoke=workshop.meshcentral.revoke_share
