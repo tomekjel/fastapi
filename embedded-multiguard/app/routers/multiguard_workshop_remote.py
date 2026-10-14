@@ -260,6 +260,11 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
     """Identity-bound registration; OWNER never has to type MeshCentral node IDs."""
     _schema()
     _authenticate(request)
+    # Fail early for STANDARD/disabled installations; do not permit them to
+    # flood the MeshCentral management CLI with arbitrary lookup requests.
+    with engine.connect() as db:
+        if not _eligible(_grant(db, request.installationId)):
+            raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
     local_id = request.meshNodeId
     if not re.fullmatch(r"[A-Za-z0-9@$]{64}", local_id):
         raise HTTPException(400, "Nieprawidłowy identyfikator MeshAgent.")
