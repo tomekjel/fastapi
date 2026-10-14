@@ -2803,36 +2803,7 @@ def multiguard_panel_pending(
         if grant and grant["enabled"] else ""
     )
     order_form_html = (
-        f"""          {order_form_html}"""
-        if not (grant and grant["enabled"])
-        else '<section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>'
-             '<p>Najpierw wyłącz istniejący tryb serwisowy, jeśli zamierzasz '
-             'sprzedać odrębną licencję klienta. Nie wykonuj tej operacji '
-             'przez zmianę wariantu Standard / Pro.</p></section>'
-    )
-    return _panel_html(
-        f"""
-        <section class="card">
-          <a href="/multiguard/panel/dashboard">← Wróć do pulpitu</a>
-          <h1>Komputer {_panel_escape(public['shortId'])}</h1>
-          <p>Nazwa komputera: <strong>{_panel_escape(display_name)}</strong></p>
-          <p>
-            Wersja Multi-Guard: {_panel_escape(public['appVersion'] or '—')}
-            • {'ONLINE' if public['online'] else 'offline'}
-          </p>
-          <p>
-            Serial: {_panel_escape(public['serialNumber'] or '—')}
-            • host: {_panel_escape(public['hostname'] or '—')}
-          </p>
-          {name_form}
-          {workshop_state_html}
-          <section class="card" id="client-license">
-            <div class="eyebrow">LICENCJA KOMERCYJNA</div>
-            <h2>Licencja klienta bez zlecenia</h2>
-            {direct_info}
-            {direct_buttons}
-          </section>
-          <section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>
+        f"""          <section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>
           <form method="post" action="/multiguard/panel/pending/{installation_id}/assign"
             data-owner-service-form>
             <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
@@ -2869,7 +2840,36 @@ def multiguard_panel_pending(
             <p class="muted">„Brak licencji” nie przypisuje zlecenia i pozostawia komputer w kolejce.</p>
             <button type="submit" data-owner-service-submit>PRZYPISZ I PRZYGOTUJ LICENCJĘ</button>
             {_owner_confirm_service_dialog(f"confirm-order-{installation_id}")}
-          </form></section>
+          </form></section>"""
+        if not (grant and grant["enabled"])
+        else '<section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>'
+             '<p>Najpierw wyłącz istniejący tryb serwisowy, jeśli zamierzasz '
+             'sprzedać odrębną licencję klienta. Nie wykonuj tej operacji '
+             'przez zmianę wariantu Standard / Pro.</p></section>'
+    )
+    return _panel_html(
+        f"""
+        <section class="card">
+          <a href="/multiguard/panel/dashboard">← Wróć do pulpitu</a>
+          <h1>Komputer {_panel_escape(public['shortId'])}</h1>
+          <p>Nazwa komputera: <strong>{_panel_escape(display_name)}</strong></p>
+          <p>
+            Wersja Multi-Guard: {_panel_escape(public['appVersion'] or '—')}
+            • {'ONLINE' if public['online'] else 'offline'}
+          </p>
+          <p>
+            Serial: {_panel_escape(public['serialNumber'] or '—')}
+            • host: {_panel_escape(public['hostname'] or '—')}
+          </p>
+          {name_form}
+          {workshop_state_html}
+          <section class="card" id="client-license">
+            <div class="eyebrow">LICENCJA KOMERCYJNA</div>
+            <h2>Licencja klienta bez zlecenia</h2>
+            {direct_info}
+            {direct_buttons}
+          </section>
+          {order_form_html}
         </section>
         """
     )
