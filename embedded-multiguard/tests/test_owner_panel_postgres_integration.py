@@ -915,6 +915,79 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         (output/'license-management.html').write_text(manage_page.text,encoding='utf-8')
     print('PASS: OWNER shortening, stale forms, duplicate submits, KeyGate outage rollback, history and installation expiry mirror.')
 
+    # One licence key and an unchanged expiry through Standard <-> Pro.
+    before_plan=license._link_by_installation(direct_id)
+    plan_url=manage_url+'/change-plan'
+    plan_info={'current':before_plan['keygate_plan_id'],
+               'end':before_plan['valid_until'],'calls':0}
+    fake_get_before=license._keygate_license
+    fake_find_before=license._find_plan_id
+    fake_change_before=license._keygate_change_plan
+    def plan_remote_get(_):
+        return {'status':'active','plan_id':plan_info['current'],
+                'valid_until':license._iso(plan_info['end'])}
+    def plan_find(edition,months):
+        assert months==12
+        return {'PRO':before_plan['keygate_plan_id'],
+                'STANDARD':'ci-plan-standard-12m'}[edition]
+    def plan_swap(_,new_plan):
+        plan_info['current']=new_plan
+        plan_info['calls']+=1
+    license._keygate_license=plan_remote_get
+    license._find_plan_id=plan_find
+    license._keygate_change_plan=plan_swap
+    try:
+        swap={'operation_id':str(uuid.uuid4()),
+              'expected_end':license._iso(before_plan['valid_until']),
+              'target_edition':'STANDARD',
+              'reason':'CI: przejscie na Standard bez nowej instalacji',
+              'confirmed':'yes','csrf_token':license._workshop_csrf()}
+        assert c.post(plan_url,data=swap).status_code==401
+        assert c.post(plan_url,auth=auth,
+                      data={**swap,'csrf_token':'bad'}).status_code==403
+        assert c.post(plan_url,auth=auth,
+                      data={**swap,'confirmed':''}).status_code==400
+        assert c.post(plan_url,auth=auth,
+                      data={**swap,'expected_end':license._iso(before_plan['valid_until']-timedelta(days=1))}).status_code==409
+        from fastapi import HTTPException as _PlanErr
+        def lost_response(lic_id,new_plan):
+            plan_swap(lic_id,new_plan)
+            raise _PlanErr(502,'CI: KeyGate odpowiedzial za pozno')
+        license._keygate_change_plan=lost_response
+        assert c.post(plan_url,auth=auth,data=swap).status_code==502
+        assert 'id="license-plan-pending"' in get(manage_url).text
+        assert license._link_by_installation(direct_id)['plan_code']=='multi_guard_pro'
+        license._keygate_change_plan=plan_swap
+        ensure(c.post(plan_url,auth=auth,data=swap,
+                      follow_redirects=False).status_code,303,'Resume KeyGate plan')
+        ensure(c.post(plan_url,auth=auth,data=swap,
+                      follow_redirects=False).status_code,303,'Idempotent plan swap')
+        assert plan_info['calls']==1
+        after_plan=license._link_by_installation(direct_id)
+        assert after_plan['plan_code']=='multi_guard'
+        assert after_plan['valid_until']==before_plan['valid_until']
+        assert after_plan['valid_from']==before_plan['valid_from']
+        assert after_plan['license_key_hash']==before_plan['license_key_hash']
+        with engine.connect() as db:
+            assert db.execute(text("""
+                SELECT plan_code FROM guard.installations
+                WHERE installation_external_id=:id
+            """),{'id':direct_id}).scalar_one()=='STANDARD'
+        swap_back={**swap,'operation_id':str(uuid.uuid4()),
+                   'target_edition':'PRO','reason':'CI: ponowne Pro'}
+        ensure(c.post(plan_url,auth=auth,data=swap_back,
+                      follow_redirects=False).status_code,303,'Return Pro')
+        assert license._link_by_installation(direct_id)['plan_code']=='multi_guard_pro'
+        assert license._link_by_installation(direct_id)['valid_until']==before_plan['valid_until']
+        assert plan_info['calls']==2
+    finally:
+        license._keygate_license=fake_get_before
+        license._find_plan_id=fake_find_before
+        license._keygate_change_plan=fake_change_before
+    assert 'Zmiana na Standard' in get(manage_url).text
+    assert 'Zmiana na Pro' in get(manage_url).text
+    print('PASS: existing-key Standard/Pro switch, preserved expiry, PENDING retry and auth.')
+
     # OWNER revocation is real KeyGate revoke+GET verification, not merely
     # deactivation nor a local status toggle. The fixture keeps the API fake.
     revoked_link=license._link_by_installation(direct_id)

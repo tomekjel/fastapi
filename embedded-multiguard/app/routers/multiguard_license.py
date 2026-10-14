@@ -404,6 +404,14 @@ def _keygate_set_valid_until(license_id: str, valid_until: datetime) -> None:
 
 
 
+def _keygate_change_plan(license_id: str, plan_id: str) -> None:
+    _keygate_request(
+        "POST", "/api/v1/admin/licenses/"
+        + urllib.parse.quote(license_id, safe="") + "/change-plan",
+        admin=True, body={"plan_id": plan_id},
+    )
+
+
 def _keygate_revoke(license_id: str) -> None:
     """Server-side licence revocation; freeing a device alone is not revocation."""
     _keygate_request(
@@ -545,6 +553,27 @@ CREATE TABLE IF NOT EXISTS guard.license_shortening (
 );
 CREATE INDEX IF NOT EXISTS idx_guard_license_shortening_license
     ON guard.license_shortening(license_link_id,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS guard.license_plan_changes (
+    id UUID PRIMARY KEY,
+    license_link_id UUID NOT NULL REFERENCES guard.license_links(id) ON DELETE RESTRICT,
+    old_plan_code TEXT NOT NULL,
+    new_plan_code TEXT NOT NULL,
+    old_keygate_plan_id TEXT NOT NULL,
+    new_keygate_plan_id TEXT NOT NULL,
+    expected_valid_until TIMESTAMPTZ NOT NULL,
+    reason TEXT NOT NULL CHECK (length(reason) BETWEEN 3 AND 1000),
+    status TEXT NOT NULL DEFAULT 'PENDING'
+        CHECK (status IN ('PENDING','APPLIED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    applied_at TIMESTAMPTZ,
+    CHECK (old_plan_code <> new_plan_code),
+    CHECK (old_keygate_plan_id <> new_keygate_plan_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_guard_plan_changes_pending
+    ON guard.license_plan_changes(license_link_id) WHERE status='PENDING';
+CREATE INDEX IF NOT EXISTS idx_guard_plan_changes_history
+    ON guard.license_plan_changes(license_link_id,created_at DESC);
 
 CREATE TABLE IF NOT EXISTS guard.license_revocations (
     id UUID PRIMARY KEY,
@@ -2074,6 +2103,9 @@ def provision(req: ProvisionRequest):
 @router.post("/v1/multi-guard/refresh")
 def refresh(req: RefreshRequest):
     link = _authenticate_installation(req)
+    with engine.connect() as plan_con:
+        if _owner_pending_plan_change(plan_con, link["id"]):
+            raise HTTPException(409, "Zmiana edycji w toku. Ponów synchronizację później.")
     keygate = _keygate_license(link["keygate_license_id"])
     keygate_status = str(keygate.get("status", "")).strip().lower()
 
@@ -3493,6 +3525,8 @@ def _extend_active_license(
                 "edition": ("PRO" if link["plan_code"] == "multi_guard_pro" else "STANDARD"),
             }
 
+        if _owner_pending_plan_change(connection, link["id"]):
+            raise HTTPException(409, "Najpierw dokończ zmianę edycji.")
         if link["lifecycle"] != "ACTIVE":
             raise HTTPException(409, "Przedłużyć można wyłącznie aktywną licencję klienta.")
         end = link.get("valid_until")
@@ -3780,6 +3814,8 @@ def _shorten_owner_license(link_id: uuid.UUID, operation_id: uuid.UUID,
                     or previous["reason"] != reason):
                 raise HTTPException(409, "Identyfikator operacji został już wykorzystany.")
             return
+        if _owner_pending_plan_change(con, link_id):
+            raise HTTPException(409, "Najpierw dokończ zmianę edycji.")
         if link["lifecycle"] != "ACTIVE" or not link.get("valid_until"):
             raise HTTPException(409, "Skrócić można wyłącznie aktywną licencję klienta.")
         if link["valid_until"] != expected_end:
@@ -3834,6 +3870,8 @@ def _revoke_owner_license(link_id: uuid.UUID, operation_id: uuid.UUID,
                     or previous["reason"] != reason):
                 raise HTTPException(409, "Identyfikator operacji został już wykorzystany.")
             return
+        if _owner_pending_plan_change(con, link_id):
+            raise HTTPException(409, "Najpierw dokończ zmianę edycji.")
         if link["lifecycle"] != "ACTIVE":
             raise HTTPException(409, "Cofnąć można wyłącznie aktywną licencję klienta.")
         if link.get("valid_until") != expected_end:
@@ -3891,6 +3929,166 @@ def _revoke_owner_license(link_id: uuid.UUID, operation_id: uuid.UUID,
                "end": expected_end, "reason": reason})
 
 
+
+def _owner_pending_plan_change(con, link_id: uuid.UUID) -> bool:
+    return bool(con.execute(text("""
+        SELECT 1 FROM guard.license_plan_changes
+        WHERE license_link_id=:id AND status='PENDING'
+    """), {"id": link_id}).first())
+
+
+def _keygate_same_expiry(remote: dict[str, Any], end: datetime) -> bool:
+    raw = remote.get("valid_until")
+    if not isinstance(raw, str) or not raw:
+        return False
+    try:
+        remote_end = _license_operation_date(raw.replace("Z", "+00:00"))
+    except HTTPException:
+        return False
+    return abs((remote_end - end).total_seconds()) <= 1
+
+
+def _owner_change_plan(link_id: uuid.UUID, operation_id: uuid.UUID,
+                       expected_end: datetime, edition: str, reason: str) -> None:
+    """Safely change the existing KeyGate plan; never issue another key.
+
+    Persist PENDING before KeyGate mutation. A lost HTTP response can then be
+    reconciled by the same operation ID. During PENDING, agent refresh and all
+    remote-support entrypoints fail closed.
+    """
+    edition = edition.strip().upper()
+    reason = reason.strip()
+    if edition not in {"STANDARD", "PRO"}:
+        raise HTTPException(400, "Wybierz Standard albo Pro.")
+    if not 3 <= len(reason) <= 1000:
+        raise HTTPException(400, "Podaj powód zmiany (3–1000 znaków).")
+    wanted = "multi_guard_pro" if edition == "PRO" else "multi_guard"
+    _ensure_schema()
+    from app.routers import multiguard_remote
+    multiguard_remote._ensure_schema()
+    with engine.begin() as con:
+        row = con.execute(text("""
+            SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE
+        """), {"id":link_id}).mappings().first()
+        if not row:
+            raise HTTPException(404, "Nie znaleziono licencji.")
+        previous = con.execute(text("""
+            SELECT * FROM guard.license_plan_changes WHERE id=:op
+        """), {"op":operation_id}).mappings().first()
+        if previous:
+            if (previous["license_link_id"]!=link_id
+                    or previous["new_plan_code"]!=wanted
+                    or previous["expected_valid_until"]!=expected_end
+                    or previous["reason"]!=reason):
+                raise HTTPException(409,"Identyfikator operacji został już wykorzystany.")
+            if previous["status"]=="APPLIED":
+                return
+        else:
+            if row["lifecycle"]!="ACTIVE" or not row["valid_until"]:
+                raise HTTPException(409,"Zmiana wymaga aktywnej licencji.")
+            if row["valid_until"]!=expected_end or expected_end<=_utcnow():
+                raise HTTPException(409,"Nieaktualny termin licencji.")
+            if row["plan_code"]==wanted:
+                raise HTTPException(409,"Ta edycja jest już przypisana.")
+            if _owner_pending_plan_change(con, link_id):
+                raise HTTPException(409,
+                    "Poprzednia zmiana wymaga dokończenia w karcie licencji.")
+            remote=_keygate_license(row["keygate_license_id"])
+            if (str(remote.get("status","")).lower()!="active"
+                    or str(remote.get("plan_id",""))!=row["keygate_plan_id"]
+                    or not _keygate_same_expiry(remote, expected_end)):
+                raise HTTPException(409,"Stan KeyGate wymaga uzgodnienia przed zmianą.")
+            target_plan=_find_plan_id(edition,int(row["duration_months"]))
+            if target_plan==row["keygate_plan_id"]:
+                raise HTTPException(409,"KeyGate nie rozróżnia docelowego planu.")
+            if row["plan_code"]=="multi_guard_pro" and row["installation_id"]:
+                # Close live MeshCentral shares before downgrade; a failure
+                # must NOT initiate the KeyGate switch.
+                sessions=con.execute(text("""
+                    SELECT rs.id,rs.mesh_public_id,gi.mesh_node_id
+                    FROM guard.remote_sessions rs
+                    JOIN guard.installations gi ON gi.id=rs.installation_id
+                    WHERE gi.installation_external_id=:iid
+                      AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+                    FOR UPDATE OF rs,gi
+                """),{"iid":row["installation_id"]}).mappings().all()
+                for session in sessions:
+                    if session["mesh_public_id"]:
+                        if not session["mesh_node_id"]:
+                            raise HTTPException(502,"Brak identyfikatora sesji MeshCentral.")
+                        from app.routers import multiguard_meshcentral as meshcentral
+                        try:
+                            meshcentral.revoke_share(session["mesh_node_id"],
+                                                     session["mesh_public_id"])
+                        except meshcentral.MeshCentralError as exc:
+                            raise HTTPException(502,
+                                "Nie potwierdzono zamknięcia pulpitu. Nie zmieniono planu."
+                            ) from exc
+                    con.execute(text("""
+                        UPDATE guard.remote_sessions SET status='ENDED',
+                            ended_at=now(),mesh_public_id=NULL,
+                            mesh_share_expires_at=NULL
+                        WHERE id=:id
+                    """),{"id":session["id"]})
+                    con.execute(text("""
+                        INSERT INTO guard.remote_session_events
+                            (remote_session_id,event_type,actor_type,actor_label)
+                        VALUES (:id,'PLAN_DOWNGRADED','BACKEND','Multi-Servis')
+                    """),{"id":session["id"]})
+            con.execute(text("""
+                INSERT INTO guard.license_plan_changes(
+                    id,license_link_id,old_plan_code,new_plan_code,
+                    old_keygate_plan_id,new_keygate_plan_id,
+                    expected_valid_until,reason,status)
+                VALUES (:op,:id,:old,:new,:oldkg,:newkg,:until,:reason,'PENDING')
+            """),{
+                "op":operation_id,"id":link_id,
+                "old":row["plan_code"],"new":wanted,
+                "oldkg":row["keygate_plan_id"],"newkg":target_plan,
+                "until":expected_end,"reason":reason,
+            })
+
+    # After the first commit PENDING survives KeyGate timeouts and SQL errors.
+    with engine.begin() as con:
+        row=con.execute(text("""
+            SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE
+        """),{"id":link_id}).mappings().one()
+        op=con.execute(text("""
+            SELECT * FROM guard.license_plan_changes WHERE id=:id FOR UPDATE
+        """),{"id":operation_id}).mappings().one()
+        if op["status"]=="APPLIED":
+            return
+        if (row["lifecycle"]!="ACTIVE" or row["plan_code"]!=op["old_plan_code"]
+                or row["keygate_plan_id"]!=op["old_keygate_plan_id"]
+                or row["valid_until"]!=expected_end):
+            raise HTTPException(409,"Zmiana nie może nadpisać nowszych uprawnień.")
+        remote=_keygate_license(row["keygate_license_id"])
+        if (str(remote.get("status","")).lower()!="active"
+                or not _keygate_same_expiry(remote,expected_end)):
+            raise HTTPException(409,"KeyGate nie potwierdził zachowania okresu.")
+        remote_plan=str(remote.get("plan_id",""))
+        if remote_plan==op["old_keygate_plan_id"]:
+            _keygate_change_plan(row["keygate_license_id"],op["new_keygate_plan_id"])
+            remote=_keygate_license(row["keygate_license_id"])
+        elif remote_plan!=op["new_keygate_plan_id"]:
+            raise HTTPException(409,"Nieoczekiwany plan w KeyGate.")
+        if (str(remote.get("status","")).lower()!="active"
+                or str(remote.get("plan_id",""))!=op["new_keygate_plan_id"]
+                or not _keygate_same_expiry(remote,expected_end)):
+            raise HTTPException(502,"Nie potwierdzono nowej edycji w KeyGate; wznów operację.")
+        updated=con.execute(text("""
+            UPDATE guard.license_links
+            SET plan_code=:plan,keygate_plan_id=:kg,updated_at=now()
+            WHERE id=:id RETURNING *
+        """),{"id":link_id,"plan":wanted,
+               "kg":op["new_keygate_plan_id"]}).mappings().one()
+        _update_installation_mirror(con,_normalize_link(dict(updated)))
+        con.execute(text("""
+            UPDATE guard.license_plan_changes
+            SET status='APPLIED',applied_at=now() WHERE id=:id
+        """),{"id":operation_id})
+
+
 @router.get("/multiguard/panel/license/manage/{link_id}", response_class=HTMLResponse)
 def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
     from zoneinfo import ZoneInfo
@@ -3900,6 +4098,10 @@ def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
                           {"id": link_id}).mappings().first()
         if not row:
             raise HTTPException(404, "Nie znaleziono licencji.")
+        pending_plan = con.execute(text("""
+            SELECT * FROM guard.license_plan_changes
+            WHERE license_link_id=:id AND status='PENDING'
+        """), {"id":link_id}).mappings().first()
         history = con.execute(text("""
             SELECT created_at,previous_valid_until,new_valid_until,reason,'Skrócenie' AS action
             FROM guard.license_shortening WHERE license_link_id=:id
@@ -3910,6 +4112,12 @@ def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
             UNION ALL
             SELECT created_at,previous_valid_until,NULL::timestamptz,
                    reason,'Cofnięcie' FROM guard.license_revocations WHERE license_link_id=:id
+            UNION ALL
+            SELECT created_at,expected_valid_until,expected_valid_until,reason,
+                   CASE WHEN new_plan_code='multi_guard_pro'
+                     THEN 'Zmiana na Pro' ELSE 'Zmiana na Standard' END
+            FROM guard.license_plan_changes
+            WHERE license_link_id=:id AND status='APPLIED'
             ORDER BY created_at DESC LIMIT 100
         """), {"id": link_id}).mappings().all()
     link = _normalize_link(dict(row))
@@ -3923,7 +4131,39 @@ def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
     ) or '<tr><td colspan="5">Brak zmian okresu licencji.</td></tr>'
     end = link.get("valid_until")
     form = ''
-    if link["lifecycle"] == "ACTIVE" and end and end > _utcnow():
+    if pending_plan:
+        target="PRO" if pending_plan["new_plan_code"]=="multi_guard_pro" else "STANDARD"
+        form+=f'''<section class="card" id="license-plan-pending">
+          <h2>Zmiana edycji wymaga dokończenia</h2>
+          <p>Docelowo: {_panel_escape(target)}. Do czasu potwierdzenia
+             zgodności KeyGate i Multi-Servis zdalna pomoc jest zablokowana.</p>
+          <form method="post" action="/multiguard/panel/license/manage/{link_id}/change-plan">
+            <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+            <input type="hidden" name="operation_id" value="{pending_plan['id']}">
+            <input type="hidden" name="expected_end" value="{_panel_escape(_iso(pending_plan['expected_valid_until']))}">
+            <input type="hidden" name="target_edition" value="{target}">
+            <input type="hidden" name="reason" value="{_panel_escape(pending_plan['reason'])}">
+            <label class="owner-license-confirm-label"><input type="checkbox"
+              name="confirmed" value="yes" required>Potwierdzam dokończenie zmiany</label>
+            <button type="submit">DOKOŃCZ ZMIANĘ EDYCJI</button>
+          </form></section>'''
+    if link["lifecycle"] == "ACTIVE" and end and end > _utcnow() and not pending_plan:
+        target="STANDARD" if link["plan_code"]=="multi_guard_pro" else "PRO"
+        form+=f'''<details id="license-plan-change">
+          <summary>Zmień Standard / Pro</summary>
+          <p>Zmiana zachowa klucz i datę końca okresu. Przejście na Standard
+             zakończy zdalną pomoc. Bez automatycznej dopłaty lub zwrotu.</p>
+          <form method="post" action="/multiguard/panel/license/manage/{link_id}/change-plan">
+            <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+            <input type="hidden" name="operation_id" value="{uuid.uuid4()}">
+            <input type="hidden" name="expected_end" value="{_panel_escape(_iso(end))}">
+            <input type="hidden" name="target_edition" value="{target}">
+            <p>Nowa edycja: <strong>{target}</strong></p>
+            <label>Powód zmiany<input name="reason" minlength="3" maxlength="1000" required></label>
+            <label class="owner-license-confirm-label"><input type="checkbox"
+              name="confirmed" value="yes" required>Potwierdzam zmianę edycji</label>
+            <button type="submit">ZAPISZ ZMIANĘ EDYCJI</button>
+          </form></details>'''
         extension = (f'/multiguard/panel/license/installation/{link["installation_id"]}/extend'
                      if link["sale_kind"] == "DIRECT" and link.get("installation_id")
                      else f'/multiguard/panel/license/{link["reception_id"]}/extend'
@@ -4007,3 +4247,26 @@ def panel_revoke_license(link_id: uuid.UUID, operation_id: uuid.UUID = Form(...)
     return RedirectResponse(f"/multiguard/panel/license/manage/{link_id}",
                             status_code=303,
                             headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/multiguard/panel/license/manage/{link_id}/change-plan")
+def panel_change_license_plan(link_id: uuid.UUID,
+                              operation_id: uuid.UUID = Form(...),
+                              expected_end: str = Form(...),
+                              target_edition: str = Form(...),
+                              reason: str = Form(...),
+                              confirmed: str = Form(""),
+                              csrf_token: str = Form(...),
+                              _: None = Depends(_panel_auth)):
+    from fastapi.responses import RedirectResponse
+    from app.routers.multiguard_panel_settings import _token_valid
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowy formularz.")
+    if confirmed != "yes":
+        raise HTTPException(400, "Potwierdź zmianę edycji.")
+    _owner_change_plan(link_id,operation_id,_license_operation_date(expected_end),
+                       target_edition,reason)
+    return RedirectResponse(
+        f"/multiguard/panel/license/manage/{link_id}",
+        status_code=303,headers={"Cache-Control":"private, no-store"},
+    )

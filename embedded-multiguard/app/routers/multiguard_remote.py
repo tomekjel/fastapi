@@ -155,6 +155,17 @@ def _iso(value):
     return value.isoformat() if value else None
 
 
+def _plan_change_pending(connection, installation_internal_id) -> bool:
+    return bool(connection.execute(text("""
+        SELECT 1 FROM guard.license_plan_changes pc
+        JOIN guard.license_links ll ON ll.id=pc.license_link_id
+        JOIN guard.installations gi
+          ON gi.installation_external_id=ll.installation_id
+        WHERE gi.id=:id AND pc.status='PENDING'
+        LIMIT 1
+    """), {"id":installation_internal_id}).first())
+
+
 def _has_active_remote_pro(installation, now: datetime) -> bool:
     """Only a current, unexpired PRO entitlement may use remote support."""
     return (
@@ -287,7 +298,8 @@ def agent_remote_poll(body: AgentRemoteAuthBody):
                 "service_device_id nie pasuje do powiązania instalacji.",
             )
 
-        if not _has_active_remote_pro(installation, now):
+        if (not _has_active_remote_pro(installation, now)
+                or _plan_change_pending(connection, installation["id"])):
             return {
                 "requestId": body.requestId,
                 "serverTime": now.isoformat(),
@@ -326,7 +338,8 @@ def agent_remote_decision(body: AgentRemoteDecisionBody):
             body.deviceId,
             body.installationCredential,
         )
-        if not _has_active_remote_pro(installation, now) and body.allowDesktop:
+        if (not _has_active_remote_pro(installation, now)
+                or _plan_change_pending(connection, installation["id"])) and body.allowDesktop:
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         row = connection.execute(
             text(
@@ -557,7 +570,8 @@ def create_remote_session(
 
         if not support:
             raise HTTPException(404, "Nie znaleziono zgłoszenia Multi-Guard.")
-        if not _has_active_remote_pro(support, now):
+        if (not _has_active_remote_pro(support, now)
+                or _plan_change_pending(connection,support["installation_id"])):
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         if support["support_status"] in {"RESOLVED", "CANCELLED"}:
             raise HTTPException(409, "Zgłoszenie pomocy jest już zamknięte.")
@@ -704,7 +718,8 @@ def remote_session_connect(
 
         if not row:
             raise HTTPException(404, "Nie znaleziono sesji.")
-        if not _has_active_remote_pro(row, now):
+        if (not _has_active_remote_pro(row, now)
+                or _plan_change_pending(connection,row["installation_id"])):
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         if row["status"] not in {"CONSENTED", "CONNECT_READY", "ACTIVE"}:
             raise HTTPException(
@@ -795,6 +810,7 @@ def remote_session_connect(
                 WHERE rs.id=:sid FOR UPDATE OF rs,gi
             """), {"sid": session_uuid}).mappings().first()
             if (not current or not _has_active_remote_pro(current, datetime.now(timezone.utc))
+                    or _plan_change_pending(connection,row["installation_id"])
                     or current["status"] not in {"CONSENTED", "CONNECT_READY", "ACTIVE"}):
                 raise HTTPException(403, "Licencja lub zgoda wygasła podczas otwierania pulpitu.")
             connection.execute(

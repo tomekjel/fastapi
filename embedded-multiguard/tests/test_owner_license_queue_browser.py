@@ -63,6 +63,8 @@ with sync_playwright() as p:
         assert page.locator('.workspace-sidebar [aria-current="page"]').inner_text().strip().endswith('Zdalna pomoc')
         page.screenshot(path=str(folder / f'remote-{width}.png'),full_page=True)
         page.goto('https://owner.test/multiguard/panel/license-management')
+        assert page.locator('#license-plan-change summary').count()==1
+        assert page.locator('#license-plan-change input[name="target_edition"]').count()==1
         page.locator('#license-shortening summary').click()
         assert page.locator('input[name="new_last_day"]').is_visible()
         confirmation = page.locator('input[name="confirmed"]')
@@ -70,7 +72,7 @@ with sync_playwright() as p:
         assert confirmation.evaluate('(el)=>el.closest("label").classList.contains("owner-license-confirm-label")')
         check_box = confirmation.bounding_box()
         assert check_box and 12 <= check_box["width"] <= 24 and 12 <= check_box["height"] <= 24, check_box
-        page.locator('label.owner-license-confirm-label').click()
+        page.locator('#license-shortening label.owner-license-confirm-label').click()
         assert confirmation.is_checked(), "Clicking confirmation label must toggle checkbox"
         heading = page.locator('h1.owner-license-number')
         assert heading.count() == 1
