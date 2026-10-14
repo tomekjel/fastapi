@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 from typing import Iterable
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,26 @@ def create_share(
         raise MeshCentralError(
             f"MeshCentral nie zwrócił linku sesji: {output[:500]}"
         )
-    return MeshShare(public_match.group(1), url_match.group(1))
+    # The direct OWNER API also returns this URL. Validate it here so no
+    # caller can accidentally forward an untrusted MeshCtrl URL to a user.
+    share_url = url_match.group(1)
+    try:
+        returned = urlsplit(share_url)
+        configured = urlsplit(_required("MESH_CENTRAL_URL"))
+        if (returned.scheme != "https"
+                or not returned.hostname
+                or not configured.hostname
+                or returned.hostname.lower() != configured.hostname.lower()
+                or returned.username is not None
+                or returned.password is not None
+                or returned.fragment
+                or returned.port == 0):
+            raise ValueError("Untrusted MeshCentral share URL")
+        # Reading .port also rejects malformed ports such as :99999.
+        _ = returned.port
+    except ValueError as exc:
+        raise MeshCentralError("MeshCentral zwrócił niebezpieczny adres sesji.") from exc
+    return MeshShare(public_match.group(1), share_url)
 
 
 def _share_absent_from_listing(node_id: str, public_id: str) -> bool:

@@ -1,6 +1,7 @@
 """Fast, offline MeshCtrl adapter safety checks (no server or database)."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import unittest
@@ -12,6 +13,32 @@ from app.routers import multiguard_meshcentral as meshcentral
 
 
 class MeshCentralRevocationTests(unittest.TestCase):
+    def test_create_share_rejects_untrusted_urls(self):
+        bad_urls = (
+            "javascript:alert(1)",
+            "http://mesh.example.test/sharing?token=1",
+            "https://evil.example/sharing?token=1",
+            "https://mesh.example.test@evil.example/sharing?token=1",
+            "https://user:pass@mesh.example.test/sharing?token=1",
+            "https://mesh.example.test:99999/sharing?token=1",
+            "https://mesh.example.test/sharing?token=1#fragment",
+        )
+        with patch.dict(os.environ, {"MESH_CENTRAL_URL":
+                                    "wss://mesh.example.test/control.ashx"}):
+            for url in bad_urls:
+                with self.subTest(url=url):
+                    with patch.object(meshcentral, "_base_command", return_value=["meshctrl"]), \
+                         patch.object(meshcentral, "_run", return_value=f"ID: ci-id\nURL: {url}"):
+                        with self.assertRaises(meshcentral.MeshCentralError):
+                            meshcentral.create_share("node/domain/id", "owner", ["desktop"])
+
+            with patch.object(meshcentral, "_base_command", return_value=["meshctrl"]), \
+                 patch.object(meshcentral, "_run", return_value=(
+                     "ID: ci-id\nURL: https://mesh.example.test/sharing?ci=1")):
+                share = meshcentral.create_share("node/domain/id", "owner", ["desktop"])
+                self.assertEqual(share.public_id, "ci-id")
+                self.assertEqual(share.url, "https://mesh.example.test/sharing?ci=1")
+
     def test_explicit_success_only(self):
         for output in ("OK", "ok", " \nOK\n "):
             with self.subTest(output=output):
