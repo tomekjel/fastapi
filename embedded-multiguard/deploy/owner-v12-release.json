@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 21,
-  "target_sha": "00427956fada689964e759ae288484319ca60e59",
-  "summary": "OWNER V12: complete license controls, remote support and MeshCentral safeguards; verified PostgreSQL + Chromium; protected backend-only rollout with backup, rollback and API checks."
+  "sequence": 22,
+  "target_sha": "a7f5b483702456fcacd20d9ccdc73ff75401a020",
+  "summary": "OWNER V12: compact service-mode rows (two lines), in-place workshop Standard/Pro switch without KeyGate, safe licence forms; PostgreSQL + Chromium PASS; backup and rollback."
 }
