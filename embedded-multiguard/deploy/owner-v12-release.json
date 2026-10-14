@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 25,
-  "target_sha": "f953b14a22c5bded78358cd8f426a8d4cc1ca6f2",
-  "summary": "OWNER V12 MeshCentral bridge: protected login-token JSON, no credential argv, autodetection on LXC103; all PostgreSQL, browser and token-auth CI PASS. Windows client unchanged."
+  "sequence": 26,
+  "target_sha": "5361c01e0e6de3074d558ad21b67f0b5d7da35dd",
+  "summary": "OWNER V12 MeshCentral bridge token-file path fix: automatic systemd-free auth using protected JSON (root:multiservis 0640); CI PostgreSQL/Chromium and security tests PASS; no Windows changes."
 }
