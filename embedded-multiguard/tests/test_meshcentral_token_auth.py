@@ -47,6 +47,7 @@ class ProtectedLoginTokenTests(unittest.TestCase):
                 self.assertNotIn("~t:ci-token", repr(command))
                 self.assertNotIn("--loginpass", command)
                 self.assertNotIn("--loginkeyfile", command)
+                self.assertEqual(command[4], str(token))
 
     def test_existing_owner_token_is_auto_detected_without_systemd_secrets(self):
         with patch.dict(os.environ, {
@@ -94,7 +95,11 @@ class ProtectedLoginTokenTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 command = mesh._base_command()
                 command[command.index("DeviceSharing")] = "ListDevices"
-                process = subprocess.run(command, env=env, text=True,
+                # The Node bootstrap must get the file path from argv,
+                # not from systemd or MESH_CENTRAL_TOKEN_FILE.
+                child_env = dict(env)
+                child_env.pop("MESH_CENTRAL_TOKEN_FILE", None)
+                process = subprocess.run(command, env=child_env, text=True,
                                          capture_output=True, timeout=10)
             self.assertEqual(process.returncode, 0, process.stderr)
             self.assertEqual(process.stdout.strip(), "[]")
