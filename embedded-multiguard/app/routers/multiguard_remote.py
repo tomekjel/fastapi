@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -375,7 +376,15 @@ def agent_remote_decision(body: AgentRemoteDecisionBody):
                 ),
                 {"now": now, "session_id": body.sessionId},
             )
-            raise HTTPException(410, "Żądanie zdalnej pomocy wygasło.")
+            # Return an HTTP response while leaving engine.begin() normally.
+            # Raising here would roll back the EXPIRED write.
+            _audit(
+                connection, body.sessionId, "CLIENT_REQUEST_EXPIRED",
+                "BACKEND", "Multi-Servis",
+            )
+            return JSONResponse(
+                status_code=410, content={"detail": "Żądanie zdalnej pomocy wygasło."},
+            )
 
         requested = set(row["requested_capabilities"] or [])
         if not body.allowDesktop:
@@ -726,7 +735,8 @@ def remote_session_connect(
                 409,
                 "Klient nie wyraził zgody na tę sesję.",
             )
-        if row["status"] == "CONSENTED" and row["expires_at"] < now:
+        expired_consent = row["status"] == "CONSENTED" and row["expires_at"] < now
+        if expired_consent:
             connection.execute(
                 text(
                     """
@@ -738,26 +748,23 @@ def remote_session_connect(
                 {"now": now, "session_id": session_uuid},
             )
             _audit(
-                connection,
-                session_uuid,
-                "CONSENT_EXPIRED",
-                "BACKEND",
-                "Multi-Servis",
+                connection, session_uuid, "CONSENT_EXPIRED",
+                "BACKEND", "Multi-Servis",
             )
-            raise HTTPException(
-                410,
-                "Zgoda klienta na rozpoczęcie sesji wygasła.",
-            )
+        else:
+            if not row["mesh_node_id"]:
+                raise HTTPException(409, "Brak powiązania MeshCentral dla urządzenia.")
+            granted = list(row["granted_capabilities"] or [])
+            if "desktop" not in granted:
+                raise HTTPException(409, "Brak zgody na pulpit zdalny.")
+            node_id = row["mesh_node_id"]
+            existing_public_id = row["mesh_public_id"]
 
-        if not row["mesh_node_id"]:
-            raise HTTPException(409, "Brak powiązania MeshCentral dla urządzenia.")
-
-        granted = list(row["granted_capabilities"] or [])
-        if "desktop" not in granted:
-            raise HTTPException(409, "Brak zgody na pulpit zdalny.")
-
-        node_id = row["mesh_node_id"]
-        existing_public_id = row["mesh_public_id"]
+    # Raising only after engine.begin() commits the expired state and audit.
+    if expired_consent:
+        raise HTTPException(
+            410, "Zgoda klienta na rozpoczęcie sesji wygasła.",
+        )
 
     if existing_public_id:
         try:

@@ -1273,6 +1273,74 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         with engine.connect() as db:
             assert db.execute(text('SELECT status FROM guard.remote_sessions WHERE id=:id'),{'id':sid}).scalar_one()=='ENDED'
 
+        # Both expiry decisions must commit EXPIRED with an audit event.
+        ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                      data=remote_form,follow_redirects=False).status_code,303,
+               'New request for expired consent')
+        with engine.begin() as db:
+            expired_id=db.execute(text("""
+                SELECT id FROM guard.remote_sessions WHERE support_request_id=:id
+                AND status='REQUESTED' ORDER BY requested_at DESC LIMIT 1
+            """),{'id':support_id}).scalar_one()
+            db.execute(text("""
+                UPDATE guard.remote_sessions SET status='CONSENTED',
+                granted_capabilities='["desktop"]'::jsonb,
+                expires_at=now()-interval '1 minute' WHERE id=:id
+            """),{'id':expired_id})
+        ensure(c.post(f'/multiguard/panel/remote/{expired_id}/connect',
+                      auth=auth,data={'csrf_token':remote_csrf}).status_code,410,
+               'Expired consent must return 410')
+        with engine.connect() as db:
+            assert db.execute(text("""
+                SELECT status FROM guard.remote_sessions WHERE id=:id
+            """),{'id':expired_id}).scalar_one()=='EXPIRED'
+            assert db.execute(text("""
+                SELECT count(*) FROM guard.remote_session_events
+                WHERE remote_session_id=:id AND event_type='CONSENT_EXPIRED'
+            """),{'id':expired_id}).scalar_one()==1
+        assert mesh_calls==['create','revoke']
+        ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                      data=remote_form,follow_redirects=False).status_code,303,
+               'New request for expired client reply')
+        with engine.begin() as db:
+            request_id=db.execute(text("""
+                SELECT id FROM guard.remote_sessions WHERE support_request_id=:id
+                AND status='REQUESTED' ORDER BY requested_at DESC LIMIT 1
+            """),{'id':support_id}).scalar_one()
+            db.execute(text("""
+                UPDATE guard.remote_sessions SET expires_at=now()-interval '1 minute'
+                WHERE id=:id
+            """),{'id':request_id})
+            installation_external=db.execute(text("""
+                SELECT installation_external_id FROM guard.installations WHERE id=:id
+            """),{'id':install_b}).scalar_one()
+        old_require=remote._require_agent
+        def simulated_agent(connection, installation_id, device_id, credential):
+            assert installation_id==installation_external
+            return {'id':install_b,'service_device_id':pc_b,
+                    'plan_code':'PRO','lifecycle':'ACTIVE',
+                    'valid_until':_time.now(_utc.utc)+timedelta(days=1)}
+        remote._require_agent=simulated_agent
+        try:
+            response=remote.agent_remote_decision(remote.AgentRemoteDecisionBody(
+                requestId=str(uuid.uuid4()),nonce='ci-expiration',
+                sentAt=_time.now(_utc.utc),installationId=installation_external,
+                deviceId='synthetic-test-device-id-1234',
+                installationCredential='synthetic-credential-1234567890-abcdefgh',
+                sessionId=request_id,allowDesktop=True,
+            ))
+            assert response.status_code==410
+        finally:
+            remote._require_agent=old_require
+        with engine.connect() as db:
+            assert db.execute(text("""
+                SELECT status FROM guard.remote_sessions WHERE id=:id
+            """),{'id':request_id}).scalar_one()=='EXPIRED'
+            assert db.execute(text("""
+                SELECT count(*) FROM guard.remote_session_events
+                WHERE remote_session_id=:id AND event_type='CLIENT_REQUEST_EXPIRED'
+            """),{'id':request_id}).scalar_one()==1
+
         # A renewed consented session MUST be closed when the PRO licence is
         # revoked. This uses synthetic KeyGate and MeshCentral transports.
         with engine.begin() as db:
