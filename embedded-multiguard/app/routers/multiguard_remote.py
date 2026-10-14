@@ -243,7 +243,7 @@ def _audit(
     )
 
 
-def _expire_and_find_open(connection, installation_id):
+def _expire_and_find_open(connection, installation_id, *, entitlement_lost=False):
     now = datetime.now(timezone.utc)
     # Auto-expiry is processed on the next poll/request (no background
     # timer). Never mark a session EXPIRED while its remote URL still works.
@@ -254,8 +254,10 @@ def _expire_and_find_open(connection, installation_id):
             FROM guard.remote_sessions rs
             JOIN guard.installations gi ON gi.id=rs.installation_id
             WHERE rs.installation_id=:installation_id
+              AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
               AND (
-                (rs.status IN ('REQUESTED','CONSENTED') AND rs.expires_at<:now)
+                :entitlement_lost
+                OR (rs.status IN ('REQUESTED','CONSENTED') AND rs.expires_at<:now)
                 OR (rs.status IN ('CONNECT_READY','ACTIVE')
                     AND rs.mesh_share_expires_at IS NOT NULL
                     AND rs.mesh_share_expires_at<:now)
@@ -264,7 +266,8 @@ def _expire_and_find_open(connection, installation_id):
             FOR UPDATE OF rs
             """
         ),
-        {"installation_id": installation_id, "now": now},
+        {"installation_id": installation_id, "now": now,
+         "entitlement_lost": entitlement_lost},
     ).mappings().all()
     for item in expired:
         if item["mesh_public_id"]:
@@ -292,7 +295,8 @@ def _expire_and_find_open(connection, installation_id):
             ),
             {"id": item["id"], "now": now},
         )
-        _audit(connection, item["id"], "SESSION_EXPIRED", "BACKEND", "Multi-Servis")
+        event_type = "PRO_ENTITLEMENT_LOST" if entitlement_lost else "SESSION_EXPIRED"
+        _audit(connection, item["id"], event_type, "BACKEND", "Multi-Servis")
     return connection.execute(
         text(
             """
@@ -329,15 +333,21 @@ def agent_remote_poll(body: AgentRemoteAuthBody):
                 "service_device_id nie pasuje do powiązania instalacji.",
             )
 
-        if (not _has_active_remote_pro(installation, now)
-                or _plan_change_pending(connection, installation["id"])):
+        entitlement_lost = (
+            not _has_active_remote_pro(installation, now)
+            or _plan_change_pending(connection, installation["id"])
+        )
+        # Previously the early return skipped cleanup of a MeshCentral URL
+        # when the PRO licence expired. Revoke the URL at this poll first.
+        row = _expire_and_find_open(
+            connection, installation["id"], entitlement_lost=entitlement_lost
+        )
+        if entitlement_lost:
             return {
                 "requestId": body.requestId,
                 "serverTime": now.isoformat(),
                 "session": None,
             }
-
-        row = _expire_and_find_open(connection, installation["id"])
         if row and row["status"] in {"CONNECT_READY", "ACTIVE"}:
             connection.execute(
                 text(

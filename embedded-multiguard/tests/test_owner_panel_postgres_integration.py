@@ -1365,6 +1365,63 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         assert status['status']=='EXPIRED' and status['mesh_public_id'] is None
         assert status['ended_at'] is not None and audited==1
 
+        # When PRO entitlement itself expires before the 60-minute share,
+        # a client poll must still revoke the external link and persist expiry.
+        lost_entitlement_id=uuid.uuid4()
+        with engine.begin() as db:
+            db.execute(text("""
+                INSERT INTO guard.remote_sessions (
+                    id,support_request_id,installation_id,service_device_id,
+                    requested_by_name,status,expires_at,mesh_public_id,
+                    mesh_share_expires_at,granted_capabilities)
+                VALUES (:id,:support,:install,:device,'CI entitlement',
+                    'CONNECT_READY',now()+interval '1 day',
+                    'ci-entitlement-open',now()+interval '30 minutes',
+                    '["desktop"]'::jsonb)
+            """), {'id':lost_entitlement_id,'support':support_id,
+                   'install':install_b,'device':pc_b})
+            db.execute(text("""
+                UPDATE guard.installations SET lifecycle='EXPIRED'
+                WHERE id=:id
+            """), {'id':install_b})
+        old_require=remote._require_agent
+        prior_mesh_revoke=remote.meshcentral.revoke_share
+        forced_revokes=[]
+        def expired_agent(conn, external_id, device_id, credential):
+            return {'id':install_b,'service_device_id':pc_b,
+                    'plan_code':'PRO','lifecycle':'EXPIRED','is_current':True,
+                    'valid_until':_time.now(_utc.utc)+timedelta(days=1)}
+        def forced_revoke(node_id, public_id):
+            forced_revokes.append((node_id, public_id))
+        remote._require_agent=expired_agent
+        remote.meshcentral.revoke_share=forced_revoke
+        try:
+            poll=remote.agent_remote_poll(remote.AgentRemoteAuthBody(
+                requestId=str(uuid.uuid4()),nonce='ci-entitlement-lost',
+                sentAt=_time.now(_utc.utc),
+                installationId=uuid.uuid4(),deviceId='ci-expired-device-123456789',
+                installationCredential='ci-credential-not-for-production-1234567890',
+            ))
+            assert poll['session'] is None
+        finally:
+            remote._require_agent=old_require
+            remote.meshcentral.revoke_share=prior_mesh_revoke
+        assert forced_revokes==[('ci-node-123','ci-entitlement-open')]
+        with engine.connect() as db:
+            expired=db.execute(text("""
+                SELECT status,mesh_public_id FROM guard.remote_sessions WHERE id=:id
+            """),{'id':lost_entitlement_id}).mappings().one()
+            audit=db.execute(text("""
+                SELECT count(*) FROM guard.remote_session_events
+                WHERE remote_session_id=:id AND event_type='PRO_ENTITLEMENT_LOST'
+            """),{'id':lost_entitlement_id}).scalar_one()
+        assert expired['status']=='EXPIRED' and expired['mesh_public_id'] is None
+        assert audit==1
+        with engine.begin() as db:
+            db.execute(text("""
+                UPDATE guard.installations SET lifecycle='ACTIVE' WHERE id=:id
+            """),{'id':install_b})
+
         # Both expiry decisions must commit EXPIRED with an audit event.
         ensure(c.post('/multiguard/panel/remote/request',auth=auth,
                       data=remote_form,follow_redirects=False).status_code,303,
