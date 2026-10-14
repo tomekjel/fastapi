@@ -7,6 +7,8 @@ without an explicit per-session desktop consent is created here.
 from __future__ import annotations
 
 import json
+import os
+import re
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -36,6 +38,11 @@ class WorkshopAuth(BaseModel):
     installationId: uuid.UUID
     deviceId: str = Field(min_length=16, max_length=128)
     discoveryCredential: str = Field(min_length=32, max_length=512)
+
+
+class WorkshopMeshEnrollment(WorkshopAuth):
+    # Local MeshAgent registry NodeId, without domain or node/ prefix.
+    meshNodeId: str = Field(min_length=64, max_length=64)
 
 
 class WorkshopDecision(WorkshopAuth):
@@ -246,6 +253,71 @@ def request_for_owner(iid: uuid.UUID):
         """), {"sid":sid,"iid":iid,"expires":_now()+timedelta(minutes=5),"now":_now()})
         _event(db,sid,"OWNER_REQUESTED","TECHNICIAN")
         return sid
+
+
+@router.post("/agent/workshop/mesh-enroll")
+def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
+    """Identity-bound registration; OWNER never has to type MeshCentral node IDs."""
+    _schema()
+    _authenticate(request)
+    # Fail early for STANDARD/disabled installations; do not permit them to
+    # flood the MeshCentral management CLI with arbitrary lookup requests.
+    with engine.connect() as db:
+        if not _eligible(_grant(db, request.installationId)):
+            raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
+    local_id = request.meshNodeId
+    if not re.fullmatch(r"[A-Za-z0-9@$]{64}", local_id):
+        raise HTTPException(400, "Nieprawidłowy identyfikator MeshAgent.")
+    domain = os.getenv("MESH_CENTRAL_DOMAIN_ID", "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{0,64}", domain):
+        raise HTTPException(503, "Nieprawidłowa domena MeshCentral.")
+    node = f"node/{domain}/{local_id}"
+    # Server-side read-only verification defeats guessed IDs and hostname
+    # collisions; never trust the client-provided node ID without MeshCtrl.
+    try:
+        verified = meshcentral.verify_registered_node(node)
+    except meshcentral.MeshCentralError as exc:
+        raise HTTPException(503, "MeshCentral nie potwierdził rejestracji agenta.") from exc
+    if not verified:
+        raise HTTPException(409, "MeshAgent nie jest jeszcze zarejestrowany na serwerze.")
+    with engine.begin() as db:
+        # Serialize against OWNER revocation and PRO->STANDARD downgrade.
+        grant_lock = db.execute(text("""
+            SELECT enabled,edition FROM guard.workshop_grants
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id":request.installationId}).mappings().first()
+        if not grant_lock or not grant_lock["enabled"] or grant_lock["edition"] != "PRO":
+            raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
+        grant = _grant(db, request.installationId)
+        if not _eligible(grant):
+            raise HTTPException(403, "Instalacja nie ma aktywnego serwisowego Pro.")
+        commercial = db.execute(text("""
+            SELECT 1 FROM guard.installations
+            WHERE mesh_node_id=:node AND is_current=TRUE LIMIT 1
+        """), {"node":node}).first()
+        if commercial:
+            raise HTTPException(409, "Węzeł należy do innego typu instalacji.")
+        assigned = db.execute(text("""
+            SELECT mesh_node_id FROM guard.workshop_mesh_nodes
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid":request.installationId}).scalar_one_or_none()
+        if assigned and assigned != node:
+            open_session = db.execute(text("""
+                SELECT 1 FROM guard.workshop_remote_sessions
+                WHERE installation_id=:iid
+                  AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+                LIMIT 1
+            """), {"iid":request.installationId}).first()
+            if open_session:
+                raise HTTPException(409, "Nie można zmieniać węzła podczas sesji.")
+        db.execute(text("""
+            INSERT INTO guard.workshop_mesh_nodes (installation_id,mesh_node_id)
+            VALUES (:iid,:node)
+            ON CONFLICT (installation_id) DO UPDATE
+            SET mesh_node_id=EXCLUDED.mesh_node_id,updated_at=now()
+        """), {"iid":request.installationId, "node":node})
+    return {"requestId":request.requestId,"accepted":True,
+            "meshReady":True,"serverTime":_now().isoformat()}
 
 
 @router.post("/agent/workshop/support-request")

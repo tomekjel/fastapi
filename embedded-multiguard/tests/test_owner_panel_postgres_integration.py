@@ -693,6 +693,11 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert 'SERWIS · PRO' in owned.text
     assert 'Wyszukaj po nazwie, modelu, ID lub numerze zlecenia' in owned.text
     assert 'CI-Mode' in owned.text
+    before_node=get(f'/multiguard/panel/remote?selected={mode_direct}')
+    ensure(before_node.status_code,200,"Workshop inventory without technical node")
+    assert 'Połączenie nie jest jeszcze dostępne' in before_node.text
+    assert 'POWIĄŻ MESH' not in before_node.text
+    assert 'name="mesh_node_id"' not in before_node.text
     assert get('/multiguard/panel/remote?q=CI-Mode',False).status_code==401
     invalid_credential={**workshop_body(),"discoveryCredential":"wrong-but-long-enough-123456789012345"}
     ensure(c.post('/multiguard/agent/workshop/remote/poll',
@@ -709,6 +714,10 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     ensure(c.post(node_url,auth=auth,
                   data={"csrf_token":token,"mesh_node_id":"node/ci-mode-direct"},
                   follow_redirects=False).status_code,303,"Bind synthetic workshop node")
+    one_click=get(f'/multiguard/panel/remote?selected={mode_direct}')
+    ensure(one_click.status_code,200,"OWNER one click ready after agent bind")
+    assert 'POŁĄCZ</button>' in one_click.text
+    assert 'POWIĄŻ MESH' not in one_click.text
     owner_request=f"/multiguard/panel/remote/workshop/{mode_direct}/request"
     ensure(c.post(owner_request,auth=auth,
                   data={"csrf_token":token},follow_redirects=False).status_code,
@@ -718,6 +727,8 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     sid=polled.json()["session"]["sessionId"]
     assert polled.json()["session"]["status"]=="REQUESTED"
     assert polled.json()["session"]["supportRequestId"]==sid
+    waiting=get(f'/multiguard/panel/remote?selected={mode_direct}')
+    assert 'setTimeout(function(){window.location.reload()},2500)' in waiting.text
     denied=c.post('/multiguard/agent/workshop/remote/decision',json={
         **workshop_body(),"sessionId":sid,"allowDesktop":False,"allowFiles":False
     })
@@ -732,6 +743,9 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     })
     ensure(allowed.status_code,200,"Client consents to desktop")
     assert allowed.json()["session"]["status"]=="CONSENTED"
+    ready_page=get(f'/multiguard/panel/remote?selected={mode_direct}')
+    assert 'owner-remote-auto-connect' in ready_page.text
+    assert f'/multiguard/panel/remote/workshop/session/{sid}/connect' in ready_page.text
     share_actions=[]
     original_share=workshop.meshcentral.create_share
     original_revoke=workshop.meshcentral.revoke_share
@@ -796,6 +810,36 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             SELECT COUNT(*) FROM guard.license_links
             WHERE installation_id=:iid
         """),{"iid":mode_direct}).scalar_one()==0
+    # Automatic MeshAgent association. No OWNER node field, no name match:
+    # the discovery-authenticated installation sends its real local NodeId,
+    # and MeshCtrl must verify that very node exists on this server.
+    reg_url='/multiguard/agent/workshop/mesh-enroll'
+    node_suffix="A"*64
+    node_full="node//"+node_suffix
+    original_lookup=workshop.meshcentral.verify_registered_node
+    check_nodes=[]
+    def fake_lookup(node):
+        check_nodes.append(node)
+        return node==node_full
+    workshop.meshcentral.verify_registered_node=fake_lookup
+    try:
+        unauth={**workshop_body(),"discoveryCredential":"bogus-discovery-credential-0123456789","meshNodeId":node_suffix}
+        ensure(c.post(reg_url,json=unauth).status_code,401,"No enrollment with foreign discovery identity")
+        ensure(c.post(reg_url,json={**workshop_body(),"meshNodeId":"B"*64}).status_code,
+               409,"Unregistered Mesh node rejected, even when discovery auth is valid")
+        ensure(c.post(reg_url,json={**workshop_body(),"meshNodeId":node_suffix}).status_code,
+               200,"Registered MeshAgent enrolled without owner action")
+        assert check_nodes==["node//"+"B"*64,node_full]
+        assert c.post(reg_url,json={**workshop_body(),"meshNodeId":node_suffix}).json()["accepted"]
+        with engine.connect() as db:
+            mapped=db.execute(text("""
+                SELECT mesh_node_id FROM guard.workshop_mesh_nodes WHERE installation_id=:id
+            """),{"id":mode_direct}).scalar_one()
+        assert mapped==node_full
+        assert 'POŁĄCZ</button>' in get(f'/multiguard/panel/remote?selected={mode_direct}').text
+    finally:
+        workshop.meshcentral.verify_registered_node=original_lookup
+    print("PASS: MeshAgent self-registration requires discovery credentials and MeshCentral node verification.")
     print("PASS: Workshop PRO discovery authentication, consent, no KeyGate, MeshCentral closure and immediate downgrade safety.")
 
     ensure(get('/multiguard/panel/service-mode',False).status_code,401,'Private service mode')

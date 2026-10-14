@@ -92,7 +92,7 @@ old,new=map(Path,sys.argv[1:])
 # unrelated handler mutation can sneak past the AST guard.
 REVIEWED_BACKEND_BLOBS={
     "multiguard_license.py": "a900dc594c7964f739ac008ac26f766c530bb7f9",
-    "multiguard_runtime.py": "637f9656988caf9812ec12a4a020291c33eecd48",
+    "multiguard_runtime.py": "e8a21d97f1306d0da9f625b263905f2cbadb3fc6",
 }
 REVIEWED_EVOLUTION={
     ("multiguard_license.py",("post","/v1/multi-guard/refresh")),
@@ -278,6 +278,7 @@ must_have=[
 "/multiguard/agent/remote/poll",
 "/multiguard/agent/remote/decision",
 "/multiguard/agent/remote/end",
+"/multiguard/agent/workshop/mesh-enroll",
 "/multiguard/agent/workshop/remote/poll",
 "/multiguard/agent/workshop/remote/decision",
 "/multiguard/agent/workshop/remote/end",

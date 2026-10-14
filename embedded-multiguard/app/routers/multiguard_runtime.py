@@ -2921,19 +2921,19 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
     if chosen:
         controls = '<h2>'+_panel_h(_short_installation_id(chosen["installation_external_id"]))+'</h2>'
         if chosen["workshop"]:
-            if not chosen["mesh_node_id"]:
-                controls += '<p>Brak przypisanego węzła MeshCentral. Wpisz pełny identyfikator node/… z MeshCentral.</p>'
-            controls += action(
-                f'/multiguard/panel/remote/workshop/{selected}/mesh-bind',
-                "POWIĄŻ MESH",
-                f'<label>Węzeł MeshCentral<input name="mesh_node_id" maxlength="300" '
-                f'value="{_panel_h(chosen["mesh_node_id"] or "")}" '
-                f'placeholder="node/..." required></label>'
-            )
+            # Node IDs are internal transport details. The user must never
+            # copy MeshCentral IDs into the owner console.
             if chosen["mesh_node_id"]:
-                controls += action(
-                    f'/multiguard/panel/remote/workshop/{selected}/request',
-                    "POPROŚ O ZGODĘ NA SESJĘ")
+                if not any(s["status"] in {"REQUESTED","CONSENTED","CONNECT_READY","ACTIVE"} for s in sessions):
+                    controls += action(
+                        f'/multiguard/panel/remote/workshop/{selected}/request',
+                        "POŁĄCZ")
+                else:
+                    controls += '<p role="status">Sesja w toku. Czekamy na zgodę klienta lub połączenie.</p>'
+            else:
+                controls += ('<p role="status">Połączenie nie jest jeszcze dostępne: '
+                             'komponent zdalnego pulpitu nie został zarejestrowany. '
+                             'Konfiguracja techniczna nie jest wymagana w tym formularzu.</p>')
             if requests:
                 controls += '<p>Ostatnie zgłoszenia klienta:</p>'
                 for request in requests[:5]:
@@ -2975,6 +2975,26 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
         history.append(f'<tr><td>{_panel_dt(session["requested_at"])}</td>'
                        f'<td>{statuses.get(session["status"],session["status"])}</td>'
                        f'<td>{buttons}</td></tr>')
+    # A single click starts a request. After a per-session client consent,
+    # refresh the waiting view and submit the CSRF-protected connect action.
+    # No share is created before consent, and denial ends the polling loop.
+    remote_pending = bool(chosen and chosen["workshop"] and any(
+        s["status"] == "REQUESTED" for s in sessions))
+    ready_session = next((s for s in sessions if (
+        chosen and chosen["workshop"] and chosen["mesh_node_id"]
+        and s["status"] == "CONSENTED"
+    )), None)
+    auto_script = (
+        '<script>setTimeout(function(){window.location.reload()},2500)</script>'
+        if remote_pending else ''
+    )
+    if ready_session:
+        auto_script = (
+            f'<form id="owner-remote-auto-connect" method="post" '
+            f'action="/multiguard/panel/remote/workshop/session/{ready_session["id"]}/connect">'
+            f'<input type="hidden" name="csrf_token" value="{token}"></form>'
+            '<script>document.getElementById("owner-remote-auto-connect").requestSubmit()</script>'
+        )
     desktop = ('<iframe id="owner-remote-desktop" class="owner-remote-frame" title="Zdalny pulpit" '
                f'src="{_panel_h(desktop_url)}" referrerpolicy="no-referrer" allowfullscreen></iframe>'
                '<button type="button" onclick="document.getElementById(\'owner-remote-desktop\').requestFullscreen()">PEŁNY EKRAN</button>'
@@ -2988,7 +3008,7 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
         <section class="card">{controls}{desktop}<p>Blokada myszy i klawiatury klienta nie jest jeszcze dostępna w panelu.</p>
         <a href="/multiguard/panel/remote{('?selected='+str(selected)) if selected else ''}">ODŚWIEŻ STAN</a>
         <h2>Historia sesji</h2><div class="table-wrap"><table><tbody>{''.join(history) or '<tr><td>Brak sesji.</td></tr>'}</tbody></table></div>
-        </section></div>'''), headers={'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer'})
+        </section></div>{auto_script}'''), headers={'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer'})
 
 
 @router.get('/panel/remote', response_class=HTMLResponse)

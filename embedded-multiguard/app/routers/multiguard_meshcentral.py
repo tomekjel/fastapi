@@ -73,6 +73,49 @@ def _run(args: list[str]) -> str:
     return output
 
 
+def verify_registered_node(node_id: str) -> bool:
+    """Read-only verification against this OWNER's MeshCentral inventory.
+
+    Do not accept a client-supplied identifier based on format or hostname
+    alone. Return False on a missing node; fail closed on API/JSON errors.
+    """
+    if not re.fullmatch(r"node/[^/]*/[A-Za-z0-9@$]{64}", node_id):
+        return False
+    cmd = _base_command()
+    cmd[2] = "ListDevices"
+    output = _run(cmd + ["--json"])
+    if len(output) > 2_000_000:
+        raise MeshCentralError("Zbyt duża odpowiedź MeshCentral ListDevices.")
+    try:
+        import json
+        devices = json.loads(output)
+    except ValueError as exc:
+        raise MeshCentralError("MeshCentral nie zwrócił poprawnego spisu urządzeń.") from exc
+
+    # MeshCtrl versions can return a list, an object of groups, or a
+    # mapping of node IDs. In every case require exact node identity.
+    found = False
+    stack = [devices]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, dict):
+            identity = item.get("_id", item.get("id"))
+            if identity == node_id:
+                found = True
+                break
+            for key, val in item.items():
+                if key == node_id and isinstance(val, dict):
+                    found = True
+                    break
+                if isinstance(val, (list, dict)):
+                    stack.append(val)
+            if found:
+                break
+    return found
+
+
 def create_share(
     node_id: str,
     session_label: str,
