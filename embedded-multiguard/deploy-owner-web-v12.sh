@@ -92,7 +92,7 @@ old,new=map(Path,sys.argv[1:])
 # unrelated handler mutation can sneak past the AST guard.
 REVIEWED_BACKEND_BLOBS={
     "multiguard_license.py": "a900dc594c7964f739ac008ac26f766c530bb7f9",
-    "multiguard_runtime.py": "c96715ce650c4e82e0c9dce864b71578653efea6",
+    "multiguard_runtime.py": "637f9656988caf9812ec12a4a020291c33eecd48",
 }
 REVIEWED_EVOLUTION={
     ("multiguard_license.py",("post","/v1/multi-guard/refresh")),

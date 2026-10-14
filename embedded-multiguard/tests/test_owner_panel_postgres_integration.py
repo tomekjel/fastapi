@@ -682,7 +682,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     def workshop_body():
         return {
             "requestId":str(uuid.uuid4()),"nonce":str(uuid.uuid4()),
-            "sentAt":_workshop_time.now(_workshop_tz).isoformat(),
+            "sentAt":_workshop_time.now(_workshop_tz.utc).isoformat(),
             "installationId":str(mode_direct),
             "deviceId":"ci-mode-direct-device",
             "discoveryCredential":mode_secret,
