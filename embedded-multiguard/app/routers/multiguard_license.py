@@ -1388,6 +1388,17 @@ def _panel_html(body: str) -> str:
     }});
   }}
 
+  // A changed workshop edition is a service-rights update, not a new KeyGate sale.
+  for (const form of document.querySelectorAll('form[data-owner-edition-form]')) {{
+    const edition=form.querySelector('select[name="edition"]');
+    const save=form.querySelector('[data-owner-edition-save]');
+    if (!edition || !save) continue;
+    const initial=edition.value;
+    const update=()=>{{ save.disabled=edition.value===initial; }};
+    edition.addEventListener('change',update);
+    update();
+  }}
+
   // The profile selector only becomes active after explicit opt-in.
   // OFF is the default even if the owner leaves all fields untouched.
   for (const form of document.querySelectorAll('form[data-owner-monitor-form]')) {{
@@ -2761,6 +2772,27 @@ def multiguard_panel_pending(
             'poprzednia próba wymaga ręcznego uzgodnienia przez OWNER. '
             'Nie twórz kolejnej licencji dla tej instalacji.</p>'
         )
+    if direct:
+        direct_buttons += (
+            f'<p><a class="button-link compact" '
+            f'href="/multiguard/panel/license/manage/{direct["id"]}#license-plan-change">'
+            'ZARZĄDZAJ LICENCJĄ · ZMIEŃ STANDARD / PRO</a></p>'
+        )
+    if grant and grant["enabled"]:
+        direct_info = (
+            '<p>Na tym komputerze działa bezterminowy tryb serwisowy. '
+            'Nie jest to licencja klienta KeyGate.</p>'
+        )
+        direct_buttons = (
+            '<p><a class="button-link compact" '
+            'href="/multiguard/panel/service-mode#service-modes">'
+            'ZMIEŃ WARIANT SERWISOWY STANDARD / PRO</a></p>'
+            + (
+                '<p class="warn">Osobna, wcześniejsza operacja KeyGate wymaga '
+                'uzgodnienia. Nie wpływa na zmianę wariantu serwisowego.</p>'
+                if unresolved_attempt else ''
+            )
+        )
     workshop_state_html = (
         '<p class="ok">🔧 TRYB SERWISOWY — AKTYWNY · '
         + _panel_escape(grant["edition"])
@@ -2770,29 +2802,8 @@ def multiguard_panel_pending(
         + '<a href="/multiguard/panel/service-mode#service-modes">panelu właściciela</a>.</p>'
         if grant and grant["enabled"] else ""
     )
-    return _panel_html(
-        f"""
-        <section class="card">
-          <a href="/multiguard/panel/dashboard">← Wróć do pulpitu</a>
-          <h1>Komputer {_panel_escape(public['shortId'])}</h1>
-          <p>Nazwa komputera: <strong>{_panel_escape(display_name)}</strong></p>
-          <p>
-            Wersja Multi-Guard: {_panel_escape(public['appVersion'] or '—')}
-            • {'ONLINE' if public['online'] else 'offline'}
-          </p>
-          <p>
-            Serial: {_panel_escape(public['serialNumber'] or '—')}
-            • host: {_panel_escape(public['hostname'] or '—')}
-          </p>
-          {name_form}
-          {workshop_state_html}
-          <section class="card" id="client-license">
-            <div class="eyebrow">LICENCJA KOMERCYJNA</div>
-            <h2>Licencja klienta bez zlecenia</h2>
-            {direct_info}
-            {direct_buttons}
-          </section>
-          <section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>
+    order_form_html = (
+        f"""          <section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>
           <form method="post" action="/multiguard/panel/pending/{installation_id}/assign"
             data-owner-service-form>
             <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
@@ -2829,7 +2840,36 @@ def multiguard_panel_pending(
             <p class="muted">„Brak licencji” nie przypisuje zlecenia i pozostawia komputer w kolejce.</p>
             <button type="submit" data-owner-service-submit>PRZYPISZ I PRZYGOTUJ LICENCJĘ</button>
             {_owner_confirm_service_dialog(f"confirm-order-{installation_id}")}
-          </form></section>
+          </form></section>"""
+        if not (grant and grant["enabled"])
+        else '<section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>'
+             '<p>Najpierw wyłącz istniejący tryb serwisowy, jeśli zamierzasz '
+             'sprzedać odrębną licencję klienta. Nie wykonuj tej operacji '
+             'przez zmianę wariantu Standard / Pro.</p></section>'
+    )
+    return _panel_html(
+        f"""
+        <section class="card">
+          <a href="/multiguard/panel/dashboard">← Wróć do pulpitu</a>
+          <h1>Komputer {_panel_escape(public['shortId'])}</h1>
+          <p>Nazwa komputera: <strong>{_panel_escape(display_name)}</strong></p>
+          <p>
+            Wersja Multi-Guard: {_panel_escape(public['appVersion'] or '—')}
+            • {'ONLINE' if public['online'] else 'offline'}
+          </p>
+          <p>
+            Serial: {_panel_escape(public['serialNumber'] or '—')}
+            • host: {_panel_escape(public['hostname'] or '—')}
+          </p>
+          {name_form}
+          {workshop_state_html}
+          <section class="card" id="client-license">
+            <div class="eyebrow">LICENCJA KOMERCYJNA</div>
+            <h2>Licencja klienta bez zlecenia</h2>
+            {direct_info}
+            {direct_buttons}
+          </section>
+          {order_form_html}
         </section>
         """
     )
@@ -2928,6 +2968,19 @@ def _owner_workshop_manager_panel() -> str:
         iid = row["installation_id"]
         display = _panel_escape(owner_friendly_name(iid) or owner_detected_name(row))
         edition = _panel_escape(row["edition"])
+        edition_options = "".join(
+            f'<option value="{value}" {"selected" if row["edition"]==value else ""}>{label}</option>'
+            for value,label in (("STANDARD","Standard"),("PRO","Pro"))
+        )
+        edition_form = f"""
+          <form method="post" action="/multiguard/panel/workshop/{iid}/edition"
+                class="owner-service-edition-form" data-owner-edition-form>
+            <input type="hidden" name="csrf_token" value="{token}">
+            <select name="edition" aria-label="Wariant serwisowy dla {display}">
+              {edition_options}
+            </select>
+            <button type="submit" data-owner-edition-save disabled>ZAPISZ</button>
+          </form>"""
         status = "<span class='badge mg-gold'>AKTYWNY</span>" if row["enabled"] else "<span class='badge'>WYŁĄCZONY</span>"
         selected = row["monitoring_profile"] if row["enabled"] else "OFF"
         link = (
@@ -2994,19 +3047,20 @@ def _owner_workshop_manager_panel() -> str:
                 </dialog>
               </div>"""
         trs.append(
-            f"<tr><td><a href='/multiguard/panel/pending/{iid}'>{display}</a><br>"
-            + link + "</td><td><span class='owner-service-edition'>SERWIS · " + edition + "</span></td><td>" + status
-            + "</td><td>" + controls + "</td></tr>"
+            f'<tr class="owner-service-row">'
+            f'<td class="owner-service-device"><a href="/multiguard/panel/pending/{iid}">{display}</a>'
+            f'<span class="owner-service-order">{link}</span></td>'
+            f'<td class="owner-service-plan">{edition_form}</td>'
+            f'<td class="owner-service-status">{status}</td>'
+            f'<td class="owner-service-operations">{controls}</td></tr>'
         )
     return f"""
       <section class="card" id="service-modes">
         <div class="eyebrow">MULTI-GUARD / PANEL WŁAŚCICIELA</div>
         <h2>Aktywne tryby serwisowe i monitorowanie</h2>
-        <p>Tryb serwisowy działa również bez Internetu. Rozszerzone
-           monitorowanie jest domyślnie wyłączone. Możesz wybrać
-           Standardowy, Obserwacja lub Intensywny dla każdego komputera.
-           Wyłączenie uprawnienia jest możliwe tylko tutaj.</p>
-        <div class="table-wrap"><table style="min-width:900px">
+        <p class="owner-service-help">Bezterminowy Standard / Pro · monitoring domyślnie wyłączony.
+           Zmiana wariantu nie tworzy licencji KeyGate i zachowuje ustawienia monitorowania.</p>
+        <div class="table-wrap"><table class="owner-service-table">
           <thead><tr><th>Komputer / zlecenie</th><th>Wariant serwisowy</th>
             <th>Tryb serwisowy</th><th>Monitorowanie i sterowanie</th></tr></thead>
           <tbody>{''.join(trs) or '<tr><td colspan="4">Brak komputerów z trybem serwisowym.</td></tr>'}</tbody>
@@ -3109,6 +3163,51 @@ def owner_set_workshop_monitoring(
                 "after":json.dumps({"monitoring_profile":profile}),
             })
     return RedirectResponse("/multiguard/panel/service-mode#service-modes",status_code=303)
+
+
+@router.post("/multiguard/panel/workshop/{installation_id}/edition")
+def owner_change_workshop_edition(
+    installation_id: uuid.UUID,
+    edition: str = Form(...),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """OWNER-only: change an existing indefinite service grant, never KeyGate."""
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Wygasły lub nieprawidłowy formularz.")
+    edition = edition.strip().upper()
+    if edition not in {"STANDARD", "PRO"}:
+        raise HTTPException(400, "Wariant serwisowy musi być Standard albo Pro.")
+    _ensure_schema()
+    with engine.begin() as con:
+        grant = con.execute(text("""
+            SELECT edition,release_channel,monitoring_profile,enabled
+            FROM guard.workshop_grants WHERE installation_id=:id FOR UPDATE
+        """), {"id": installation_id}).mappings().first()
+        if not grant or not grant["enabled"]:
+            raise HTTPException(409, "Brak aktywnego trybu serwisowego.")
+        if grant["edition"] != edition:
+            con.execute(text("""
+                UPDATE guard.workshop_grants SET edition=:edition,updated_at=now()
+                WHERE installation_id=:id
+            """), {"edition": edition, "id": installation_id})
+            before = {"edition": grant["edition"],
+                      "release_channel": grant["release_channel"],
+                      "monitoring_profile": grant["monitoring_profile"],
+                      "enabled": True}
+            after = {**before, "edition": edition}
+            con.execute(text("""
+                INSERT INTO guard.workshop_grant_audit(
+                    installation_id,before_state,after_state)
+                VALUES (:id,CAST(:before AS jsonb),CAST(:after AS jsonb))
+            """), {"id": installation_id,
+                   "before": json.dumps(before),
+                   "after": json.dumps(after)})
+    return RedirectResponse("/multiguard/panel/service-mode#service-modes",
+                            status_code=303,
+                            headers={"Cache-Control":"private, no-store"})
 
 
 @router.post("/multiguard/panel/workshop/{installation_id}/disable")

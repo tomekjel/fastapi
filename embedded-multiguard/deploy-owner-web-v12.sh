@@ -90,7 +90,7 @@ old,new=map(Path,sys.argv[1:])
 # specifically reviewed OWNER changes. Pin the WHOLE MODULE bytes so no
 # unrelated handler mutation can sneak past the AST guard.
 REVIEWED_BACKEND_BLOBS={
-    "multiguard_license.py": "e9dfd42fcc2b118078bc7f5e2a854e984053ecdd",
+    "multiguard_license.py": "22377cd47ef4fcf6b2e917fe49f7d738dade2b22",
     "multiguard_runtime.py": "c96715ce650c4e82e0c9dce864b71578653efea6",
 }
 REVIEWED_EVOLUTION={

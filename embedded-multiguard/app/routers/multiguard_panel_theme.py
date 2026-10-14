@@ -503,51 +503,62 @@ table th,table td {padding:8px 11px}
   .statistics-finance-content {padding:15px}
 }
 
-/* OWNER V12: compact, accessible service monitoring controls. */
+/* OWNER V12: deliberately compact service inventory. One table row per PC,
+   with no tall stacked controls, and a horizontal overflow fallback on phones. */
+#service-modes .owner-service-help {margin:0 0 12px;font-size:14px;line-height:1.5}
 #service-modes .table-wrap {overflow-x:auto}
-#service-modes table {min-width:820px;table-layout:auto}
-#service-modes th:last-child {width:38%}
-#service-modes tbody td {vertical-align:middle}
-#service-modes .owner-service-edition {display:inline-block;padding:5px 12px;
-  border:1px solid rgba(230,188,101,.33);border-radius:8px;color:var(--gold);
-  letter-spacing:.045em;font-size:13px}
-#service-modes .owner-service-controls {display:grid;gap:10px;min-width:270px}
-#service-modes .owner-service-controls form {display:grid;grid-template-columns:1fr auto;
-  gap:12px 16px;align-items:end}
-#service-modes .owner-service-controls form>label:not(.owner-monitor-toggle) {grid-column:1}
-#service-modes .owner-service-controls select {width:100%;min-width:0;margin-top:5px}
-#service-modes .owner-monitor-toggle {grid-column:1 / -1;display:flex;align-items:center;
-  justify-content:space-between;gap:16px;cursor:pointer;padding:7px 0}
-#service-modes .owner-monitor-label {display:grid;gap:2px;color:var(--text);font-size:15px}
-#service-modes .owner-monitor-label small {font-size:13px;color:var(--muted)}
-#service-modes .owner-monitor-toggle input {position:absolute;opacity:0;width:1px;height:1px;
-  pointer-events:none}
-#service-modes .owner-monitor-switch {position:relative;display:inline-block;flex:0 0 48px;
-  height:26px;border-radius:99px;background:#34465b;border:1px solid #61758a;transition:.15s ease}
-#service-modes .owner-monitor-switch::after {content:"";position:absolute;top:3px;left:3px;
-  width:18px;height:18px;border-radius:50%;background:#f1f5fa;transition:transform .15s ease}
-#service-modes .owner-monitor-toggle input:checked + .owner-monitor-switch {
-  background:#1e826d;border-color:#6bcba9}
-#service-modes .owner-monitor-toggle input:checked + .owner-monitor-switch::after {
-  transform:translateX(21px)}
+#service-modes .owner-service-table {min-width:1180px;table-layout:fixed}
+#service-modes .owner-service-table th:nth-child(1) {width:29%}
+#service-modes .owner-service-table th:nth-child(2) {width:18%}
+#service-modes .owner-service-table th:nth-child(3) {width:12%}
+#service-modes .owner-service-table th:nth-child(4) {width:41%}
+#service-modes .owner-service-table tbody td {padding:9px 11px;vertical-align:middle}
+#service-modes .owner-service-device {min-width:0}
+#service-modes .owner-service-device>a {display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:15px}
+#service-modes .owner-service-order {display:block;color:var(--muted);font-size:13px;line-height:1.2;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#service-modes .owner-service-order .muted {font-size:13px}
+#service-modes .owner-service-edition-form {display:flex;align-items:center;gap:7px;margin:0}
+#service-modes .owner-service-edition-form select {min-width:0;flex:1 1 auto;width:100%;
+  margin:0;height:37px;padding:5px 7px;font-size:15px}
+#service-modes .owner-service-edition-form button {flex:none;min-width:67px;min-height:37px;
+  margin:0;padding:5px 9px;font-size:12px}
+#service-modes .owner-service-edition-form button:disabled {opacity:.4;cursor:not-allowed}
+#service-modes .owner-service-status .badge {white-space:nowrap;padding:5px 8px}
+#service-modes .owner-service-controls {display:grid;gap:5px;min-width:0}
+#service-modes .owner-service-controls form {display:grid;grid-template-columns:145px minmax(95px,1fr) 76px;
+  align-items:center;gap:6px;margin:0}
+#service-modes .owner-service-controls form>label:not(.owner-monitor-toggle) {
+  display:block;grid-column:auto;min-width:0;margin:0;font-size:0}
+#service-modes .owner-service-controls select {width:100%;height:37px;margin:0;padding:5px 6px;
+  min-width:0;font-size:15px}
+#service-modes .owner-monitor-toggle {grid-column:auto;display:flex;align-items:center;
+  justify-content:space-between;gap:5px;min-height:37px;padding:0;cursor:pointer}
+#service-modes .owner-monitor-label {display:grid;gap:0;color:var(--text);font-size:15px;line-height:1.1}
+#service-modes .owner-monitor-label small {font-size:12px;line-height:1.3;color:var(--muted)}
+#service-modes .owner-monitor-toggle input {position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+#service-modes .owner-monitor-switch {position:relative;display:inline-block;flex:0 0 42px;
+  height:23px;border-radius:99px;background:#34465b;border:1px solid #61758a;transition:.15s ease}
+#service-modes .owner-monitor-switch::after {content:"";position:absolute;top:2px;left:2px;
+  width:17px;height:17px;border-radius:50%;background:#f1f5fa;transition:transform .15s ease}
+#service-modes .owner-monitor-toggle input:checked + .owner-monitor-switch {background:#1e826d;
+  border-color:#6bcba9}
+#service-modes .owner-monitor-toggle input:checked + .owner-monitor-switch::after {transform:translateX(19px)}
 #service-modes .owner-monitor-toggle input:focus-visible + .owner-monitor-switch {
   outline:3px solid var(--focus);outline-offset:3px}
-#service-modes .owner-monitor-save {grid-column:2;padding:10px 16px;min-height:41px;
-  align-self:end;background:rgba(230,188,101,.14);border:1px solid rgba(230,188,101,.6);
-  color:var(--gold);white-space:nowrap;font-size:13px;border-radius:9px}
-#service-modes .owner-monitor-save:disabled {opacity:.48;cursor:not-allowed;
+#service-modes .owner-monitor-save {grid-column:auto;min-width:0;padding:5px 6px;margin:0;min-height:37px;
+  border-radius:7px;font-size:12px;background:rgba(230,188,101,.14);
+  border:1px solid rgba(230,188,101,.6);color:var(--gold);white-space:nowrap}
+#service-modes .owner-monitor-save:disabled {opacity:.42;cursor:not-allowed;
   border-color:var(--line);color:var(--muted);background:var(--surface-soft)}
 #service-modes .owner-monitor-save:disabled:hover {filter:none}
-#service-modes .owner-service-actions {display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+#service-modes .owner-service-actions {display:flex;flex-wrap:nowrap;gap:6px;align-items:center}
 #service-modes .owner-service-actions .button-link,
-#service-modes .owner-service-actions button {margin:0;min-height:36px;font-size:12px;
-  padding:8px 12px;width:auto;border-radius:8px}
+#service-modes .owner-service-actions button {margin:0;min-height:32px;font-size:12px;
+  padding:5px 10px;width:auto;border-radius:7px;white-space:nowrap}
 #service-modes .owner-service-actions .pending-archive-trigger {color:#f5bcc5;
   border-color:rgba(237,64,86,.42);background:rgba(237,64,86,.09)}
-@media(max-width:1000px) {
-  #service-modes .owner-service-controls form {grid-template-columns:minmax(0,1fr)}
-  #service-modes .owner-monitor-save {grid-column:1;justify-self:start}
-}
 
 /* OWNER command centre: legible actions instead of a raw table as landing page. */
 .owner-overview-hero {background:linear-gradient(122deg,#16283d 0%,#101c2c 75%);
