@@ -838,15 +838,19 @@ def remote_session_connect(
     try:
         with engine.begin() as connection:
             current = connection.execute(text("""
-                SELECT rs.status,gi.plan_code,gi.lifecycle,gi.valid_until,gi.is_current
+                SELECT rs.status,gi.plan_code,gi.lifecycle,gi.valid_until,
+                       gi.is_current,gi.mesh_node_id
                 FROM guard.remote_sessions rs
                 JOIN guard.installations gi ON gi.id=rs.installation_id
                 WHERE rs.id=:sid FOR UPDATE OF rs,gi
             """), {"sid": session_uuid}).mappings().first()
             if (not current or not _has_active_remote_pro(current, datetime.now(timezone.utc))
+                    or current["mesh_node_id"] != node_id
                     or _plan_change_pending(connection,row["installation_id"])
                     or current["status"] not in {"CONSENTED", "CONNECT_READY", "ACTIVE"}):
-                raise HTTPException(403, "Licencja lub zgoda wygasła podczas otwierania pulpitu.")
+                raise HTTPException(
+                    403, "Licencja, zgoda lub przypisanie MeshCentral zmieniły się w trakcie."
+                )
             connection.execute(
                 text(
                     """
@@ -987,13 +991,23 @@ def bind_mesh_node(
         )
 
     with engine.begin() as connection:
+        # A different Mesh node cannot replace the one belonging to an
+        # existing public share. Otherwise later revoke_share() would target
+        # the wrong node. Same-ID rebind remains an idempotent no-op.
         changed = connection.execute(
             text(
                 """
-                UPDATE guard.installations
+                UPDATE guard.installations AS gi
                 SET mesh_node_id=:node_id,updated_at=now()
-                WHERE installation_external_id=:installation_id
-                  AND is_current=TRUE
+                WHERE gi.installation_external_id=:installation_id
+                  AND gi.is_current=TRUE
+                  AND (
+                    gi.mesh_node_id=:node_id OR NOT EXISTS (
+                        SELECT 1 FROM guard.remote_sessions rs
+                        WHERE rs.installation_id=gi.id
+                          AND rs.mesh_public_id IS NOT NULL
+                    )
+                  )
                 """
             ),
             {
@@ -1001,10 +1015,22 @@ def bind_mesh_node(
                 "installation_id": body.installationId,
             },
         ).rowcount
+        if not changed:
+            exists = connection.execute(
+                text(
+                    """
+                    SELECT id FROM guard.installations
+                    WHERE installation_external_id=:id AND is_current=TRUE
+                    """
+                ),
+                {"id": body.installationId},
+            ).first()
+            if exists:
+                raise HTTPException(
+                    409, "Najpierw zakończ aktywne udostępnienie MeshCentral."
+                )
+            raise HTTPException(
+                404, "Nie znaleziono bieżącej instalacji Multi-Guard."
+            )
 
-    if not changed:
-        raise HTTPException(
-            404,
-            "Nie znaleziono bieżącej instalacji Multi-Guard.",
-        )
     return {"status": "ok", "meshNodeId": node_id}

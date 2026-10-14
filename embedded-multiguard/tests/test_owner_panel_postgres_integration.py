@@ -1257,8 +1257,66 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     try:
         with engine.begin() as db:
             db.execute(text("UPDATE guard.remote_sessions SET status='CONSENTED',granted_capabilities='[\"desktop\"]'::jsonb WHERE id=:id"),{'id':sid})
+        # The Mesh share may be created while OWNER rebinds a node. The
+        # final backend transaction must reject the stale node and revoke
+        # the newly created, uncommitted share before returning an error.
+        initial_node='ci-node-123'
+        rebind_node='node/ci-race-new-node'
+        old_share_create=remote.meshcentral.create_share
+        def race_share(*args):
+            mesh_calls.append('create')
+            with engine.begin() as db:
+                db.execute(text("""
+                    UPDATE guard.installations SET mesh_node_id=:node
+                    WHERE id=:id
+                """),{'id':install_b,'node':rebind_node})
+            return remote.meshcentral.MeshShare(
+                'ci-race-share','https://mesh.example.test/sharing?race=1')
+        remote.meshcentral.create_share=race_share
+        try:
+            ensure(c.post(connect,auth=auth,
+                          data={'csrf_token':remote_csrf}).status_code,403,
+                   'Remote opening must reject a concurrently rebound Mesh node')
+            assert mesh_calls==['create','revoke']
+            with engine.connect() as db:
+                uncommitted=db.execute(text("""
+                    SELECT status,mesh_public_id FROM guard.remote_sessions
+                    WHERE id=:id
+                """),{'id':sid}).mappings().one()
+            assert uncommitted['status']=='CONSENTED'
+            assert uncommitted['mesh_public_id'] is None
+        finally:
+            remote.meshcentral.create_share=old_share_create
+            with engine.begin() as db:
+                db.execute(text("""
+                    UPDATE guard.installations SET mesh_node_id=:node
+                    WHERE id=:id
+                """),{'id':install_b,'node':initial_node})
+        mesh_calls.clear()
         desktop=c.post(connect,auth=auth,data={'csrf_token':remote_csrf})
         ensure(desktop.status_code,200,'Consented remote desktop')
+        # OWNER cannot change Mesh node while a public URL is outstanding.
+        with engine.connect() as db:
+            bound_external=db.execute(text("""
+                SELECT installation_external_id FROM guard.installations
+                WHERE id=:id
+            """),{'id':install_b}).scalar_one()
+        from fastapi import HTTPException as CIMeshRebindError
+        try:
+            remote.bind_mesh_node(
+                remote.MeshBindBody(
+                    installationId=bound_external,
+                    meshNodeId='node/ci-different-node'
+                ),
+                security.CurrentUser(),
+            )
+            raise AssertionError('Rebinding an active share must be rejected')
+        except CIMeshRebindError as exc:
+            assert exc.status_code==409
+        with engine.connect() as db:
+            assert db.execute(text("""
+                SELECT mesh_node_id FROM guard.installations WHERE id=:id
+            """),{'id':install_b}).scalar_one()==initial_node
         assert 'id="owner-remote-desktop"' in desktop.text
         assert 'src="https://mesh.example.test/sharing?ci=1"' in desktop.text
         assert desktop.headers['cache-control']=='private, no-store'
