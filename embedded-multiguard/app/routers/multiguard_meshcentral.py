@@ -56,20 +56,29 @@ require(meshctrl);
 
 
 def _base_command() -> list[str]:
+    # Owner production already provisions this root:multiservis 0640 file.
+    # Use it by default so no passwords or systemd drop-in edits are needed.
+    default_token = "/etc/multiservis/meshcentral-token.json"
+    configured_token = os.getenv("MESH_CENTRAL_TOKEN_FILE", "").strip()
+    token_file = configured_token or default_token
+    token_mode = bool(configured_token) or os.path.isfile(default_token)
+
     node = os.getenv("MESH_CENTRAL_NODE_BIN", "node").strip() or "node"
-    meshctrl = _required("MESH_CENTRAL_MESHCTRL_PATH")
-    url = _required("MESH_CENTRAL_URL")
-    # Token mode is explicit. Fail closed when configured token is missing;
-    # never silently fall back to a differently privileged account.
-    token_file = os.getenv("MESH_CENTRAL_TOKEN_FILE", "").strip()
-    if token_file:
+    if token_mode:
         if not os.path.isfile(token_file):
             raise MeshCentralError("Plik tokenu MeshCentral jest niedostępny.")
+        meshctrl = os.getenv("MESH_CENTRAL_MESHCTRL_PATH", "").strip() or (
+            "/opt/multiservis-meshctrl/node_modules/meshcentral/meshctrl.js"
+        )
+        url = os.getenv("MESH_CENTRAL_URL", "").strip() or (
+            "wss://mesh.multi-servis.pl"
+        )
         return [node, "-e", _MESHCTRL_TOKEN_BOOTSTRAP,
                 "--", meshctrl, "DeviceSharing", "--url", url]
 
-    # Legacy authentication is retained for older, separately configured
-    # installations; production OWNER uses the safer token-file mode.
+    # Existing non-token installations retain explicit legacy configuration.
+    meshctrl = _required("MESH_CENTRAL_MESHCTRL_PATH")
+    url = _required("MESH_CENTRAL_URL")
     user = _required("MESH_CENTRAL_LOGIN_USER")
     cmd = [node, meshctrl, "DeviceSharing", "--url", url, "--loginuser", user]
     key_file = os.getenv("MESH_CENTRAL_LOGIN_KEY_FILE", "").strip()
