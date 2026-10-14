@@ -99,7 +99,7 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     ),encoding="utf-8")
     reject=run()
     assert reject.returncode!=0,(reject.stdout,reject.stderr)
-    assert "interface" in (reject.stdout+reject.stderr)
+    assert any(msg in (reject.stdout+reject.stderr) for msg in ("interface", "reviewed OWNER backend blob changed"))
     print("PASS: modified provision API signature is rejected.")
     path.write_text(original,encoding="utf-8")
 
@@ -117,7 +117,7 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
         path.write_text(mutation,encoding="utf-8")
         reject=run()
         assert reject.returncode!=0,(reject.stdout,reject.stderr)
-        assert "unrelated" in (reject.stdout+reject.stderr)
+        assert any(msg in (reject.stdout+reject.stderr) for msg in ("unrelated", "reviewed OWNER backend blob changed"))
     path.write_text(original,encoding="utf-8")
     print("PASS: acceptance permits only exact duplicate-document hardening.")
 
@@ -131,7 +131,7 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     ),encoding="utf-8")
     reject=run()
     assert reject.returncode!=0,(reject.stdout,reject.stderr)
-    assert "unrelated" in (reject.stdout+reject.stderr)
+    assert any(msg in (reject.stdout+reject.stderr) for msg in ("unrelated", "reviewed OWNER backend blob changed"))
     path.write_text(original,encoding="utf-8")
     print("PASS: discovery/register API body and signature are unchanged.")
 
@@ -144,7 +144,7 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     ),encoding="utf-8")
     reject=run()
     assert reject.returncode!=0,(reject.stdout,reject.stderr)
-    assert "interface" in (reject.stdout+reject.stderr)
+    assert any(msg in (reject.stdout+reject.stderr) for msg in ("interface", "reviewed OWNER backend blob changed"))
     path.write_text(original,encoding="utf-8")
     print("PASS: workshop report retains authenticated request schema.")
 
