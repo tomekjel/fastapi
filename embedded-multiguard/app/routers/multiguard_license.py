@@ -1266,10 +1266,6 @@ def _panel_html(body: str) -> str:
       <a href="/multiguard/panel/versions"><span class="nav-icon" aria-hidden="true">≡</span>Historia wersji</a>
       <a href="/multiguard/panel/settings"><span class="nav-icon" aria-hidden="true">⚙</span>Ustawienia</a>
     </nav>
-    <p class="nav-group-label">Szybkie działania</p>
-    <nav aria-label="Działania">
-      <a href="/multiguard/panel#new-license"><span class="nav-icon" aria-hidden="true">＋</span>Licencja klienta ze zleceniem</a>
-    </nav>
   </aside>
   <div class="workspace-content">
     <header class="workspace-topbar">
@@ -3084,33 +3080,6 @@ def multiguard_panel(
 ):
     return _panel_html(
         f"""
-        <section class="card owner-overview-hero" aria-labelledby="owner-overview-title">
-          <div class="eyebrow">MULTI-SERVIS / CENTRUM WŁAŚCICIELA</div>
-          <h1 id="owner-overview-title">Centrum zarządzania</h1>
-          <p>Komputery, zlecenia serwisowe i licencje Multi-Guard w jednym miejscu.</p>
-          <div class="owner-overview-grid">
-            <a class="owner-overview-tile" href="/multiguard/panel/computers">
-              <span class="owner-overview-icon" aria-hidden="true">▣</span>
-              <strong>Komputery</strong><span>Urządzenia i dostęp do szczegółów</span>
-              <em>OTWÓRZ →</em>
-            </a>
-            <a class="owner-overview-tile" href="/multiguard/panel/service">
-              <span class="owner-overview-icon" aria-hidden="true">◇</span>
-              <strong>Zlecenia serwisowe</strong><span>Naprawy, notatki i wydania</span>
-              <em>OTWÓRZ →</em>
-            </a>
-            <a class="owner-overview-tile" href="/multiguard/panel/licenses">
-              <span class="owner-overview-icon" aria-hidden="true">▤</span>
-              <strong>Licencje Multi-Guard</strong><span>Aktywacje i uprawnienia</span>
-              <em>OTWÓRZ →</em>
-            </a>
-            <a class="owner-overview-tile" href="/multiguard/panel/statistics">
-              <span class="owner-overview-icon" aria-hidden="true">▥</span>
-              <strong>Statystyki</strong><span>Wyniki serwisu i finanse OWNER</span>
-              <em>OTWÓRZ →</em>
-            </a>
-          </div>
-        </section>
         {_owner_keygate_reconciliation_panel()}
         {_owner_workshop_manager_panel()}
         <section class="card" id="new-license">

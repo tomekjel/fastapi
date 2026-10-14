@@ -269,7 +269,9 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     ensure(get(f"/multiguard/panel/device/{install_a}",False).status_code,401,"Private device")
     owner_dashboard=get("/multiguard/panel/dashboard")
     ensure(owner_dashboard.status_code,200,"Owner dashboard")
-    assert "Szybki dostęp" in owner_dashboard.text
+    assert not re.search(r'<[^>]+class="[^"]*\bhub-tile\b', owner_dashboard.text)
+    assert "Szybkie działania" not in owner_dashboard.text
+    assert "/multiguard/panel/licenses#pending" in owner_dashboard.text
     assert 'href="/multiguard/panel/computers"' in owner_dashboard.text
     assert 'id="devices"' not in owner_dashboard.text, "Dashboard must not duplicate computers table"
     ensure(get("/multiguard/panel/computers",False).status_code,401,"Private inventory")
@@ -297,37 +299,50 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert get("/multiguard/panel/statistics?period=custom").status_code==200
     assert get("/multiguard/panel/statistics?period=month&month=not-a-month").status_code in (400,422)
     assert get("/multiguard/panel/statistics?period=quarter&quarter=9").status_code==400
-    assert 'id="pending"' in inventory_page.text
-    assert str(waiting_id).replace("-","")[:8].upper() in inventory_page.text
-    assert f'/multiguard/panel/pending/{waiting_id}' in inventory_page.text
+    assert 'id="pending"' not in inventory_page.text
+    assert f'/multiguard/panel/pending/{waiting_id}' not in inventory_page.text
+    ensure(get("/multiguard/panel/licenses",False).status_code,401,"Private licence queue")
+    license_page=get("/multiguard/panel/licenses")
+    ensure(license_page.status_code,200,"Licence queue")
+    assert 'id="assigned"' in license_page.text
+    # Optional local browser fixtures contain only this test's synthetic data.
+    if os.environ.get("OWNER_TEST_HTML_DIR"):
+        output = Path(os.environ["OWNER_TEST_HTML_DIR"])
+        output.mkdir(parents=True, exist_ok=True)
+        for name, response in (("licenses", license_page), ("computers", inventory_page),
+                               ("dashboard", owner_dashboard)):
+            (output / (name + ".html")).write_text(response.text, encoding="utf-8")
+    assert 'id="pending"' in license_page.text
+    assert str(waiting_id).replace("-","")[:8].upper() in license_page.text
+    assert f'/multiguard/panel/pending/{waiting_id}' in license_page.text
 
     # The actual OWNER inventory HTML shows the full detected value in the
     # edit dialog, while the main table restricts presentation to two lines.
-    assert 'class="pending-computers-table"' in inventory_page.text
-    assert f'id="pending-name-dialog-{waiting_id}"' in inventory_page.text
-    assert f'id="pending-archive-dialog-{waiting_id}"' in inventory_page.text
-    assert 'Czy jesteś pewien?' in inventory_page.text
-    assert 'TAK, USUŃ Z LISTY' in inventory_page.text
-    assert 'class="pending-actions-row"' in inventory_page.text
-    assert 'class="pending-archive-trigger"' in inventory_page.text
-    assert 'value="ASUS CI-Model"' in inventory_page.text
-    assert 'name="return_to" value="computers"' in inventory_page.text
+    assert 'class="pending-computers-table"' in license_page.text
+    assert f'id="pending-name-dialog-{waiting_id}"' in license_page.text
+    assert f'id="pending-archive-dialog-{waiting_id}"' in license_page.text
+    assert 'Czy jesteś pewien?' in license_page.text
+    assert 'TAK, USUŃ Z LISTY' in license_page.text
+    assert 'class="pending-actions-row"' in license_page.text
+    assert 'class="pending-archive-trigger"' in license_page.text
+    assert 'value="ASUS CI-Model"' in license_page.text
+    assert 'name="return_to" value="licenses"' in license_page.text
     pending_token=re.search(
-        r'name="csrf_token" value="([a-f0-9]{64})"',inventory_page.text
+        r'name="csrf_token" value="([a-f0-9]{64})"',license_page.text
     )
     assert pending_token, "A pending-owner edit form must carry anti-CSRF"
     rename_url=f"/multiguard/panel/installation/{waiting_id}/name"
     desired="Multi-Servis ASUS CI test"
     rename_params={
         "csrf_token":pending_token.group(1),
-        "return_to":"computers","friendly_name":desired,
+        "return_to":"licenses","friendly_name":desired,
     }
     ensure(c.post(rename_url,data=rename_params).status_code,401,"Only owner may rename")
     ensure(c.post(rename_url,auth=auth,data={**rename_params,"csrf_token":"wrong"}).status_code,
            403,"Rename requires valid CSRF")
     rename=c.post(rename_url,auth=auth,data=rename_params,follow_redirects=False)
     ensure(rename.status_code,303,"OWNER inline pencil editor")
-    assert rename.headers["location"]=="/multiguard/panel/computers#pending"
+    assert rename.headers["location"]=="/multiguard/panel/licenses#pending"
     with engine.connect() as db:
         saved=db.execute(text("""
             SELECT friendly_name FROM guard.owner_installation_labels
@@ -339,7 +354,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"id":waiting_id}).one()
     assert saved==desired
     assert tuple(original)==("ASUS","CI-Model"),"Renaming cannot alter hardware metadata"
-    renamed_page=get("/multiguard/panel/computers")
+    renamed_page=get("/multiguard/panel/licenses")
     assert f'title="{desired}"' in renamed_page.text
     assert f'value="{desired}"' in renamed_page.text
 
@@ -364,7 +379,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             WHERE installation_id=:id
         """),{"id":waiting_id}).scalar_one()
     assert status=="ARCHIVED" and audit_count==1
-    assert f'/multiguard/panel/pending/{waiting_id}' not in get("/multiguard/panel/computers").text
+    assert f'/multiguard/panel/pending/{waiting_id}' not in get("/multiguard/panel/licenses").text
     ensure(get(f"/multiguard/panel/service/{order_a}").status_code,200,"Service detail")
     d=get(f"/multiguard/panel/service/{order_a}").text
     assert "Notatki do zlecenia (2)" in d
@@ -588,6 +603,9 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"id":mode_direct}).mappings().one()
     assert grant["enabled"] is True and grant["monitoring_profile"]=="OFF"
     assert grant["associated_reception_id"] is None
+    queue_html=get("/multiguard/panel/licenses").text
+    assert f'/multiguard/panel/pending/{mode_direct}' not in queue_html
+    assert f'/multiguard/panel/pending/{mode_order}' in queue_html
     owner_modes=get("/multiguard/panel")
     ensure(owner_modes.status_code,200,"OWNER central service management")
     assert 'data-owner-monitor-toggle' in owner_modes.text

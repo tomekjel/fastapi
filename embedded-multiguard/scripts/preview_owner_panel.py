@@ -62,23 +62,6 @@ dashboard=f"""
  {metric("Otwarte zgłoszenia","3","green")}
  </div>
 </section>
-<section class="card">
- <div class="section-head"><div><div class="eyebrow">SKRÓTY</div><h2>Szybki dostęp</h2></div></div>
- <div class="hub-grid">
- <a class="hub-tile" href="/multiguard/panel/computers">
-  <span class="hub-symbol">▤</span><strong>Komputery</strong><span>Lista instalacji, zdarzenia i historia napraw</span>
-  <small>88 Standard · 36 Pro →</small></a>
- <a class="hub-tile" href="/multiguard/panel/service">
-  <span class="hub-symbol">◇</span><strong>Zlecenia serwisowe</strong><span>Statusy napraw, zdjęcia, dokumentacja, kwoty</span>
-  <small>Otwórz rejestr zleceń →</small></a>
- <a class="hub-tile" href="/multiguard/panel/statistics">
-  <span class="hub-symbol">▥</span><strong>Statystyki</strong><span>Finanse, materiały z dawcy i rozliczenia</span>
-  <small>Dostęp właściciela →</small></a>
- <a class="hub-tile" href="/multiguard/panel/licenses">
-  <span class="hub-symbol">▣</span><strong>Licencje</strong><span>Standard, Pro i przypisanie instalacji</span>
-  <small>Otwórz licencje →</small></a>
- </div>
-</section>
 """
 inventory=f"""
 <section class="card panel-hero computers-hero">
