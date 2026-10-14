@@ -25,6 +25,8 @@ SAVED_MANIFEST="$BACKUP/existing-file-manifest.txt"
 ROUTER_FILES=(
   multiguard_license.py
   multiguard_runtime.py
+  multiguard_remote.py
+  multiguard_meshcentral.py
   multiguard_service_panel.py
   multiguard_panel_theme.py
   multiguard_panel_settings.py
@@ -82,8 +84,36 @@ PYTHONPATH="$ROOT" "$PY" "$STAGE/preflight.py"
 # provision, and opt-in workshop/report. Never relax unrelated API guards.
 "$PY" - "$ROUTERS" "$STAGE" <<'PY'
 from pathlib import Path
-import ast,copy,sys
+import ast,copy,hashlib,sys
 old,new=map(Path,sys.argv[1:])
+# These two previously deployed agent-facing contracts have only the
+# specifically reviewed OWNER changes. Pin the WHOLE MODULE bytes so no
+# unrelated handler mutation can sneak past the AST guard.
+REVIEWED_BACKEND_BLOBS={
+    "multiguard_license.py": "e9dfd42fcc2b118078bc7f5e2a854e984053ecdd",
+    "multiguard_runtime.py": "c96715ce650c4e82e0c9dce864b71578653efea6",
+}
+REVIEWED_EVOLUTION={
+    ("multiguard_license.py",("post","/v1/multi-guard/refresh")),
+    ("multiguard_runtime.py",("post","/agent/heartbeat")),
+}
+def reviewed_change(name,key,original,revised):
+    if (name,key) not in REVIEWED_EVOLUTION:
+        return False
+    data=(new/name).read_bytes()
+    actual=hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest()
+    if actual!=REVIEWED_BACKEND_BLOBS[name]:
+        raise SystemExit(f"BLOCKED: reviewed OWNER backend blob changed: {name}")
+    if (ast.dump(original.args,include_attributes=False)
+          !=ast.dump(revised.args,include_attributes=False)
+          or (ast.dump(original.returns,include_attributes=False)
+              if original.returns is not None else None)
+             !=(ast.dump(revised.returns,include_attributes=False)
+              if revised.returns is not None else None)
+          or [ast.dump(d,include_attributes=False) for d in original.decorator_list]
+             !=[ast.dump(d,include_attributes=False) for d in revised.decorator_list]):
+        raise SystemExit(f"BLOCKED: reviewed public endpoint interface changed: {key}")
+    return True
 # Acceptance has one reviewed hardening: reject duplicate document entries.
 # Permit ONLY this exact condition replacement, not arbitrary handler edits.
 def exact_acceptance_hardening(original,revised):
@@ -139,6 +169,8 @@ for name in ("multiguard_license.py","multiguard_runtime.py"):
             and key==("post","/v1/multi-guard/acceptance")
             and exact_acceptance_hardening(original,revised)):
             continue
+        if reviewed_change(name,key,original,revised):
+            continue
         if name!="multiguard_license.py" or key not in AUTHORIZED_LICENSE_EVOLUTION:
             raise SystemExit(f"BLOCKED: unrelated Android/agent endpoint changed: {name}:{key}")
         # Even these two explicitly authorised handlers MUST keep their
@@ -171,7 +203,7 @@ from pathlib import Path
 import sys
 path=Path(sys.argv[1]);source=path.read_text(encoding="utf-8")
 modules=(
- "multiguard_license","multiguard_runtime",
+ "multiguard_license","multiguard_runtime","multiguard_remote",
  "multiguard_service_panel","multiguard_panel_settings",
  "multiguard_panel_devices","multiguard_panel_triage","multiguard_panel_diagnostics",
 )
@@ -242,6 +274,12 @@ must_have=[
 "/multiguard/panel/incident/{event_id}",
 "/multiguard/agent/heartbeat",
 "/multiguard/agent/event",
+"/multiguard/agent/remote/poll",
+"/multiguard/agent/remote/decision",
+"/multiguard/agent/remote/end",
+"/multiguard/remote-sessions",
+"/multiguard/remote-sessions/{session_id}/connect",
+"/multiguard/remote-sessions/{session_id}/end",
 "/multiguard/releases/{target}/{arch}/{current_version}",
 ]
 missing=[name for name in must_have if name not in paths]

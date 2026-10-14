@@ -571,4 +571,34 @@ table th,table td {padding:8px 11px}
   .owner-overview-tile {min-height:115px}
 }
 
+
+
+/* OWNER license actions: checkbox must not inherit full-width text field styling. */
+.owner-license-confirm-label {display:flex;align-items:flex-start;gap:11px;max-width:100%;line-height:1.45;cursor:pointer}
+.owner-license-confirm-label input[type="checkbox"] {appearance:auto;display:inline-block;flex:0 0 18px;width:18px;height:18px;min-width:18px;min-height:18px;padding:0;margin:2px 0 0;accent-color:#e5c077}
+.owner-license-number {overflow-wrap:anywhere;word-break:normal}
+
+.owner-inventory-table td {padding:10px 12px;vertical-align:middle;white-space:nowrap}
+.owner-inventory-table .owner-machine-display {
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  max-width:360px;max-height:2.8em;overflow:hidden;text-overflow:ellipsis;
+  white-space:normal;overflow-wrap:anywhere;line-height:1.4
+}
+.inventory-hardware {display:block;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inventory-hardware {color:var(--muted);font-size:13px}
+.owner-remote-layout {display:grid;grid-template-columns:minmax(240px,30%) minmax(0,1fr);gap:16px}
+.owner-remote-layout table {min-width:0;width:100%;table-layout:fixed}
+.owner-remote-layout td {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:10px 8px}
+.owner-remote-layout section:first-child td:first-child {width:44%}
+.owner-inventory-table {width:100%;min-width:1000px;table-layout:fixed}
+.owner-inventory-table th,.owner-inventory-table td {overflow:hidden;text-overflow:ellipsis}
+.owner-inventory-table th:nth-child(1) {width:11%}
+.owner-inventory-table th:nth-child(2) {width:24%}
+.owner-inventory-table th:nth-child(3) {width:13%}
+.owner-inventory-table th:nth-child(4) {width:14%}
+.owner-inventory-table th:nth-child(5) {width:17%}
+.owner-inventory-table th:nth-child(6) {width:7%}
+.owner-inventory-table th:nth-child(7) {width:14%}
+.owner-remote-frame {width:100%;height:65vh;border:0;background:#080e18}
+@media(max-width:800px) {.owner-remote-layout {grid-template-columns:1fr}}
 """

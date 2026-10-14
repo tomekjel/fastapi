@@ -269,7 +269,9 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     ensure(get(f"/multiguard/panel/device/{install_a}",False).status_code,401,"Private device")
     owner_dashboard=get("/multiguard/panel/dashboard")
     ensure(owner_dashboard.status_code,200,"Owner dashboard")
-    assert "Szybki dostęp" in owner_dashboard.text
+    assert not re.search(r'<[^>]+class="[^"]*\bhub-tile\b', owner_dashboard.text)
+    assert "Szybkie działania" not in owner_dashboard.text
+    assert "/multiguard/panel/licenses#pending" in owner_dashboard.text
     assert 'href="/multiguard/panel/computers"' in owner_dashboard.text
     assert 'id="devices"' not in owner_dashboard.text, "Dashboard must not duplicate computers table"
     ensure(get("/multiguard/panel/computers",False).status_code,401,"Private inventory")
@@ -297,37 +299,50 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert get("/multiguard/panel/statistics?period=custom").status_code==200
     assert get("/multiguard/panel/statistics?period=month&month=not-a-month").status_code in (400,422)
     assert get("/multiguard/panel/statistics?period=quarter&quarter=9").status_code==400
-    assert 'id="pending"' in inventory_page.text
-    assert str(waiting_id).replace("-","")[:8].upper() in inventory_page.text
-    assert f'/multiguard/panel/pending/{waiting_id}' in inventory_page.text
+    assert 'id="pending"' not in inventory_page.text
+    assert f'/multiguard/panel/pending/{waiting_id}' not in inventory_page.text
+    ensure(get("/multiguard/panel/licenses",False).status_code,401,"Private licence queue")
+    license_page=get("/multiguard/panel/licenses")
+    ensure(license_page.status_code,200,"Licence queue")
+    assert 'id="assigned"' in license_page.text
+    # Optional local browser fixtures contain only this test's synthetic data.
+    if os.environ.get("OWNER_TEST_HTML_DIR"):
+        output = Path(os.environ["OWNER_TEST_HTML_DIR"])
+        output.mkdir(parents=True, exist_ok=True)
+        for name, response in (("licenses", license_page), ("computers", inventory_page),
+                               ("dashboard", owner_dashboard)):
+            (output / (name + ".html")).write_text(response.text, encoding="utf-8")
+    assert 'id="pending"' in license_page.text
+    assert str(waiting_id).replace("-","")[:8].upper() in license_page.text
+    assert f'/multiguard/panel/pending/{waiting_id}' in license_page.text
 
     # The actual OWNER inventory HTML shows the full detected value in the
     # edit dialog, while the main table restricts presentation to two lines.
-    assert 'class="pending-computers-table"' in inventory_page.text
-    assert f'id="pending-name-dialog-{waiting_id}"' in inventory_page.text
-    assert f'id="pending-archive-dialog-{waiting_id}"' in inventory_page.text
-    assert 'Czy jesteś pewien?' in inventory_page.text
-    assert 'TAK, USUŃ Z LISTY' in inventory_page.text
-    assert 'class="pending-actions-row"' in inventory_page.text
-    assert 'class="pending-archive-trigger"' in inventory_page.text
-    assert 'value="ASUS CI-Model"' in inventory_page.text
-    assert 'name="return_to" value="computers"' in inventory_page.text
+    assert 'class="pending-computers-table"' in license_page.text
+    assert f'id="pending-name-dialog-{waiting_id}"' in license_page.text
+    assert f'id="pending-archive-dialog-{waiting_id}"' in license_page.text
+    assert 'Czy jesteś pewien?' in license_page.text
+    assert 'TAK, USUŃ Z LISTY' in license_page.text
+    assert 'class="pending-actions-row"' in license_page.text
+    assert 'class="pending-archive-trigger"' in license_page.text
+    assert 'value="ASUS CI-Model"' in license_page.text
+    assert 'name="return_to" value="licenses"' in license_page.text
     pending_token=re.search(
-        r'name="csrf_token" value="([a-f0-9]{64})"',inventory_page.text
+        r'name="csrf_token" value="([a-f0-9]{64})"',license_page.text
     )
     assert pending_token, "A pending-owner edit form must carry anti-CSRF"
     rename_url=f"/multiguard/panel/installation/{waiting_id}/name"
     desired="Multi-Servis ASUS CI test"
     rename_params={
         "csrf_token":pending_token.group(1),
-        "return_to":"computers","friendly_name":desired,
+        "return_to":"licenses","friendly_name":desired,
     }
     ensure(c.post(rename_url,data=rename_params).status_code,401,"Only owner may rename")
     ensure(c.post(rename_url,auth=auth,data={**rename_params,"csrf_token":"wrong"}).status_code,
            403,"Rename requires valid CSRF")
     rename=c.post(rename_url,auth=auth,data=rename_params,follow_redirects=False)
     ensure(rename.status_code,303,"OWNER inline pencil editor")
-    assert rename.headers["location"]=="/multiguard/panel/computers#pending"
+    assert rename.headers["location"]=="/multiguard/panel/licenses#pending"
     with engine.connect() as db:
         saved=db.execute(text("""
             SELECT friendly_name FROM guard.owner_installation_labels
@@ -339,7 +354,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"id":waiting_id}).one()
     assert saved==desired
     assert tuple(original)==("ASUS","CI-Model"),"Renaming cannot alter hardware metadata"
-    renamed_page=get("/multiguard/panel/computers")
+    renamed_page=get("/multiguard/panel/licenses")
     assert f'title="{desired}"' in renamed_page.text
     assert f'value="{desired}"' in renamed_page.text
 
@@ -364,7 +379,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             WHERE installation_id=:id
         """),{"id":waiting_id}).scalar_one()
     assert status=="ARCHIVED" and audit_count==1
-    assert f'/multiguard/panel/pending/{waiting_id}' not in get("/multiguard/panel/computers").text
+    assert f'/multiguard/panel/pending/{waiting_id}' not in get("/multiguard/panel/licenses").text
     ensure(get(f"/multiguard/panel/service/{order_a}").status_code,200,"Service detail")
     d=get(f"/multiguard/panel/service/{order_a}").text
     assert "Notatki do zlecenia (2)" in d
@@ -556,6 +571,8 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     mode_page=get(f"/multiguard/panel/pending/{mode_direct}")
     ensure(mode_page.status_code,200,"Unified OWNER computer form")
     assert mode_page.text.count('value="SERVICE"')==2
+    assert mode_page.text.count('value="NONE"')==2
+    assert "POZOSTAW BEZ LICENCJI" in mode_page.text
     assert 'Tryb warsztatowy' not in mode_page.text
     assert 'id="workshop-mode"' not in mode_page.text
     assert 'data-service-approve' in mode_page.text
@@ -569,6 +586,30 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     form={"edition":"PRO","months":"SERVICE","release_channel":"STABLE",
           "service_confirm":"CONFIRM_WORKSHOP","csrf_token":token}
     direct_url=f"/multiguard/panel/pending/{mode_direct}/direct"
+    order_url=f"/multiguard/panel/pending/{mode_order}/assign"
+    no_license={"edition":"STANDARD","months":"NONE","release_channel":"STABLE",
+                "csrf_token":token}
+    ensure(c.post(direct_url,data=no_license).status_code,401,"No licence OWNER Basic")
+    ensure(c.post(direct_url,auth=auth,
+                  data={**no_license,"csrf_token":"bad"}).status_code,403,
+           "No licence requires CSRF")
+    for url in (direct_url,order_url):
+        response=c.post(url,auth=auth,data=no_license,follow_redirects=False)
+        ensure(response.status_code,303,"Explicit no-licence selection")
+        assert response.headers["location"]=="/multiguard/panel/licenses#pending"
+    with engine.connect() as db:
+        for iid in (mode_direct,mode_order):
+            assert db.execute(text("""
+              SELECT status FROM guard.pending_installations
+              WHERE installation_id=:iid
+            """),{"iid":iid}).scalar_one()=="WAITING"
+            assert db.execute(text("""
+              SELECT count(*) FROM guard.license_links WHERE installation_id=:iid
+            """),{"iid":iid}).scalar_one()==0
+            assert db.execute(text("""
+              SELECT count(*) FROM guard.workshop_grants
+              WHERE installation_id=:iid AND enabled=TRUE
+            """),{"iid":iid}).scalar_one()==0
     ensure(c.post(direct_url,data=form).status_code,401,"Service OWNER Basic")
     ensure(c.post(direct_url,auth=auth,
                   data={**form,"csrf_token":"bad"}).status_code,403,"Service CSRF")
@@ -588,10 +629,29 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"id":mode_direct}).mappings().one()
     assert grant["enabled"] is True and grant["monitoring_profile"]=="OFF"
     assert grant["associated_reception_id"] is None
-    owner_modes=get("/multiguard/panel")
+    queue_html=get("/multiguard/panel/licenses").text
+    assert f'/multiguard/panel/pending/{mode_direct}' not in queue_html
+    assert f'/multiguard/panel/pending/{mode_order}' in queue_html
+    owner_modes=get("/multiguard/panel/service-mode")
     ensure(owner_modes.status_code,200,"OWNER central service management")
     assert 'data-owner-monitor-toggle' in owner_modes.text
     assert f'/multiguard/panel/workshop/{mode_direct}/disable' in owner_modes.text
+    ensure(get('/multiguard/panel/service-mode',False).status_code,401,'Private service mode')
+    # Granted discovery-only installations must be in Computers, once, above paid ones.
+    service_inventory=get('/multiguard/panel/computers').text
+    assert service_inventory.count(f'data-installation="{mode_direct}"')==1
+    assert service_inventory.index(f'data-installation="{mode_direct}"') < service_inventory.index(f'/multiguard/panel/device/{install_a}')
+    assert 'SERWIS · PRO' in service_inventory
+    assert f'data-installation="{mode_order}"' not in service_inventory
+    # Equal-class installations sort by registration, independent of health/priority.
+    with engine.begin() as db:
+        db.execute(text("UPDATE guard.installations SET created_at='2020-01-01' WHERE id=:id"),{'id':install_a})
+        db.execute(text("UPDATE guard.installations SET created_at='2025-01-01' WHERE id=:id"),{'id':install_b})
+    sorted_inventory=get('/multiguard/panel/computers').text
+    assert sorted_inventory.index(f'/multiguard/panel/device/{install_b}') < sorted_inventory.index(f'/multiguard/panel/device/{install_a}')
+    if os.environ.get('OWNER_TEST_HTML_DIR'):
+        (output/'service-mode.html').write_text(owner_modes.text,encoding='utf-8')
+        (output/'computers.html').write_text(sorted_inventory,encoding='utf-8')
 
     discovery={"installationId":str(mode_direct),
                "deviceId":"ci-mode-direct-device",
@@ -665,7 +725,6 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     order_form={"reception_number":"CI-2026-01234","edition":"STANDARD",
                 "months":"SERVICE","release_channel":"STABLE",
                 "csrf_token":token,"service_confirm":"CONFIRM_WORKSHOP"}
-    order_url=f"/multiguard/panel/pending/{mode_order}/assign"
     ensure(c.post(order_url,auth=auth,
           data={**order_form,"service_confirm":""}).status_code,400,
            "Order mode requires explicit confirmation")
@@ -800,6 +859,257 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """)).scalar_one()==1
     assert len(mock_calls["keygate_end"])==2
 
+    # OWNER shortening uses the same absolute expiry operation as renewal.
+    # KeyGate transport remains synthetic; SQL, routes and signatures are real.
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    current_link=license._link_by_installation(direct_id)
+    manage_url=f'/multiguard/panel/license/manage/{current_link["id"]}'
+    short_url=manage_url+'/shorten'
+    ensure(get(manage_url,False).status_code,401,'Licence management OWNER')
+    manage_page=get(manage_url)
+    ensure(manage_page.status_code,200,'Licence management')
+    assert 'Przedłużenie' in manage_page.text
+    assert 'class="owner-license-percent"' in manage_page.text
+    assert 'Pozostało czasu licencji:' in manage_page.text
+    assert 'name="paid_amount"' not in manage_page.text
+    from datetime import datetime as _time, timezone as _utc
+    start=_time(2026,1,1,tzinfo=_utc.utc)
+    finish=_time(2026,1,11,tzinfo=_utc.utc)
+    assert license._owner_remaining_percentage(start,finish,start)==100.0
+    assert license._owner_remaining_percentage(start,finish,start+timedelta(days=5))==50.0
+    assert license._owner_remaining_percentage(start,finish,finish)==0.0
+    assert license._owner_remaining_percentage(start,finish,finish+timedelta(days=1))==0.0
+    assert license._owner_remaining_percentage(start,finish,start-timedelta(days=1))==100.0
+    assert license._owner_remaining_percentage(start,start,start) is None
+    short_day=(license._utcnow()+timedelta(days=30)).astimezone(ZoneInfo('Europe/Warsaw')).date()
+    short_form={'operation_id':str(uuid.uuid4()),
+                'expected_end':license._iso(current_link['valid_until']),
+                'new_last_day':short_day.isoformat(),
+                'reason':'CI: korekta terminu <script>test</script>',
+                'confirmed':'yes','csrf_token':license._workshop_csrf()}
+    ensure(c.post(short_url,data=short_form).status_code,401,'Shortening OWNER')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'csrf_token':'bad'}).status_code,403,'Shortening CSRF')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'confirmed':''}).status_code,400,'Shortening confirmation')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'expected_end':short_day.isoformat()}).status_code,400,'Naive expiry rejected')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'new_last_day':'2000-01-01'}).status_code,400,'Past expiry rejected')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'new_last_day':'2099-01-01'}).status_code,400,'Extension through shortening rejected')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'expected_end':license._iso(current_link['valid_until']-timedelta(days=1))}).status_code,409,'Stale form rejected')
+    before_calls=len(mock_calls['keygate_end'])
+    real_set=license._keygate_set_valid_until
+    def unavailable_keygate(*args):
+        from fastapi import HTTPException
+        raise HTTPException(502,'Synthetic KeyGate outage')
+    license._keygate_set_valid_until=unavailable_keygate
+    try:
+        ensure(c.post(short_url,auth=auth,data=short_form).status_code,502,'KeyGate failure blocks shortening')
+        assert license._link_by_installation(direct_id)['valid_until']==current_link['valid_until']
+        with engine.connect() as db:
+            assert db.execute(text('SELECT count(*) FROM guard.license_shortening WHERE license_link_id=:id'),{'id':current_link['id']}).scalar_one()==0
+    finally:
+        license._keygate_set_valid_until=real_set
+    ensure(c.post(short_url,auth=auth,data=short_form,follow_redirects=False).status_code,303,'Shorten paid licence')
+    ensure(c.post(short_url,auth=auth,data=short_form,follow_redirects=False).status_code,303,'Shortening double submit')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'reason':'Changed reason'}).status_code,409,'Operation ID reuse rejected')
+    assert len(mock_calls['keygate_end'])==before_calls+1
+    shortened=license._link_by_installation(direct_id)
+    assert shortened['valid_from']==current_link['valid_from']
+    assert shortened['accepted_documents']==current_link['accepted_documents']
+    local_end=shortened['valid_until'].astimezone(ZoneInfo('Europe/Warsaw'))
+    assert local_end.date()==short_day and (local_end.hour,local_end.minute,local_end.second)==(23,59,59)
+    with engine.connect() as db:
+        assert db.execute(text('SELECT count(*) FROM guard.license_shortening WHERE license_link_id=:id'),{'id':current_link['id']}).scalar_one()==1
+        assert db.execute(text('SELECT valid_until FROM guard.installations WHERE installation_external_id=:id'),{'id':direct_id}).scalar_one()==shortened['valid_until']
+    manage_page=get(manage_url)
+    assert '&lt;script&gt;test&lt;/script&gt;' in manage_page.text
+    assert manage_page.headers['cache-control']=='private, no-store'
+    if os.environ.get('OWNER_TEST_HTML_DIR'):
+        (output/'license-management.html').write_text(manage_page.text,encoding='utf-8')
+    print('PASS: OWNER shortening, stale forms, duplicate submits, KeyGate outage rollback, history and installation expiry mirror.')
+
+    # One licence key and an unchanged expiry through Standard <-> Pro.
+    before_plan=license._link_by_installation(direct_id)
+    plan_url=manage_url+'/change-plan'
+    plan_info={'current':before_plan['keygate_plan_id'],
+               'end':before_plan['valid_until'],'calls':0}
+    fake_get_before=license._keygate_license
+    fake_find_before=license._find_plan_id
+    fake_change_before=license._keygate_change_plan
+    def plan_remote_get(_):
+        return {'status':'active','plan_id':plan_info['current'],
+                'valid_until':license._iso(plan_info['end'])}
+    def plan_find(edition,months):
+        assert months==12
+        return {'PRO':before_plan['keygate_plan_id'],
+                'STANDARD':'ci-plan-standard-12m'}[edition]
+    def plan_swap(_,new_plan):
+        plan_info['current']=new_plan
+        plan_info['calls']+=1
+    license._keygate_license=plan_remote_get
+    license._find_plan_id=plan_find
+    license._keygate_change_plan=plan_swap
+    try:
+        swap={'operation_id':str(uuid.uuid4()),
+              'expected_end':license._iso(before_plan['valid_until']),
+              'target_edition':'STANDARD',
+              'reason':'CI: przejscie na Standard bez nowej instalacji',
+              'confirmed':'yes','csrf_token':license._workshop_csrf()}
+        assert c.post(plan_url,data=swap).status_code==401
+        assert c.post(plan_url,auth=auth,
+                      data={**swap,'csrf_token':'bad'}).status_code==403
+        assert c.post(plan_url,auth=auth,
+                      data={**swap,'confirmed':''}).status_code==400
+        assert c.post(plan_url,auth=auth,
+                      data={**swap,'expected_end':license._iso(before_plan['valid_until']-timedelta(days=1))}).status_code==409
+        from fastapi import HTTPException as _PlanErr
+        def lost_response(lic_id,new_plan):
+            plan_swap(lic_id,new_plan)
+            raise _PlanErr(502,'CI: KeyGate odpowiedzial za pozno')
+        license._keygate_change_plan=lost_response
+        assert c.post(plan_url,auth=auth,data=swap).status_code==502
+        assert 'id="license-plan-pending"' in get(manage_url).text
+        assert license._link_by_installation(direct_id)['plan_code']=='multi_guard_pro'
+        assert c.post('/v1/multi-guard/refresh',json=refresh_fields).status_code==409
+        license._keygate_change_plan=plan_swap
+        ensure(c.post(plan_url,auth=auth,data=swap,
+                      follow_redirects=False).status_code,303,'Resume KeyGate plan')
+        ensure(c.post(plan_url,auth=auth,data=swap,
+                      follow_redirects=False).status_code,303,'Idempotent plan swap')
+        assert plan_info['calls']==1
+        after_plan=license._link_by_installation(direct_id)
+        assert after_plan['plan_code']=='multi_guard'
+        assert after_plan['valid_until']==before_plan['valid_until']
+        assert after_plan['valid_from']==before_plan['valid_from']
+        assert after_plan['license_key_hash']==before_plan['license_key_hash']
+        # Old PRO agents must not overwrite server-authoritative STANDARD on
+        # heartbeat before they download their fresh signed licence.
+        stale_packet={
+            'requestId':str(uuid.uuid4()),'nonce':'ci-plan-old-pro',
+            'sentAt':'2026-10-14T10:00:00Z',
+            'installationId':str(direct_id),'deviceId':direct_device,
+            'installationCredential':refresh_fields['installationCredential'],
+            'appVersion':'0.3.40','planCode':'PRO','licenseId':'wrong-client-lic',
+            'lifecycle':'ACTIVE','validUntil':'2099-01-01T00:00:00Z',
+            'healthLevel':'GREEN',
+            'defender':{'available':True},
+            'browserShield':{},
+            'hardware':{}
+        }
+        ensure(c.post('/multiguard/agent/heartbeat',json=stale_packet).status_code,
+               200,'Stale PRO heartbeat accepted as telemetry only')
+        with engine.connect() as db:
+            actual=db.execute(text("""
+                SELECT plan_code,lifecycle,valid_until,license_id
+                FROM guard.installations WHERE installation_external_id=:id
+            """),{'id':direct_id}).mappings().one()
+        assert actual['plan_code']=='STANDARD'
+        assert actual['lifecycle']=='ACTIVE'
+        assert actual['valid_until']==before_plan['valid_until']
+        assert actual['license_id']==before_plan['keygate_license_id']
+        with engine.connect() as db:
+            assert db.execute(text("""
+                SELECT plan_code FROM guard.installations
+                WHERE installation_external_id=:id
+            """),{'id':direct_id}).scalar_one()=='STANDARD'
+        swap_back={**swap,'operation_id':str(uuid.uuid4()),
+                   'target_edition':'PRO','reason':'CI: ponowne Pro'}
+        ensure(c.post(plan_url,auth=auth,data=swap_back,
+                      follow_redirects=False).status_code,303,'Return Pro')
+        assert license._link_by_installation(direct_id)['plan_code']=='multi_guard_pro'
+        assert license._link_by_installation(direct_id)['valid_until']==before_plan['valid_until']
+        assert plan_info['calls']==2
+    finally:
+        license._keygate_license=fake_get_before
+        license._find_plan_id=fake_find_before
+        license._keygate_change_plan=fake_change_before
+    assert 'Zmiana na Standard' in get(manage_url).text
+    assert 'Zmiana na Pro' in get(manage_url).text
+    print('PASS: existing-key Standard/Pro switch, preserved expiry, PENDING retry and auth.')
+
+    # OWNER revocation is real KeyGate revoke+GET verification, not merely
+    # deactivation nor a local status toggle. The fixture keeps the API fake.
+    revoked_link=license._link_by_installation(direct_id)
+    revoke_url=manage_url+'/revoke'
+    assert 'id="license-revocation"' in get(manage_url).text
+    initial_end=revoked_link['valid_until']
+    revoke_form={"operation_id":str(uuid.uuid4()),
+                 "expected_end":license._iso(initial_end),
+                 "reason":"CI: cofniecie na zyczenie klienta <script>unsafe</script>",
+                 "confirmed":"yes","csrf_token":license._workshop_csrf()}
+    assert c.post(revoke_url,data=revoke_form).status_code==401
+    assert c.post(revoke_url,auth=auth,
+                  data={**revoke_form,"csrf_token":"invalid"}).status_code==403
+    assert c.post(revoke_url,auth=auth,
+                  data={**revoke_form,"confirmed":""}).status_code==400
+    assert c.post(revoke_url,auth=auth,
+                  data={**revoke_form,"expected_end":
+                        license._iso(initial_end-timedelta(days=1))}).status_code==409
+    from fastapi import HTTPException as CI_HTTPException
+    real_get=license._keygate_license
+    real_revoke=getattr(license,"_keygate_revoke")
+    remote_status={"value":"active","post_calls":0}
+    def fake_remote_get(license_id):
+        assert license_id=="fake-direct-ci"
+        return {"status":remote_status["value"]}
+    def lost_keygate_response(license_id):
+        assert license_id=="fake-direct-ci"
+        remote_status["post_calls"]+=1
+        remote_status["value"]="revoked"
+        raise CI_HTTPException(502,"CI: response lost after successful revoke")
+    def no_double_post(license_id):
+        raise AssertionError("A verified revoked license must not be revoked twice")
+    license._keygate_license=fake_remote_get
+    license._keygate_revoke=lost_keygate_response
+    try:
+        assert c.post(revoke_url,auth=auth,data=revoke_form).status_code==502
+        assert license._link_by_installation(direct_id)['lifecycle']=="ACTIVE"
+        with engine.connect() as db:
+            assert db.execute(text("""
+                SELECT count(*) FROM guard.license_revocations
+                WHERE license_link_id=:id
+            """),{"id":revoked_link['id']}).scalar_one()==0
+        license._keygate_revoke=no_double_post
+        success=c.post(revoke_url,auth=auth,data=revoke_form,follow_redirects=False)
+        ensure(success.status_code,303,"Revoke verified against KeyGate")
+        ensure(c.post(revoke_url,auth=auth,data=revoke_form,
+                      follow_redirects=False).status_code,303,
+               "Revocation duplicate submission")
+        assert remote_status["post_calls"]==1
+        assert c.post(revoke_url,auth=auth,data={
+            **revoke_form,"reason":"different reason"
+        }).status_code==409
+    finally:
+        license._keygate_revoke=real_revoke
+        license._keygate_license=real_get
+    revoked_state=license._link_by_installation(direct_id)
+    assert revoked_state["lifecycle"]=="REVOKED"
+    assert revoked_state["valid_from"]==revoked_link["valid_from"]
+    assert revoked_state["accepted_documents"]==revoked_link["accepted_documents"]
+    with engine.connect() as db:
+        state=db.execute(text("""
+            SELECT lifecycle FROM guard.installations
+            WHERE installation_external_id=:id
+        """),{"id":direct_id}).scalar_one()
+        audit=db.execute(text("""
+            SELECT count(*) FROM guard.license_revocations
+            WHERE license_link_id=:id
+        """),{"id":revoked_link["id"]}).scalar_one()
+    assert state=="REVOKED" and audit==1
+    revocation_page=get(manage_url)
+    assert "Cofnięta · poprzedni termin ważności" in revocation_page.text
+    assert "Historia zmian licencji" in revocation_page.text
+    assert "Pozostawało w chwili cofnięcia:" in revocation_page.text
+    assert 'class="owner-license-percent"' in revocation_page.text
+    assert "Cofnięcie" in revocation_page.text
+    assert "&lt;script&gt;unsafe&lt;/script&gt;" in revocation_page.text
+    assert 'id="license-revocation"' not in revocation_page.text
+    assert c.post(revoke_url,auth=auth,data={
+        **revoke_form,"operation_id":str(uuid.uuid4())
+    }).status_code==409
+    print("PASS: OWNER KeyGate revocation verified, retry after lost response, 401/403/409, single audit and signed state mirror.")
+
+
+
     # Gate future deployment on read-only compatibility with the historical
     # Multi-Servis schema. It must neither mutate nor fetch customer records.
     spec=importlib.util.spec_from_file_location(
@@ -863,6 +1173,469 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     print("PASS: month=October uses Warsaw handover day and excludes September/READY/November.")
     print("PASS: OWNER's financial sums, costs and trend are collapsed by default.")
 
+    # The browser endpoints reuse actual remote-session consent and audit logic.
+    # Only MeshCentral transport is replaced; never contact a real customer.
+    remote=importlib.import_module('app.routers.multiguard_remote')
+    remote._ensure_schema()
+    support_id=uuid.uuid4()
+    with engine.begin() as db:
+        db.execute(text("UPDATE guard.installations SET mesh_node_id='ci-node-123', lifecycle='ACTIVE', valid_until=now()+interval '1 day' WHERE id=:id"),{'id':install_b})
+        db.execute(text("""INSERT INTO guard.support_requests
+            (id,local_request_id,installation_id,service_device_id,subject,description,created_at)
+            VALUES (:id,:local,:install,:device,'CI zdalna pomoc','Synthetic only',now())"""),
+            {'id':support_id,'local':uuid.uuid4(),'install':install_b,'device':pc_b})
+        # The PRO installation has one real synthetic link, enabling a full
+        # KeyGate-revoke -> MeshCentral-share-close contract regression.
+        db.execute(text("""
+            INSERT INTO guard.license_links(
+                reception_id,reception_number,service_device_id,
+                keygate_license_id,keygate_plan_id,license_key_hash,
+                plan_code,duration_months,release_channel,lifecycle,
+                installation_id,device_id,credential_sha256,valid_until)
+            SELECT :order_id,'CI-REMOTE-LIC',:device_id,
+                   'ci-keygate-remote-pro','ci-keygate-plan',:key_hash,
+                   'multi_guard_pro',12,'STABLE','ACTIVE',
+                   installation_external_id,'test-dh',:cred,
+                   now()+interval '1 day'
+            FROM guard.installations WHERE id=:internal_id
+        """),{'order_id':order_b,'device_id':pc_b,'key_hash':'7'*64,
+              'cred':'1'*64,'internal_id':install_b})
+    # During a Standard/Pro conversion, both the OWNER workspace and the
+    # underlying routes must fail closed. No fake "request consent" action.
+    with engine.begin() as db:
+        linked=db.execute(text("""
+            SELECT id,keygate_plan_id,valid_until FROM guard.license_links
+            WHERE reception_id=:order_id
+        """),{"order_id":order_b}).mappings().one()
+        pending_remote_op=uuid.uuid4()
+        db.execute(text("""
+            INSERT INTO guard.license_plan_changes(
+                id,license_link_id,old_plan_code,new_plan_code,
+                old_keygate_plan_id,new_keygate_plan_id,
+                expected_valid_until,reason,status
+            ) VALUES (:op,:link,'multi_guard_pro','multi_guard',
+                     :old_plan,'ci-standard-remote',
+                     :expires,'CI test niedokonczonej zmiany','PENDING')
+        """), {"op":pending_remote_op,"link":linked["id"],
+                "old_plan":linked["keygate_plan_id"],
+                "expires":linked["valid_until"]})
+    pending_remote_page=get(f'/multiguard/panel/remote?selected={install_b}')
+    ensure(pending_remote_page.status_code,200,'Pending plan remote workspace')
+    assert 'Trwa zmiana edycji licencji' in pending_remote_page.text
+    assert 'POPROŚ O ZGODĘ NA SESJĘ' not in pending_remote_page.text
+    pending_remote_form={'support_id':str(support_id),
+                         'csrf_token':license._workshop_csrf()}
+    ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                  data=pending_remote_form).status_code,403,
+           'OWNER cannot request consent during pending plan change')
+    with engine.begin() as db:
+        db.execute(text("""
+            DELETE FROM guard.license_plan_changes
+            WHERE id=:id AND status='PENDING'
+        """), {"id":pending_remote_op})
+
+    ensure(get('/multiguard/panel/remote',False).status_code,401,'Private remote page')
+    remote_page=get(f'/multiguard/panel/remote?selected={install_b}')
+    ensure(remote_page.status_code,200,'Remote workspace')
+    assert 'CI zdalna pomoc' in remote_page.text
+    ensure(get(f'/multiguard/panel/remote?selected={install_a}').status_code,404,'Standard excluded from remote workspace')
+    remote_csrf=license._workshop_csrf()
+    remote_form={'support_id':str(support_id),'csrf_token':remote_csrf}
+    ensure(c.post('/multiguard/panel/remote/request',data=remote_form).status_code,401,'Remote mutation OWNER')
+    ensure(c.post('/multiguard/panel/remote/request',auth=auth,data={**remote_form,'csrf_token':'bad'}).status_code,403,'Remote mutation CSRF')
+    ensure(c.post('/multiguard/panel/remote/request',auth=auth,data=remote_form,follow_redirects=False).status_code,303,'Request client consent')
+    with engine.connect() as db:
+        sid=db.execute(text('SELECT id FROM guard.remote_sessions WHERE support_request_id=:id'),{'id':support_id}).scalar_one()
+    connect=f'/multiguard/panel/remote/{sid}/connect'
+    ensure(c.post(connect,auth=auth,data={'csrf_token':remote_csrf}).status_code,409,'No desktop without client consent')
+    mesh_calls=[]
+    original_create=remote.meshcentral.create_share
+    original_revoke=remote.meshcentral.revoke_share
+    os.environ['MESH_CENTRAL_URL']='wss://mesh.example.test/control.ashx'
+    remote.meshcentral.create_share=lambda *args: (mesh_calls.append('create') or remote.meshcentral.MeshShare('ci-share','https://mesh.example.test/sharing?ci=1'))
+    remote.meshcentral.revoke_share=lambda *args: mesh_calls.append('revoke')
+    try:
+        with engine.begin() as db:
+            db.execute(text("UPDATE guard.remote_sessions SET status='CONSENTED',granted_capabilities='[\"desktop\"]'::jsonb WHERE id=:id"),{'id':sid})
+        # The Mesh share may be created while OWNER rebinds a node. The
+        # final backend transaction must reject the stale node and revoke
+        # the newly created, uncommitted share before returning an error.
+        initial_node='ci-node-123'
+        rebind_node='node/ci-race-new-node'
+        old_share_create=remote.meshcentral.create_share
+        def race_share(*args):
+            mesh_calls.append('create')
+            with engine.begin() as db:
+                db.execute(text("""
+                    UPDATE guard.installations SET mesh_node_id=:node
+                    WHERE id=:id
+                """),{'id':install_b,'node':rebind_node})
+            return remote.meshcentral.MeshShare(
+                'ci-race-share','https://mesh.example.test/sharing?race=1')
+        remote.meshcentral.create_share=race_share
+        try:
+            ensure(c.post(connect,auth=auth,
+                          data={'csrf_token':remote_csrf}).status_code,403,
+                   'Remote opening must reject a concurrently rebound Mesh node')
+            assert mesh_calls==['create','revoke']
+            with engine.connect() as db:
+                uncommitted=db.execute(text("""
+                    SELECT status,mesh_public_id FROM guard.remote_sessions
+                    WHERE id=:id
+                """),{'id':sid}).mappings().one()
+            assert uncommitted['status']=='CONSENTED'
+            assert uncommitted['mesh_public_id'] is None
+        finally:
+            remote.meshcentral.create_share=old_share_create
+            with engine.begin() as db:
+                db.execute(text("""
+                    UPDATE guard.installations SET mesh_node_id=:node
+                    WHERE id=:id
+                """),{'id':install_b,'node':initial_node})
+        mesh_calls.clear()
+        desktop=c.post(connect,auth=auth,data={'csrf_token':remote_csrf})
+        ensure(desktop.status_code,200,'Consented remote desktop')
+        # OWNER cannot change Mesh node while a public URL is outstanding.
+        with engine.connect() as db:
+            bound_external=db.execute(text("""
+                SELECT installation_external_id FROM guard.installations
+                WHERE id=:id
+            """),{'id':install_b}).scalar_one()
+        from fastapi import HTTPException as CIMeshRebindError
+        try:
+            remote.bind_mesh_node(
+                remote.MeshBindBody(
+                    installationId=bound_external,
+                    meshNodeId='node/ci-different-node'
+                ),
+                security.CurrentUser(),
+            )
+            raise AssertionError('Rebinding an active share must be rejected')
+        except CIMeshRebindError as exc:
+            assert exc.status_code==409
+        with engine.connect() as db:
+            assert db.execute(text("""
+                SELECT mesh_node_id FROM guard.installations WHERE id=:id
+            """),{'id':install_b}).scalar_one()==initial_node
+        assert 'id="owner-remote-desktop"' in desktop.text
+        assert 'src="https://mesh.example.test/sharing?ci=1"' in desktop.text
+        assert desktop.headers['cache-control']=='private, no-store'
+        assert mesh_calls==['create']
+        with engine.begin() as db:
+            db.execute(text("UPDATE guard.installations SET lifecycle='EXPIRED' WHERE id=:id"),{'id':install_b})
+        ensure(c.post(connect,auth=auth,data={'csrf_token':remote_csrf}).status_code,403,'Expired licence cannot reconnect')
+        end=f'/multiguard/panel/remote/{sid}/end'
+        ensure(c.post(end,auth=auth,data={'csrf_token':'bad'}).status_code,403,'End requires CSRF')
+        def failed_mesh_revoke(*_):
+            raise remote.meshcentral.MeshCentralError('CI: mesh not available')
+        previous_revoke=remote.meshcentral.revoke_share
+        remote.meshcentral.revoke_share=failed_mesh_revoke
+        try:
+            ensure(c.post(end,auth=auth,data={'csrf_token':remote_csrf},
+                          follow_redirects=False).status_code,502,
+                   'Failed Mesh revoke must not close a still-live remote link')
+            with engine.connect() as db:
+                still_open=db.execute(text("""
+                    SELECT status,mesh_public_id FROM guard.remote_sessions
+                    WHERE id=:id
+                """),{'id':sid}).mappings().one()
+            assert still_open['status']=='CONNECT_READY'
+            assert still_open['mesh_public_id']=='ci-share'
+        finally:
+            remote.meshcentral.revoke_share=previous_revoke
+        ensure(c.post(end,auth=auth,data={'csrf_token':remote_csrf},
+                      follow_redirects=False).status_code,303,'Owner ends session')
+        assert mesh_calls==['create','revoke']
+        with engine.connect() as db:
+            final_status=db.execute(text("""
+                SELECT status,mesh_public_id,ended_at
+                FROM guard.remote_sessions WHERE id=:id
+            """),{'id':sid}).mappings().one()
+        assert final_status['status']=='ENDED'
+        assert final_status['mesh_public_id'] is None and final_status['ended_at']
+
+        # Keep the preceding negative entitlement test intact. A fresh
+        # consent-expiration test needs an ACTIVE licence: otherwise OWNER's
+        # correct 403 blocks creation before consent can expire.
+        ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                      data=remote_form,follow_redirects=False).status_code,403,
+               'Expired licence refuses new consent before expiry test')
+        with engine.begin() as db:
+            db.execute(text("""
+                UPDATE guard.installations SET lifecycle='ACTIVE'
+                WHERE id=:id AND lifecycle='EXPIRED'
+            """), {'id':install_b})
+        # Stale CONNECT_READY sharing must be revoked before auto-expiry.
+        auto_expired_id=uuid.uuid4()
+        with engine.begin() as db:
+            db.execute(text("""
+                INSERT INTO guard.remote_sessions (
+                    id,support_request_id,installation_id,service_device_id,
+                    requested_by_name,status,expires_at,mesh_public_id,
+                    mesh_share_expires_at,granted_capabilities)
+                VALUES (:id,:support,:install,:device,'CI auto-expire',
+                    'CONNECT_READY',now()+interval '1 day',
+                    'ci-auto-expire',now()-interval '1 minute',
+                    '["desktop"]'::jsonb)
+            """), {'id':auto_expired_id,'support':support_id,
+                   'install':install_b,'device':pc_b})
+        original_revoke=remote.meshcentral.revoke_share
+        def auto_expire_unavailable(*args):
+            raise remote.meshcentral.MeshCentralError('CI MeshCtrl offline')
+        remote.meshcentral.revoke_share=auto_expire_unavailable
+        try:
+            from fastapi import HTTPException as CIExpiryError
+            try:
+                with engine.begin() as db:
+                    remote._expire_and_find_open(db,install_b)
+                raise AssertionError('MeshCentral outage must block SQL expiry')
+            except CIExpiryError as exc:
+                assert exc.status_code==502
+            with engine.connect() as db:
+                status=db.execute(text("""
+                    SELECT status,mesh_public_id FROM guard.remote_sessions
+                    WHERE id=:id
+                """),{'id':auto_expired_id}).mappings().one()
+            assert status['status']=='CONNECT_READY'
+            assert status['mesh_public_id']=='ci-auto-expire'
+        finally:
+            remote.meshcentral.revoke_share=original_revoke
+        auto_close_calls=[]
+        def auto_expire_revoke(node_id,public_id):
+            assert node_id=='ci-node-123' and public_id=='ci-auto-expire'
+            auto_close_calls.append(public_id)
+        remote.meshcentral.revoke_share=auto_expire_revoke
+        try:
+            with engine.begin() as db:
+                assert remote._expire_and_find_open(db,install_b) is None
+        finally:
+            remote.meshcentral.revoke_share=original_revoke
+        assert auto_close_calls==['ci-auto-expire']
+        with engine.connect() as db:
+            status=db.execute(text("""
+                SELECT status,mesh_public_id,ended_at FROM guard.remote_sessions
+                WHERE id=:id
+            """),{'id':auto_expired_id}).mappings().one()
+            audited=db.execute(text("""
+                SELECT count(*) FROM guard.remote_session_events
+                WHERE remote_session_id=:id AND event_type='SESSION_EXPIRED'
+            """),{'id':auto_expired_id}).scalar_one()
+        assert status['status']=='EXPIRED' and status['mesh_public_id'] is None
+        assert status['ended_at'] is not None and audited==1
+
+        # When PRO entitlement itself expires before the 60-minute share,
+        # a client poll must still revoke the external link and persist expiry.
+        lost_entitlement_id=uuid.uuid4()
+        with engine.begin() as db:
+            db.execute(text("""
+                INSERT INTO guard.remote_sessions (
+                    id,support_request_id,installation_id,service_device_id,
+                    requested_by_name,status,expires_at,mesh_public_id,
+                    mesh_share_expires_at,granted_capabilities)
+                VALUES (:id,:support,:install,:device,'CI entitlement',
+                    'CONNECT_READY',now()+interval '1 day',
+                    'ci-entitlement-open',now()+interval '30 minutes',
+                    '["desktop"]'::jsonb)
+            """), {'id':lost_entitlement_id,'support':support_id,
+                   'install':install_b,'device':pc_b})
+            db.execute(text("""
+                UPDATE guard.installations SET lifecycle='EXPIRED'
+                WHERE id=:id
+            """), {'id':install_b})
+        old_require=remote._require_agent
+        prior_mesh_revoke=remote.meshcentral.revoke_share
+        forced_revokes=[]
+        def expired_agent(conn, external_id, device_id, credential):
+            return {'id':install_b,'service_device_id':pc_b,
+                    'plan_code':'PRO','lifecycle':'EXPIRED','is_current':True,
+                    'valid_until':_time.now(_utc.utc)+timedelta(days=1)}
+        def forced_revoke(node_id, public_id):
+            forced_revokes.append((node_id, public_id))
+        remote._require_agent=expired_agent
+        remote.meshcentral.revoke_share=forced_revoke
+        try:
+            poll=remote.agent_remote_poll(remote.AgentRemoteAuthBody(
+                requestId=str(uuid.uuid4()),nonce='ci-entitlement-lost',
+                sentAt=_time.now(_utc.utc),
+                installationId=uuid.uuid4(),deviceId='ci-expired-device-123456789',
+                installationCredential='ci-credential-not-for-production-1234567890',
+            ))
+            assert poll['session'] is None
+        finally:
+            remote._require_agent=old_require
+            remote.meshcentral.revoke_share=prior_mesh_revoke
+        assert forced_revokes==[('ci-node-123','ci-entitlement-open')]
+        with engine.connect() as db:
+            expired=db.execute(text("""
+                SELECT status,mesh_public_id FROM guard.remote_sessions WHERE id=:id
+            """),{'id':lost_entitlement_id}).mappings().one()
+            audit=db.execute(text("""
+                SELECT count(*) FROM guard.remote_session_events
+                WHERE remote_session_id=:id AND event_type='PRO_ENTITLEMENT_LOST'
+            """),{'id':lost_entitlement_id}).scalar_one()
+        assert expired['status']=='EXPIRED' and expired['mesh_public_id'] is None
+        assert audit==1
+        with engine.begin() as db:
+            db.execute(text("""
+                UPDATE guard.installations SET lifecycle='ACTIVE' WHERE id=:id
+            """),{'id':install_b})
+
+        # Both expiry decisions must commit EXPIRED with an audit event.
+        ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                      data=remote_form,follow_redirects=False).status_code,303,
+               'New request for expired consent')
+        with engine.begin() as db:
+            expired_id=db.execute(text("""
+                SELECT id FROM guard.remote_sessions WHERE support_request_id=:id
+                AND status='REQUESTED' ORDER BY requested_at DESC LIMIT 1
+            """),{'id':support_id}).scalar_one()
+            db.execute(text("""
+                UPDATE guard.remote_sessions SET status='CONSENTED',
+                granted_capabilities='["desktop"]'::jsonb,
+                expires_at=now()-interval '1 minute' WHERE id=:id
+            """),{'id':expired_id})
+        ensure(c.post(f'/multiguard/panel/remote/{expired_id}/connect',
+                      auth=auth,data={'csrf_token':remote_csrf}).status_code,410,
+               'Expired consent must return 410')
+        with engine.connect() as db:
+            assert db.execute(text("""
+                SELECT status FROM guard.remote_sessions WHERE id=:id
+            """),{'id':expired_id}).scalar_one()=='EXPIRED'
+            assert db.execute(text("""
+                SELECT count(*) FROM guard.remote_session_events
+                WHERE remote_session_id=:id AND event_type='CONSENT_EXPIRED'
+            """),{'id':expired_id}).scalar_one()==1
+        assert mesh_calls==['create','revoke']
+        ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                      data=remote_form,follow_redirects=False).status_code,303,
+               'New request for expired client reply')
+        with engine.begin() as db:
+            request_id=db.execute(text("""
+                SELECT id FROM guard.remote_sessions WHERE support_request_id=:id
+                AND status='REQUESTED' ORDER BY requested_at DESC LIMIT 1
+            """),{'id':support_id}).scalar_one()
+            db.execute(text("""
+                UPDATE guard.remote_sessions SET expires_at=now()-interval '1 minute'
+                WHERE id=:id
+            """),{'id':request_id})
+            installation_external=db.execute(text("""
+                SELECT installation_external_id FROM guard.installations WHERE id=:id
+            """),{'id':install_b}).scalar_one()
+        old_require=remote._require_agent
+        def simulated_agent(connection, installation_id, device_id, credential):
+            assert installation_id==installation_external
+            return {'id':install_b,'service_device_id':pc_b,
+                    'plan_code':'PRO','lifecycle':'ACTIVE',
+                    'valid_until':_time.now(_utc.utc)+timedelta(days=1)}
+        remote._require_agent=simulated_agent
+        try:
+            response=remote.agent_remote_decision(remote.AgentRemoteDecisionBody(
+                requestId=str(uuid.uuid4()),nonce='ci-expiration',
+                sentAt=_time.now(_utc.utc),installationId=installation_external,
+                deviceId='synthetic-test-device-id-1234',
+                installationCredential='synthetic-credential-1234567890-abcdefgh',
+                sessionId=request_id,allowDesktop=True,
+            ))
+            assert response.status_code==410
+        finally:
+            remote._require_agent=old_require
+        with engine.connect() as db:
+            assert db.execute(text("""
+                SELECT status FROM guard.remote_sessions WHERE id=:id
+            """),{'id':request_id}).scalar_one()=='EXPIRED'
+            assert db.execute(text("""
+                SELECT count(*) FROM guard.remote_session_events
+                WHERE remote_session_id=:id AND event_type='CLIENT_REQUEST_EXPIRED'
+            """),{'id':request_id}).scalar_one()==1
+
+        # A renewed consented session MUST be closed when the PRO licence is
+        # revoked. This uses synthetic KeyGate and MeshCentral transports.
+        with engine.begin() as db:
+            db.execute(text("UPDATE guard.installations SET lifecycle='ACTIVE' WHERE id=:id"),{'id':install_b})
+        ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                      data=remote_form,follow_redirects=False).status_code,303,
+               'Second help session')
+        with engine.begin() as db:
+            sid2=db.execute(text("""
+                SELECT id FROM guard.remote_sessions WHERE support_request_id=:id
+                ORDER BY requested_at DESC LIMIT 1
+            """),{'id':support_id}).scalar_one()
+            assert sid2!=sid
+            db.execute(text("""
+                UPDATE guard.remote_sessions SET status='CONSENTED',
+                    granted_capabilities='["desktop"]'::jsonb WHERE id=:id
+            """),{'id':sid2})
+        connect2=f'/multiguard/panel/remote/{sid2}/connect'
+        ensure(c.post(connect2,auth=auth,
+                      data={'csrf_token':remote_csrf}).status_code,200,
+               'Second consented desktop')
+        assert mesh_calls==['create','revoke','create']
+        link_for_remote=license._link_by_reception_id(order_b)
+        assert link_for_remote and link_for_remote['lifecycle']=='ACTIVE'
+        remote_keygate={'state':'active','revocations':0}
+        saved_get,saved_revoke=license._keygate_license,license._keygate_revoke
+        def remote_test_get(license_id):
+            assert license_id=='ci-keygate-remote-pro'
+            return {'status':remote_keygate['state']}
+        def remote_test_revoke(license_id):
+            assert license_id=='ci-keygate-remote-pro'
+            remote_keygate['revocations']+=1
+            remote_keygate['state']='revoked'
+        license._keygate_license=remote_test_get
+        license._keygate_revoke=remote_test_revoke
+        try:
+            revoke_payload={'operation_id':str(uuid.uuid4()),
+                            'expected_end':license._iso(link_for_remote['valid_until']),
+                            'reason':'CI: zakonczenie licencji Pro i sesji zdalnej',
+                            'confirmed':'yes','csrf_token':license._workshop_csrf()}
+            revoke_path=f"/multiguard/panel/license/manage/{link_for_remote['id']}/revoke"
+            ensure(c.post(revoke_path,auth=auth,data=revoke_payload,
+                          follow_redirects=False).status_code,303,
+                   'Revoke Pro and close MeshCentral')
+            assert mesh_calls==['create','revoke','create','revoke']
+            assert remote_keygate['revocations']==1
+            with engine.connect() as db:
+                closed=db.execute(text("""
+                    SELECT status,mesh_public_id,ended_at FROM guard.remote_sessions
+                    WHERE id=:id
+                """),{'id':sid2}).mappings().one()
+                current=db.execute(text("""
+                    SELECT lifecycle FROM guard.installations WHERE id=:id
+                """),{'id':install_b}).scalar_one()
+                audit_count=db.execute(text("""
+                    SELECT count(*) FROM guard.remote_session_events
+                    WHERE remote_session_id=:id AND event_type='LICENSE_REVOKED'
+                """),{'id':sid2}).scalar_one()
+            assert closed['status']=='ENDED' and closed['mesh_public_id'] is None
+            assert closed['ended_at'] is not None and current=='REVOKED'
+            assert audit_count==1
+            ensure(c.post(connect2,auth=auth,
+                          data={'csrf_token':remote_csrf}).status_code,403,
+                   'OWNER cannot reopen remote after licence revoke')
+            from types import SimpleNamespace as _Actor
+            from fastapi import HTTPException as _HttpError
+            try:
+                remote.remote_session_connect(str(sid2),_Actor(display_name='OWNER CI'))
+                raise AssertionError('Direct API must block revoked Pro entitlement')
+            except _HttpError as exc:
+                assert exc.status_code==403
+            ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                          data=remote_form).status_code,403,
+                   'OWNER cannot create a session after licence revoke')
+            ensure(c.post(revoke_path,auth=auth,data=revoke_payload,
+                          follow_redirects=False).status_code,303,
+                   'Revocation retry idempotent')
+            assert remote_keygate['revocations']==1
+            assert mesh_calls==['create','revoke','create','revoke']
+        finally:
+            license._keygate_license=saved_get
+            license._keygate_revoke=saved_revoke
+        if os.environ.get('OWNER_TEST_HTML_DIR'):
+            (output/'remote.html').write_text(remote_page.text,encoding='utf-8')
+    finally:
+        remote.meshcentral.create_share=original_create
+        remote.meshcentral.revoke_share=original_revoke
+    print('PASS: six-section OWNER work, service-first inventory, remote auth/CSRF/consent/expiry/end; MeshCentral transport mocked.')
     print("PASS: read-only owner-panel schema and media-root preflight.")
     print("PASS: PostgreSQL + actual FastAPI owner routes, private media, device links,")
     print("      CSRF forms, configurable status, audited inactive diagnostic renewals.")

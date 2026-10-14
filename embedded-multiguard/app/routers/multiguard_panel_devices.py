@@ -241,6 +241,8 @@ def save_owner_installation_name(
     # Do not allow an arbitrary external redirect supplied by a form.
     if return_to == "pending":
         target = f"/multiguard/panel/pending/{installation_id}#owner-name"
+    elif return_to == "computers":
+        target = "/multiguard/panel/computers#devices"
     elif return_to == "device":
         with engine.connect() as con:
             internal = con.execute(text("""
@@ -250,8 +252,8 @@ def save_owner_installation_name(
             """), {"id": installation_id}).scalar_one_or_none()
         target = (
             f"/multiguard/panel/device/{internal}#owner-name"
-            if internal else "/multiguard/panel/computers#pending"
+            if internal else "/multiguard/panel/licenses#pending"
         )
     else:
-        target = "/multiguard/panel/computers#pending"
+        target = "/multiguard/panel/licenses#pending"
     return RedirectResponse(target, status_code=303)

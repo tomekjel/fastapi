@@ -4,7 +4,7 @@ on:
   # Full browser + PostgreSQL regression tests execute only for deliberate release-gate triggers.
   # Deliberate release trigger only; ordinary source edits use owner ROG.
   push:
-    branches: [multiservis-panel-multiguard-gold-crimson-v1]
+    branches: [multiservis-panel-multiguard-gold-crimson-v1, owner-licenses-queue-20261014]
     paths:
       - 'embedded-multiguard/deploy/owner-v12-preflight.trigger'
   workflow_dispatch:
@@ -25,6 +25,7 @@ jobs:
             embedded-multiguard/app/routers/multiguard_license.py \
             embedded-multiguard/app/routers/multiguard_runtime.py \
             embedded-multiguard/app/routers/multiguard_remote.py \
+            embedded-multiguard/app/routers/multiguard_meshcentral.py \
             embedded-multiguard/app/routers/multiguard_updates.py \
             embedded-multiguard/app/routers/multiguard_service_panel.py \
             embedded-multiguard/app/routers/multiguard_panel_settings.py \
@@ -32,6 +33,8 @@ jobs:
             embedded-multiguard/app/routers/multiguard_panel_theme.py \
             embedded-multiguard/app/routers/multiguard_panel_triage.py \
             embedded-multiguard/app/routers/multiguard_panel_diagnostics.py
+      - name: Exercise MeshCentral revoke and strict share URL unit tests
+        run: python -m unittest discover -s embedded-multiguard/tests -p 'test_meshcentral_share_revocation.py' -v
       - name: Verify OWNER V12 service visual contract
         run: python embedded-multiguard/tests/test_owner_v12_service_visual_contract.py
       - name: Validate reversible backend installer syntax
@@ -170,7 +173,7 @@ jobs:
           assert 'device_search_form' in runtime
           assert 'device_paging' in runtime
           assert ':search_like' in runtime and ':silence_days' in runtime
-          assert '>Ustawienia</a>' in theme
+          assert '>Ustawienia</a>' in runtime
           assert '/multiguard/panel/settings' in install
           for fragment in [
               'service_order_count',
@@ -190,7 +193,7 @@ jobs:
               '_changelog',
           ]:
               assert fragment in source, fragment
-          assert "Historia wersji" in theme
+          assert "Historia wersji" in runtime
           # Exercise the release-note formatter without importing the production
           # backend. User-authored release notes must be escaped.
           import ast, html
@@ -253,7 +256,7 @@ jobs:
           python embedded-multiguard/scripts/preview_owner_panel.py owner-preview
           test "$(find owner-preview -maxdepth 1 -name '*.html' | wc -l)" -eq 9
           grep -q 'workspace-sidebar' owner-preview/01-pulpit.html
-          grep -q 'hub-tile' owner-preview/01-pulpit.html
+          ! grep -q 'class="hub-tile"' owner-preview/01-pulpit.html
           grep -q 'Zysk ekonomiczny' owner-preview/09-statystyki.html
           grep -q 'id="devices"' owner-preview/08-komputery.html
           grep -q 'Dane przykładowe' owner-preview/01-pulpit.html
@@ -349,7 +352,7 @@ jobs:
     services:
       postgres:
         # Verified Docker Official Image mirror: avoid Docker Hub pull throttling on hosted CI.
-        image: public.ecr.aws/docker/library/postgres:16
+        image: postgres:16
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci-only

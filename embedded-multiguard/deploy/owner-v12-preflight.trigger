@@ -5,3 +5,9 @@ Run Chromium/PostgreSQL and deployment guards on this exact base-branch source b
 2026-10-13 OWNER command-centre dashboard, owner navigation hierarchy and responsive action cards: full Chromium/PostgreSQL validation requested for next release.
 2026-10-13 verify original approved shield from Multi-Guard repository, responsive OWNER command centre, full PostgreSQL and Chromium release gate.
 2026-10-13 release 20: Multi-Servis transistor identity, active service grants excluded from waiting queue and counts, customer license headings. Full PostgreSQL+Chromium gate.
+2026-10-14 PR #20 isolated release gate only: PostgreSQL, Chromium, adapter tests, OWNER deployer checks. Do not publish a manifest or deploy production from this branch.
+2026-10-14 PR #20 rerun: exact reviewed backend guard + JSON-mode heartbeat serialization. Synthetic PostgreSQL, Chromium and MeshCtrl only; no production deployment.
+2026-10-14 PR #20 final rerun: immutable deploy guard regressions, approved heartbeat telemetry serialization; PostgreSQL and Chromium isolated acceptance only.
+2026-10-14 PR #20 acceptance gate after immutable reviewed-backend error-message regression assertions; synthetic only, never deploy from test branch.
+
+2026-10-14 OWNER PR20 final combined gate: switch PostgreSQL service image from rate-limited public ECR to official Docker Hub; tests only, no production deploy.

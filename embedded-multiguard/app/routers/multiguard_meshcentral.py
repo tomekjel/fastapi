@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 from typing import Iterable
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,7 @@ def _run(args: list[str]) -> str:
 
     output = (completed.stdout or "").strip()
     error = (completed.stderr or "").strip()
-    if completed.returncode not in (0, 1):
+    if completed.returncode != 0:
         raise MeshCentralError(
             (error or output or f"meshctrl exit {completed.returncode}")[:600]
         )
@@ -112,19 +113,84 @@ def create_share(
         raise MeshCentralError(
             f"MeshCentral nie zwrócił linku sesji: {output[:500]}"
         )
-    return MeshShare(public_match.group(1), url_match.group(1))
+    # The direct OWNER API also returns this URL. Validate it here so no
+    # caller can accidentally forward an untrusted MeshCtrl URL to a user.
+    share_url = url_match.group(1)
+    try:
+        returned = urlsplit(share_url)
+        configured = urlsplit(_required("MESH_CENTRAL_URL"))
+        if (returned.scheme != "https"
+                or not returned.hostname
+                or not configured.hostname
+                or returned.hostname.lower() != configured.hostname.lower()
+                or returned.username is not None
+                or returned.password is not None
+                or returned.fragment
+                or (returned.port or 443) != (
+                    configured.port or (
+                        443 if configured.scheme in {"wss", "https"} else 80
+                    )
+                )):
+            raise ValueError("Untrusted MeshCentral share URL")
+        # Reading .port above also rejects malformed ports such as :99999.
+        # A matching hostname with an unrelated port is a different service.
+    except ValueError as exc:
+        raise MeshCentralError("MeshCentral zwrócił niebezpieczny adres sesji.") from exc
+    return MeshShare(public_match.group(1), share_url)
+
+
+def _share_absent_from_listing(node_id: str, public_id: str) -> bool:
+    """Trust absence only in a COMPLETE MeshCtrl DeviceSharing listing.
+
+    Upstream prints one '----------' section per share, including required
+    Identifier/Type/UserId/Guest Name/User Consent and ending in URL.
+    A truncated final share must not be mistaken for proof of removal.
+    """
+    listing = _run(_base_command() + ["--id", node_id]).strip()
+    if listing == "No device sharing links for this device.":
+        return True
+    blocks = re.split(r"(?m)^----------[ \t]*\r?$", listing)
+    if len(blocks) < 2 or blocks[0].strip():
+        raise MeshCentralError("Nieznany format listy udostępnień MeshCentral.")
+
+    ids = set()
+    required = ("Identifier:", "Type:", "UserId:", "Guest Name:", "User Consent:")
+    optional = ("Start Time:", "Expire Time:", "Duration:", "Recurring:")
+    for block in blocks[1:]:
+        lines = [line.strip() for line in block.strip().splitlines()]
+        if (len(lines) < 6
+                or any(not lines[i].startswith(key) for i, key in enumerate(required))
+                or not lines[-1].startswith("URL:")
+                or not lines[-1][len("URL:"):].strip()
+                or any(not line.startswith(optional) for line in lines[5:-1])):
+            raise MeshCentralError("Niekompletna lista udostępnień MeshCentral.")
+        share_id = lines[0][len("Identifier:"):].strip()
+        if not share_id or share_id in ids:
+            raise MeshCentralError("Nieprawidłowy identyfikator udostępnienia MeshCentral.")
+        ids.add(share_id)
+    return public_id not in ids
 
 
 def revoke_share(node_id: str, public_id: str) -> None:
-    if not node_id.strip() or not public_id.strip():
-        return
-    output = _run(
-        _base_command() + [
-            "--id", node_id.strip(),
-            "--remove", public_id.strip(),
-        ]
-    )
-    if output and "OK" not in output.upper():
-        raise MeshCentralError(
-            f"Nie potwierdzono usunięcia linku MeshCentral: {output[:500]}"
-        )
+    """Remove a share, or confirm it was already removed after a lost reply."""
+    node_id = node_id.strip()
+    public_id = public_id.strip()
+    if not node_id or not public_id:
+        raise MeshCentralError("Brak identyfikatora węzła lub linku MeshCentral.")
+    cmd = _base_command() + ["--id", node_id, "--remove", public_id]
+    try:
+        result = _run(cmd)
+        if result.strip().upper() == "OK":
+            return
+        failure = "MeshCtrl nie potwierdził usunięcia: " + (result[:200] or "brak odpowiedzi")
+    except MeshCentralError as exc:
+        failure = "MeshCtrl nie zwrócił potwierdzenia: " + str(exc)[:200]
+
+    # After network loss, the remove may already have taken effect. Do not
+    # trust the error text: check the server's currently listed share IDs.
+    try:
+        if _share_absent_from_listing(node_id, public_id):
+            return
+    except MeshCentralError as exc:
+        raise MeshCentralError(f"{failure}. Odczyt stanu nieudany: {exc}") from exc
+    raise MeshCentralError(f"{failure}. Link nadal jest aktywny na serwerze.")

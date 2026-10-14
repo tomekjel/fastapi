@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -155,6 +156,28 @@ def _iso(value):
     return value.isoformat() if value else None
 
 
+def _plan_change_pending(connection, installation_internal_id) -> bool:
+    return bool(connection.execute(text("""
+        SELECT 1 FROM guard.license_plan_changes pc
+        JOIN guard.license_links ll ON ll.id=pc.license_link_id
+        JOIN guard.installations gi
+          ON gi.installation_external_id=ll.installation_id
+        WHERE gi.id=:id AND pc.status='PENDING'
+        LIMIT 1
+    """), {"id":installation_internal_id}).first())
+
+
+def _has_active_remote_pro(installation, now: datetime) -> bool:
+    """Only a current, unexpired PRO entitlement may use remote support."""
+    return (
+        str(installation["plan_code"]).upper() == "PRO"
+        and installation["lifecycle"] == "ACTIVE"
+        and (installation["valid_until"] is None
+             or installation["valid_until"] > now)
+        and (installation.get("is_current", True) is True)
+    )
+
+
 def _owner_label(user: CurrentUser) -> tuple[Optional[uuid.UUID], str]:
     raw_id = getattr(user, "id", None)
     try:
@@ -220,26 +243,60 @@ def _audit(
     )
 
 
-def _expire_and_find_open(connection, installation_id):
+def _expire_and_find_open(connection, installation_id, *, entitlement_lost=False):
     now = datetime.now(timezone.utc)
-    connection.execute(
+    # Auto-expiry is processed on the next poll/request (no background
+    # timer). Never mark a session EXPIRED while its remote URL still works.
+    expired = connection.execute(
         text(
             """
-            UPDATE guard.remote_sessions
-            SET status='EXPIRED', ended_at=COALESCE(ended_at,:now)
-            WHERE installation_id=:installation_id
+            SELECT rs.id,rs.mesh_public_id,gi.mesh_node_id
+            FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE rs.installation_id=:installation_id
+              AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
               AND (
-                (status IN ('REQUESTED','CONSENTED') AND expires_at<:now)
-                OR (
-                    status IN ('CONNECT_READY','ACTIVE')
-                    AND mesh_share_expires_at IS NOT NULL
-                    AND mesh_share_expires_at<:now
-                )
+                :entitlement_lost
+                OR (rs.status IN ('REQUESTED','CONSENTED') AND rs.expires_at<:now)
+                OR (rs.status IN ('CONNECT_READY','ACTIVE')
+                    AND rs.mesh_share_expires_at IS NOT NULL
+                    AND rs.mesh_share_expires_at<:now)
               )
+            ORDER BY rs.requested_at,rs.id
+            FOR UPDATE OF rs
             """
         ),
-        {"installation_id": installation_id, "now": now},
-    )
+        {"installation_id": installation_id, "now": now,
+         "entitlement_lost": entitlement_lost},
+    ).mappings().all()
+    for item in expired:
+        if item["mesh_public_id"]:
+            if not item["mesh_node_id"]:
+                raise HTTPException(
+                    502, "Brak MeshCentral ID — nie potwierdzono wygaśnięcia sesji."
+                )
+            try:
+                meshcentral.revoke_share(item["mesh_node_id"], item["mesh_public_id"])
+            except meshcentral.MeshCentralError as exc:
+                raise HTTPException(
+                    502, "Nie potwierdzono zamknięcia wygasłego linku MeshCentral."
+                ) from exc
+        connection.execute(
+            text(
+                """
+                UPDATE guard.remote_sessions
+                SET status='EXPIRED',
+                    ended_at=COALESCE(ended_at,:now),
+                    last_activity_at=:now,
+                    mesh_public_id=NULL,
+                    mesh_share_expires_at=NULL
+                WHERE id=:id
+                """
+            ),
+            {"id": item["id"], "now": now},
+        )
+        event_type = "PRO_ENTITLEMENT_LOST" if entitlement_lost else "SESSION_EXPIRED"
+        _audit(connection, item["id"], event_type, "BACKEND", "Multi-Servis")
     return connection.execute(
         text(
             """
@@ -276,14 +333,21 @@ def agent_remote_poll(body: AgentRemoteAuthBody):
                 "service_device_id nie pasuje do powiązania instalacji.",
             )
 
-        if str(installation["plan_code"]).upper() != "PRO":
+        entitlement_lost = (
+            not _has_active_remote_pro(installation, now)
+            or _plan_change_pending(connection, installation["id"])
+        )
+        # Previously the early return skipped cleanup of a MeshCentral URL
+        # when the PRO licence expired. Revoke the URL at this poll first.
+        row = _expire_and_find_open(
+            connection, installation["id"], entitlement_lost=entitlement_lost
+        )
+        if entitlement_lost:
             return {
                 "requestId": body.requestId,
                 "serverTime": now.isoformat(),
                 "session": None,
             }
-
-        row = _expire_and_find_open(connection, installation["id"])
         if row and row["status"] in {"CONNECT_READY", "ACTIVE"}:
             connection.execute(
                 text(
@@ -315,6 +379,9 @@ def agent_remote_decision(body: AgentRemoteDecisionBody):
             body.deviceId,
             body.installationCredential,
         )
+        if (not _has_active_remote_pro(installation, now)
+                or _plan_change_pending(connection, installation["id"])) and body.allowDesktop:
+            raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         row = connection.execute(
             text(
                 """
@@ -349,7 +416,15 @@ def agent_remote_decision(body: AgentRemoteDecisionBody):
                 ),
                 {"now": now, "session_id": body.sessionId},
             )
-            raise HTTPException(410, "Żądanie zdalnej pomocy wygasło.")
+            # Return an HTTP response while leaving engine.begin() normally.
+            # Raising here would roll back the EXPIRED write.
+            _audit(
+                connection, body.sessionId, "CLIENT_REQUEST_EXPIRED",
+                "BACKEND", "Multi-Servis",
+            )
+            return JSONResponse(
+                status_code=410, content={"detail": "Żądanie zdalnej pomocy wygasło."},
+            )
 
         requested = set(row["requested_capabilities"] or [])
         if not body.allowDesktop:
@@ -457,12 +532,31 @@ def agent_remote_end(body: AgentRemoteEndBody):
         if not row:
             raise HTTPException(404, "Nie znaleziono sesji zdalnej.")
 
-        if row["status"] not in {"ENDED", "DENIED", "EXPIRED"}:
+        # The client sees "ended" only after the remote share is
+        # demonstrably gone. A Mesh failure keeps the session retryable.
+        public_id = row["mesh_public_id"]
+        mesh_node_id = row["mesh_node_id"]
+        if public_id:
+            if not mesh_node_id:
+                raise HTTPException(502,
+                    "Nie można potwierdzić zakończenia zdalnego pulpitu.")
+            try:
+                meshcentral.revoke_share(mesh_node_id, public_id)
+            except meshcentral.MeshCentralError as exc:
+                raise HTTPException(
+                    502, "Nie unieważniono linku MeshCentral. Ponów zakończenie."
+                ) from exc
+
+        if row["status"] not in {"ENDED", "DENIED", "EXPIRED"} or public_id:
             connection.execute(
                 text(
                     """
                     UPDATE guard.remote_sessions
-                    SET status='ENDED',ended_at=:now,last_activity_at=:now
+                    SET status='ENDED',
+                        ended_at=COALESCE(ended_at,:now),
+                        last_activity_at=:now,
+                        mesh_public_id=NULL,
+                        mesh_share_expires_at=NULL
                     WHERE id=:session_id
                     """
                 ),
@@ -476,38 +570,6 @@ def agent_remote_end(body: AgentRemoteEndBody):
                 "Multi-Guard",
                 {"reason": body.reason[:80]},
             )
-
-        public_id = row["mesh_public_id"]
-        mesh_node_id = row["mesh_node_id"]
-
-    if public_id and mesh_node_id:
-        try:
-            meshcentral.revoke_share(mesh_node_id, public_id)
-        except meshcentral.MeshCentralError as exc:
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        """
-                        UPDATE guard.remote_sessions
-                        SET last_error=:error
-                        WHERE id=:session_id
-                        """
-                    ),
-                    {"error": str(exc)[:1000], "session_id": body.sessionId},
-                )
-                _audit(
-                    connection,
-                    body.sessionId,
-                    "MESH_REVOKE_FAILED",
-                    "MESH",
-                    "MeshCentral",
-                    {"error": str(exc)[:500]},
-                )
-            raise HTTPException(
-                502,
-                "Sesja została zakończona, ale nie potwierdzono "
-                f"unieważnienia linku MeshCentral: {exc}",
-            ) from exc
 
     return {
         "requestId": body.requestId,
@@ -532,7 +594,8 @@ def create_remote_session(
                 """
                 SELECT
                     sr.id,sr.installation_id,sr.service_device_id,sr.subject,
-                    gi.plan_code,gi.lifecycle,gi.mesh_node_id
+                    gi.plan_code,gi.lifecycle,gi.valid_until,gi.is_current,
+                    gi.mesh_node_id,sr.status AS support_status
                 FROM guard.support_requests sr
                 JOIN guard.installations gi ON gi.id=sr.installation_id
                 WHERE sr.id=:support_request_id
@@ -543,8 +606,11 @@ def create_remote_session(
 
         if not support:
             raise HTTPException(404, "Nie znaleziono zgłoszenia Multi-Guard.")
-        if str(support["plan_code"]).upper() != "PRO":
-            raise HTTPException(403, "Zdalna pomoc wymaga Multi-Guard Pro.")
+        if (not _has_active_remote_pro(support, now)
+                or _plan_change_pending(connection,support["installation_id"])):
+            raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
+        if support["support_status"] in {"RESOLVED", "CANCELLED"}:
+            raise HTTPException(409, "Zgłoszenie pomocy jest już zamknięte.")
         if not support["mesh_node_id"]:
             raise HTTPException(
                 409,
@@ -674,12 +740,13 @@ def remote_session_connect(
         row = connection.execute(
             text(
                 """
-                SELECT rs.*,gi.mesh_node_id,sr.subject
+                SELECT rs.*,gi.mesh_node_id,gi.plan_code,gi.lifecycle,
+                       gi.valid_until,gi.is_current,sr.subject
                 FROM guard.remote_sessions rs
                 JOIN guard.installations gi ON gi.id=rs.installation_id
                 JOIN guard.support_requests sr ON sr.id=rs.support_request_id
                 WHERE rs.id=:session_id
-                FOR UPDATE
+                FOR UPDATE OF rs,gi
                 """
             ),
             {"session_id": session_uuid},
@@ -687,12 +754,16 @@ def remote_session_connect(
 
         if not row:
             raise HTTPException(404, "Nie znaleziono sesji.")
+        if (not _has_active_remote_pro(row, now)
+                or _plan_change_pending(connection,row["installation_id"])):
+            raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         if row["status"] not in {"CONSENTED", "CONNECT_READY", "ACTIVE"}:
             raise HTTPException(
                 409,
                 "Klient nie wyraził zgody na tę sesję.",
             )
-        if row["status"] == "CONSENTED" and row["expires_at"] < now:
+        expired_consent = row["status"] == "CONSENTED" and row["expires_at"] < now
+        if expired_consent:
             connection.execute(
                 text(
                     """
@@ -704,26 +775,23 @@ def remote_session_connect(
                 {"now": now, "session_id": session_uuid},
             )
             _audit(
-                connection,
-                session_uuid,
-                "CONSENT_EXPIRED",
-                "BACKEND",
-                "Multi-Servis",
+                connection, session_uuid, "CONSENT_EXPIRED",
+                "BACKEND", "Multi-Servis",
             )
-            raise HTTPException(
-                410,
-                "Zgoda klienta na rozpoczęcie sesji wygasła.",
-            )
+        else:
+            if not row["mesh_node_id"]:
+                raise HTTPException(409, "Brak powiązania MeshCentral dla urządzenia.")
+            granted = list(row["granted_capabilities"] or [])
+            if "desktop" not in granted:
+                raise HTTPException(409, "Brak zgody na pulpit zdalny.")
+            node_id = row["mesh_node_id"]
+            existing_public_id = row["mesh_public_id"]
 
-        if not row["mesh_node_id"]:
-            raise HTTPException(409, "Brak powiązania MeshCentral dla urządzenia.")
-
-        granted = list(row["granted_capabilities"] or [])
-        if "desktop" not in granted:
-            raise HTTPException(409, "Brak zgody na pulpit zdalny.")
-
-        node_id = row["mesh_node_id"]
-        existing_public_id = row["mesh_public_id"]
+    # Raising only after engine.begin() commits the expired state and audit.
+    if expired_consent:
+        raise HTTPException(
+            410, "Zgoda klienta na rozpoczęcie sesji wygasła.",
+        )
 
     if existing_public_id:
         try:
@@ -769,6 +837,20 @@ def remote_session_connect(
 
     try:
         with engine.begin() as connection:
+            current = connection.execute(text("""
+                SELECT rs.status,gi.plan_code,gi.lifecycle,gi.valid_until,
+                       gi.is_current,gi.mesh_node_id
+                FROM guard.remote_sessions rs
+                JOIN guard.installations gi ON gi.id=rs.installation_id
+                WHERE rs.id=:sid FOR UPDATE OF rs,gi
+            """), {"sid": session_uuid}).mappings().first()
+            if (not current or not _has_active_remote_pro(current, datetime.now(timezone.utc))
+                    or current["mesh_node_id"] != node_id
+                    or _plan_change_pending(connection,row["installation_id"])
+                    or current["status"] not in {"CONSENTED", "CONNECT_READY", "ACTIVE"}):
+                raise HTTPException(
+                    403, "Licencja, zgoda lub przypisanie MeshCentral zmieniły się w trakcie."
+                )
             connection.execute(
                 text(
                     """
@@ -851,39 +933,46 @@ def remote_session_end(
         if not row:
             raise HTTPException(404, "Nie znaleziono sesji.")
 
-        connection.execute(
-            text(
-                """
-                UPDATE guard.remote_sessions
-                SET
-                    status='ENDED',
-                    ended_at=COALESCE(ended_at,:now),
-                    last_activity_at=:now
-                WHERE id=:session_id
-                """
-            ),
-            {"now": now, "session_id": session_uuid},
-        )
-        _audit(
-            connection,
-            session_uuid,
-            "TECHNICIAN_ENDED",
-            "TECHNICIAN",
-            user_label,
-        )
-
+        # Never mark a remote session ENDED while its MeshCentral link
+        # might still be usable. On failure leave state retryable.
         public_id = row["mesh_public_id"]
         node_id = row["mesh_node_id"]
+        if public_id:
+            if not node_id:
+                raise HTTPException(502,
+                    "Brak MeshCentral ID. Nie można potwierdzić zakończenia sesji.")
+            try:
+                meshcentral.revoke_share(node_id, public_id)
+            except meshcentral.MeshCentralError as exc:
+                raise HTTPException(
+                    502,
+                    "Nie udało się unieważnić linku MeshCentral. "
+                    "Sesja nadal wymaga zakończenia; ponów operację."
+                ) from exc
 
-    if public_id and node_id:
-        try:
-            meshcentral.revoke_share(node_id, public_id)
-        except meshcentral.MeshCentralError as exc:
-            raise HTTPException(
-                502,
-                "Sesja została zakończona, ale nie potwierdzono "
-                f"unieważnienia linku MeshCentral: {exc}",
-            ) from exc
+        if row["status"] != "ENDED" or public_id:
+            connection.execute(
+                text(
+                    """
+                    UPDATE guard.remote_sessions
+                    SET
+                        status='ENDED',
+                        ended_at=COALESCE(ended_at,:now),
+                        last_activity_at=:now,
+                        mesh_public_id=NULL,
+                        mesh_share_expires_at=NULL
+                    WHERE id=:session_id
+                    """
+                ),
+                {"now": now, "session_id": session_uuid},
+            )
+            _audit(
+                connection,
+                session_uuid,
+                "TECHNICIAN_ENDED",
+                "TECHNICIAN",
+                user_label,
+            )
 
     return {"status": "ok"}
 
@@ -902,13 +991,23 @@ def bind_mesh_node(
         )
 
     with engine.begin() as connection:
+        # A different Mesh node cannot replace the one belonging to an
+        # existing public share. Otherwise later revoke_share() would target
+        # the wrong node. Same-ID rebind remains an idempotent no-op.
         changed = connection.execute(
             text(
                 """
-                UPDATE guard.installations
+                UPDATE guard.installations AS gi
                 SET mesh_node_id=:node_id,updated_at=now()
-                WHERE installation_external_id=:installation_id
-                  AND is_current=TRUE
+                WHERE gi.installation_external_id=:installation_id
+                  AND gi.is_current=TRUE
+                  AND (
+                    gi.mesh_node_id=:node_id OR NOT EXISTS (
+                        SELECT 1 FROM guard.remote_sessions rs
+                        WHERE rs.installation_id=gi.id
+                          AND rs.mesh_public_id IS NOT NULL
+                    )
+                  )
                 """
             ),
             {
@@ -916,10 +1015,22 @@ def bind_mesh_node(
                 "installation_id": body.installationId,
             },
         ).rowcount
+        if not changed:
+            exists = connection.execute(
+                text(
+                    """
+                    SELECT id FROM guard.installations
+                    WHERE installation_external_id=:id AND is_current=TRUE
+                    """
+                ),
+                {"id": body.installationId},
+            ).first()
+            if exists:
+                raise HTTPException(
+                    409, "Najpierw zakończ aktywne udostępnienie MeshCentral."
+                )
+            raise HTTPException(
+                404, "Nie znaleziono bieżącej instalacji Multi-Guard."
+            )
 
-    if not changed:
-        raise HTTPException(
-            404,
-            "Nie znaleziono bieżącej instalacji Multi-Guard.",
-        )
     return {"status": "ok", "meshNodeId": node_id}

@@ -41,6 +41,8 @@ MAX_BYTES=1024*1024
 OWNER_FILES=frozenset({
     "embedded-multiguard/app/routers/multiguard_license.py",
     "embedded-multiguard/app/routers/multiguard_runtime.py",
+    "embedded-multiguard/app/routers/multiguard_remote.py",
+    "embedded-multiguard/app/routers/multiguard_meshcentral.py",
     "embedded-multiguard/app/routers/multiguard_service_panel.py",
     "embedded-multiguard/app/routers/multiguard_panel_theme.py",
     "embedded-multiguard/app/routers/multiguard_panel_settings.py",

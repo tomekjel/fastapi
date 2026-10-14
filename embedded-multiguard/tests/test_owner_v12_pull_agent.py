@@ -106,6 +106,21 @@ class AgentTests(unittest.TestCase):
                 agent.poll(self.fetch,self.runner)
             self.assertEqual(self.runner_calls,[])
 
+    def test_owner_remote_modules_allowed_for_controlled_web_rollout(self):
+        self.assertIn("embedded-multiguard/app/routers/multiguard_remote.py", agent.OWNER_FILES)
+        self.assertIn("embedded-multiguard/app/routers/multiguard_meshcentral.py", agent.OWNER_FILES)
+        for name in (
+            "embedded-multiguard/app/routers/multiguard_remote.py",
+            "embedded-multiguard/app/routers/multiguard_meshcentral.py",
+        ):
+            with self.subTest(path=name):
+                self.manifest.update(sequence=1,target_sha=NEW)
+                self.compare_file=name
+                self.assertEqual(agent.poll(self.fetch,self.runner), "DEPLOYED")
+                self.assertEqual(len(self.runner_calls),1)
+                self.runner_calls.clear()
+                self.state.write_text(json.dumps(self.initial),encoding="utf-8")
+
     def test_exact_owner_deploy_trigger_is_allowed_but_no_other_trigger(self):
         """Regression: the first real rollout was blocked on this exact file."""
         self.manifest.update(sequence=1, target_sha=NEW)
