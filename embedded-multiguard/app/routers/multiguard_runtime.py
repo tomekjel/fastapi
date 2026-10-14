@@ -346,6 +346,29 @@ def heartbeat(body: HeartbeatBody):
         if body.serviceDeviceId and body.serviceDeviceId != row["service_device_id"]:
             raise HTTPException(409, "service_device_id nie pasuje do powiązania instalacji.")
 
+        # Client heartbeat is telemetry, NOT an OWNER licence mutation.
+        # For assigned installations the server's signed licence is the sole
+        # authority; stale Pro packets must never undo a Standard downgrade,
+        # revoke or shortened expiry. FOR SHARE serializes with OWNER writes.
+        entitlement = connection.execute(text("""
+            SELECT plan_code,lifecycle,valid_until,accepted_at,keygate_license_id
+            FROM guard.license_links WHERE installation_id=:installation_id
+            FOR SHARE
+        """), {"installation_id":body.installationId}).mappings().first()
+        if entitlement:
+            plan = ("PRO" if entitlement["plan_code"]=="multi_guard_pro"
+                    else "STANDARD")
+            state = entitlement["lifecycle"]
+            until = entitlement["valid_until"]
+            if state=="ACTIVE" and until and until<=now:
+                state="EXPIRED"
+            license_id = entitlement["keygate_license_id"]
+            accepted_at = entitlement["accepted_at"]
+        else:
+            state = body.lifecycle
+            until = body.validUntil
+            license_id = body.licenseId
+            accepted_at = body.acceptedAt
         previous_lifecycle = row["lifecycle"]
 
         # A new authenticated heartbeat is explicit evidence the agent works
@@ -376,10 +399,10 @@ def heartbeat(body: HeartbeatBody):
             {
                 "app_version": body.appVersion,
                 "plan_code": plan,
-                "license_id": body.licenseId,
-                "lifecycle": body.lifecycle,
-                "accepted_at": body.acceptedAt,
-                "valid_until": body.validUntil,
+                "license_id": license_id,
+                "lifecycle": state,
+                "accepted_at": accepted_at,
+                "valid_until": until,
                 "health_level": health,
                 "now": now,
                 "id": row["id"],
@@ -452,7 +475,7 @@ def heartbeat(body: HeartbeatBody):
             },
         )
 
-        if previous_lifecycle != "ACTIVE" and body.lifecycle == "ACTIVE":
+        if previous_lifecycle != "ACTIVE" and state == "ACTIVE":
             connection.execute(
                 text(
                     """
@@ -473,7 +496,7 @@ def heartbeat(body: HeartbeatBody):
                 {
                     "device_id": row["service_device_id"],
                     "installation_id": row["id"],
-                    "dedup_key": f"activation:{row['id']}:{body.validUntil}",
+                    "dedup_key": f"activation:{row['id']}:{until}",
                     "payload": _json({"source": "heartbeat"}),
                 },
             )

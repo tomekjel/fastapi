@@ -957,6 +957,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         assert c.post(plan_url,auth=auth,data=swap).status_code==502
         assert 'id="license-plan-pending"' in get(manage_url).text
         assert license._link_by_installation(direct_id)['plan_code']=='multi_guard_pro'
+        assert c.post('/v1/multi-guard/refresh',json=refresh_fields).status_code==409
         license._keygate_change_plan=plan_swap
         ensure(c.post(plan_url,auth=auth,data=swap,
                       follow_redirects=False).status_code,303,'Resume KeyGate plan')
@@ -968,6 +969,31 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         assert after_plan['valid_until']==before_plan['valid_until']
         assert after_plan['valid_from']==before_plan['valid_from']
         assert after_plan['license_key_hash']==before_plan['license_key_hash']
+        # Old PRO agents must not overwrite server-authoritative STANDARD on
+        # heartbeat before they download their fresh signed licence.
+        stale_packet={
+            'requestId':str(uuid.uuid4()),'nonce':'ci-plan-old-pro',
+            'sentAt':'2026-10-14T10:00:00Z',
+            'installationId':str(direct_id),'deviceId':direct_device,
+            'installationCredential':refresh_fields['installationCredential'],
+            'appVersion':'0.3.40','planCode':'PRO','licenseId':'wrong-client-lic',
+            'lifecycle':'ACTIVE','validUntil':'2099-01-01T00:00:00Z',
+            'healthLevel':'GREEN',
+            'defender':{'available':True},
+            'browserShield':{},
+            'hardware':{}
+        }
+        ensure(c.post('/multiguard/agent/heartbeat',json=stale_packet).status_code,
+               200,'Stale PRO heartbeat accepted as telemetry only')
+        with engine.connect() as db:
+            actual=db.execute(text("""
+                SELECT plan_code,lifecycle,valid_until,license_id
+                FROM guard.installations WHERE installation_external_id=:id
+            """),{'id':direct_id}).mappings().one()
+        assert actual['plan_code']=='STANDARD'
+        assert actual['lifecycle']=='ACTIVE'
+        assert actual['valid_until']==before_plan['valid_until']
+        assert actual['license_id']==before_plan['keygate_license_id']
         with engine.connect() as db:
             assert db.execute(text("""
                 SELECT plan_code FROM guard.installations
