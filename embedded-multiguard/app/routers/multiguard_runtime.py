@@ -421,7 +421,7 @@ def heartbeat(body: HeartbeatBody):
         )
 
         raw_compact = body.model_dump(
-            exclude={"installationCredential"}
+            mode="json", exclude={"installationCredential"}
         )
         connection.execute(
             text(
