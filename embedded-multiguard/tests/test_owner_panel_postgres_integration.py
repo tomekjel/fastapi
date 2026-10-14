@@ -915,6 +915,85 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         (output/'license-management.html').write_text(manage_page.text,encoding='utf-8')
     print('PASS: OWNER shortening, stale forms, duplicate submits, KeyGate outage rollback, history and installation expiry mirror.')
 
+    # OWNER revocation is real KeyGate revoke+GET verification, not merely
+    # deactivation nor a local status toggle. The fixture keeps the API fake.
+    revoked_link=license._link_by_installation(direct_id)
+    revoke_url=manage_url+'/revoke'
+    assert 'id="license-revocation"' in get(manage_url).text
+    initial_end=revoked_link['valid_until']
+    revoke_form={"operation_id":str(uuid.uuid4()),
+                 "expected_end":license._iso(initial_end),
+                 "reason":"CI: cofniecie na zyczenie klienta <script>unsafe</script>",
+                 "confirmed":"yes","csrf_token":license._workshop_csrf()}
+    assert c.post(revoke_url,data=revoke_form).status_code==401
+    assert c.post(revoke_url,auth=auth,
+                  data={**revoke_form,"csrf_token":"invalid"}).status_code==403
+    assert c.post(revoke_url,auth=auth,
+                  data={**revoke_form,"confirmed":""}).status_code==400
+    assert c.post(revoke_url,auth=auth,
+                  data={**revoke_form,"expected_end":
+                        license._iso(initial_end-timedelta(days=1))}).status_code==409
+    from fastapi import HTTPException as CI_HTTPException
+    real_get=license._keygate_license
+    real_revoke=getattr(license,"_keygate_revoke")
+    remote_status={"value":"active","post_calls":0}
+    def fake_remote_get(license_id):
+        assert license_id=="fake-direct-ci"
+        return {"status":remote_status["value"]}
+    def lost_keygate_response(license_id):
+        assert license_id=="fake-direct-ci"
+        remote_status["post_calls"]+=1
+        remote_status["value"]="revoked"
+        raise CI_HTTPException(502,"CI: response lost after successful revoke")
+    def no_double_post(license_id):
+        raise AssertionError("A verified revoked license must not be revoked twice")
+    license._keygate_license=fake_remote_get
+    license._keygate_revoke=lost_keygate_response
+    try:
+        assert c.post(revoke_url,auth=auth,data=revoke_form).status_code==502
+        assert license._link_by_installation(direct_id)['lifecycle']=="ACTIVE"
+        with engine.connect() as db:
+            assert db.execute(text("""
+                SELECT count(*) FROM guard.license_revocations
+                WHERE license_link_id=:id
+            """),{"id":revoked_link['id']}).scalar_one()==0
+        license._keygate_revoke=no_double_post
+        success=c.post(revoke_url,auth=auth,data=revoke_form,follow_redirects=False)
+        ensure(success.status_code,303,"Revoke verified against KeyGate")
+        ensure(c.post(revoke_url,auth=auth,data=revoke_form,
+                      follow_redirects=False).status_code,303,
+               "Revocation duplicate submission")
+        assert remote_status["post_calls"]==1
+        assert c.post(revoke_url,auth=auth,data={
+            **revoke_form,"reason":"different reason"
+        }).status_code==409
+    finally:
+        license._keygate_revoke=real_revoke
+        license._keygate_license=real_get
+    revoked_state=license._link_by_installation(direct_id)
+    assert revoked_state["lifecycle"]=="REVOKED"
+    assert revoked_state["valid_from"]==revoked_link["valid_from"]
+    assert revoked_state["accepted_documents"]==revoked_link["accepted_documents"]
+    with engine.connect() as db:
+        state=db.execute(text("""
+            SELECT lifecycle FROM guard.installations
+            WHERE installation_external_id=:id
+        """),{"id":direct_id}).scalar_one()
+        audit=db.execute(text("""
+            SELECT count(*) FROM guard.license_revocations
+            WHERE license_link_id=:id
+        """),{"id":revoked_link["id"]}).scalar_one()
+    assert state=="REVOKED" and audit==1
+    revocation_page=get(manage_url)
+    assert "Cofnięcie" in revocation_page.text
+    assert "&lt;script&gt;unsafe&lt;/script&gt;" in revocation_page.text
+    assert 'id="license-revocation"' not in revocation_page.text
+    assert c.post(revoke_url,auth=auth,data={
+        **revoke_form,"operation_id":str(uuid.uuid4())
+    }).status_code==409
+    print("PASS: OWNER KeyGate revocation verified, retry after lost response, 401/403/409, single audit and signed state mirror.")
+
+
 
     # Gate future deployment on read-only compatibility with the historical
     # Multi-Servis schema. It must neither mutate nor fetch customer records.

@@ -403,6 +403,18 @@ def _keygate_set_valid_until(license_id: str, valid_until: datetime) -> None:
     )
 
 
+
+def _keygate_revoke(license_id: str) -> None:
+    """Server-side licence revocation; freeing a device alone is not revocation."""
+    _keygate_request(
+        "POST",
+        "/api/v1/admin/licenses/"
+        + urllib.parse.quote(license_id, safe="")
+        + "/revoke",
+        admin=True,
+    )
+
+
 def _keygate_deactivate(license_key: str, device_id: str) -> None:
     _keygate_request(
         "POST",
@@ -533,6 +545,18 @@ CREATE TABLE IF NOT EXISTS guard.license_shortening (
 );
 CREATE INDEX IF NOT EXISTS idx_guard_license_shortening_license
     ON guard.license_shortening(license_link_id,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS guard.license_revocations (
+    id UUID PRIMARY KEY,
+    license_link_id UUID NOT NULL REFERENCES guard.license_links(id) ON DELETE RESTRICT,
+    previous_valid_until TIMESTAMPTZ,
+    reason TEXT NOT NULL CHECK (length(reason) BETWEEN 3 AND 1000),
+    source TEXT NOT NULL DEFAULT 'WEB' CHECK (source='WEB'),
+    keygate_verified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guard_license_revocations_license
+    ON guard.license_revocations(license_link_id,created_at DESC);
 
 CREATE TABLE IF NOT EXISTS guard.license_extensions (
     id UUID PRIMARY KEY,
@@ -3778,6 +3802,60 @@ def _shorten_owner_license(link_id: uuid.UUID, operation_id: uuid.UUID,
                "new": new_end, "reason": reason})
 
 
+
+def _revoke_owner_license(link_id: uuid.UUID, operation_id: uuid.UUID,
+                          expected_end: datetime | None, reason: str) -> None:
+    """Revoke in KeyGate, verify it there, then update the local signed state.
+
+    An uncertain remote response leaves SQL untouched. A retry first reads
+    KeyGate, so a completed external revoke can be reconciled without calling
+    the irreversible endpoint twice. The row lock serializes OWNER mutations.
+    """
+    reason = reason.strip()
+    if not 3 <= len(reason) <= 1000:
+        raise HTTPException(400, "Podaj powód cofnięcia (3–1000 znaków).")
+    _ensure_schema()
+    with engine.begin() as con:
+        row = con.execute(text(
+            "SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE"
+        ), {"id": link_id}).mappings().first()
+        if not row:
+            raise HTTPException(404, "Nie znaleziono licencji.")
+        link = _normalize_link(dict(row))
+        previous = con.execute(text("""
+            SELECT license_link_id,previous_valid_until,reason
+            FROM guard.license_revocations WHERE id=:op
+        """), {"op": operation_id}).mappings().first()
+        if previous:
+            if (previous["license_link_id"] != link_id
+                    or previous["previous_valid_until"] != expected_end
+                    or previous["reason"] != reason):
+                raise HTTPException(409, "Identyfikator operacji został już wykorzystany.")
+            return
+        if link["lifecycle"] != "ACTIVE":
+            raise HTTPException(409, "Cofnąć można wyłącznie aktywną licencję klienta.")
+        if link.get("valid_until") != expected_end:
+            raise HTTPException(409, "Stan licencji uległ zmianie. Odśwież formularz.")
+        remote = _keygate_license(link["keygate_license_id"])
+        if str(remote.get("status", "")).strip().lower() != "revoked":
+            _keygate_revoke(link["keygate_license_id"])
+            remote = _keygate_license(link["keygate_license_id"])
+        if str(remote.get("status", "")).strip().lower() != "revoked":
+            raise HTTPException(502, "KeyGate nie potwierdził cofnięcia licencji.")
+        updated = con.execute(text("""
+            UPDATE guard.license_links
+            SET lifecycle='REVOKED',updated_at=now()
+            WHERE id=:id RETURNING *
+        """), {"id": link_id}).mappings().one()
+        _update_installation_mirror(con, _normalize_link(dict(updated)))
+        con.execute(text("""
+            INSERT INTO guard.license_revocations
+                (id,license_link_id,previous_valid_until,reason)
+            VALUES (:op,:id,:end,:reason)
+        """), {"op": operation_id, "id": link_id,
+               "end": expected_end, "reason": reason})
+
+
 @router.get("/multiguard/panel/license/manage/{link_id}", response_class=HTMLResponse)
 def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
     from zoneinfo import ZoneInfo
@@ -3794,6 +3872,9 @@ def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
             SELECT created_at,previous_valid_until,new_valid_until,
                    'Potwierdzono otrzymanie płatności (' || source || ')','Przedłużenie'
             FROM guard.license_extensions WHERE license_link_id=:id
+            UNION ALL
+            SELECT created_at,previous_valid_until,NULL::timestamptz,
+                   reason,'Cofnięcie' FROM guard.license_revocations WHERE license_link_id=:id
             ORDER BY created_at DESC LIMIT 100
         """), {"id": link_id}).mappings().all()
     link = _normalize_link(dict(row))
@@ -3825,6 +3906,21 @@ def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
             <label>Powód skrócenia<input name="reason" minlength="3" maxlength="1000" required></label>
             <label class="owner-license-confirm-label"><input type="checkbox" name="confirmed" value="yes" required>Potwierdzam skrócenie licencji</label>
             <button type="submit">ZAPISZ SKRÓCENIE</button>
+          </form></details>'''
+        form += f'''<details id="license-revocation">
+          <summary>Cofnij licencję klienta</summary>
+          <p>Cofnięcie jest trwałe. KeyGate musi potwierdzić status „revoked”.
+             Komputer pozna ten stan przy kolejnym połączeniu z serwerem;
+             dostęp offline może pozostać do czasu wygaśnięcia ostatniego
+             podpisanego potwierdzenia. Zwrot pieniędzy nie jest wykonywany automatycznie.</p>
+          <form method="post" action="/multiguard/panel/license/manage/{link_id}/revoke">
+            <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+            <input type="hidden" name="operation_id" value="{uuid.uuid4()}">
+            <input type="hidden" name="expected_end" value="{_panel_escape(_iso(end))}">
+            <label>Powód cofnięcia<input name="reason" minlength="3" maxlength="1000" required></label>
+            <label class="owner-license-confirm-label"><input type="checkbox"
+              name="confirmed" value="yes" required>Potwierdzam nieodwracalne cofnięcie licencji</label>
+            <button type="submit">COFNIJ LICENCJĘ</button>
           </form></details>'''
     return HTMLResponse(_panel_html(f'''<section class="card">
       <a href="/multiguard/panel/licenses">← Licencje</a>
@@ -3858,3 +3954,21 @@ def panel_shorten_license(link_id: uuid.UUID, operation_id: uuid.UUID = Form(...
         raise HTTPException(400, "Nieprawidłowa data.")
     _shorten_owner_license(link_id, operation_id, _license_operation_date(expected_end), new_end, reason)
     return RedirectResponse(f"/multiguard/panel/license/manage/{link_id}", status_code=303)
+
+
+@router.post("/multiguard/panel/license/manage/{link_id}/revoke")
+def panel_revoke_license(link_id: uuid.UUID, operation_id: uuid.UUID = Form(...),
+                         expected_end: str = Form(...), reason: str = Form(...),
+                         confirmed: str = Form(""), csrf_token: str = Form(...),
+                         _: None = Depends(_panel_auth)):
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowy formularz.")
+    if confirmed != "yes":
+        raise HTTPException(400, "Potwierdź cofnięcie licencji.")
+    _revoke_owner_license(link_id, operation_id,
+                          _license_operation_date(expected_end), reason)
+    return RedirectResponse(f"/multiguard/panel/license/manage/{link_id}",
+                            status_code=303,
+                            headers={"Cache-Control": "private, no-store"})
