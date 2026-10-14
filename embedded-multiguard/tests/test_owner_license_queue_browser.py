@@ -83,6 +83,10 @@ with sync_playwright() as p:
             el.textContent = original;
             return wraps;
         }"""), "Long reception number escapes the responsive heading"
+        percent = page.locator('.owner-license-percent')
+        assert percent.count() == 1
+        assert '%' in percent.inner_text()
+        assert page.locator('input[name="paid_amount"]').count() == 0
         assert page.get_by_text('Historia zmian okresu', exact=True).count()==1
         page.screenshot(path=str(folder / f'license-management-{width}.png'),full_page=True)
         page.goto("https://owner.test/multiguard/panel/dashboard")

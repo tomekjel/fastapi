@@ -4089,6 +4089,18 @@ def _owner_change_plan(link_id: uuid.UUID, operation_id: uuid.UUID,
         """),{"id":operation_id})
 
 
+
+def _owner_remaining_percentage(valid_from: datetime | None,
+                                valid_until: datetime | None,
+                                as_of: datetime | None) -> float | None:
+    """Fraction of the licence TIME left, never a financial refund amount."""
+    if not valid_from or not valid_until or not as_of or valid_until <= valid_from:
+        return None
+    total_seconds=(valid_until-valid_from).total_seconds()
+    remaining_seconds=(valid_until-as_of).total_seconds()
+    return round(max(0.0,min(100.0,100.0*remaining_seconds/total_seconds)),1)
+
+
 @router.get("/multiguard/panel/license/manage/{link_id}", response_class=HTMLResponse)
 def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
     from zoneinfo import ZoneInfo
@@ -4101,6 +4113,12 @@ def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
         pending_plan = con.execute(text("""
             SELECT * FROM guard.license_plan_changes
             WHERE license_link_id=:id AND status='PENDING'
+        """), {"id":link_id}).mappings().first()
+        revocation = con.execute(text("""
+            SELECT created_at,previous_valid_until
+            FROM guard.license_revocations
+            WHERE license_link_id=:id
+            ORDER BY created_at DESC LIMIT 1
         """), {"id":link_id}).mappings().first()
         history = con.execute(text("""
             SELECT created_at,previous_valid_until,new_valid_until,reason,'Skrócenie' AS action
@@ -4130,6 +4148,31 @@ def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
         f'<td>{_panel_escape(item["reason"])}</td></tr>' for item in history
     ) or '<tr><td colspan="5">Brak zmian okresu licencji.</td></tr>'
     end = link.get("valid_until")
+    percent_block = ""
+    reference_time = _utcnow()
+    reference_end = end
+    label = "Pozostało czasu licencji"
+    if link["lifecycle"] == "REVOKED":
+        if revocation:
+            reference_time = revocation["created_at"]
+            reference_end = revocation["previous_valid_until"]
+            label = "Pozostawało w chwili cofnięcia"
+        else:
+            reference_time = None
+    fraction = _owner_remaining_percentage(link.get("valid_from"),
+                                           reference_end,reference_time)
+    if fraction is not None:
+        percent_block = (
+            f'<p class="owner-license-percent"><strong>{label}: '
+            f'{str(f"{fraction:.1f}").replace(".", ",")}%</strong></p>'
+            '<p class="muted">Procent pozostałego czasu od aktywacji do końca '
+            'okresu licencji. Nie oznacza procentu ani kwoty zwrotu pieniędzy.</p>'
+        )
+    elif link["lifecycle"] == "REVOKED":
+        percent_block = (
+            '<p class="muted">Nie można wyliczyć udziału niewykorzystanego czasu '
+            'bez potwierdzonej daty cofnięcia i początku licencji.</p>'
+        )
     form = ''
     if pending_plan:
         target="PRO" if pending_plan["new_plan_code"]=="multi_guard_pro" else "STANDARD"
@@ -4202,6 +4245,7 @@ def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
       <h1 class="owner-license-number">Licencja {_panel_escape(link["reception_number"])}</h1>
       <p>{'Pro' if link['plan_code']=='multi_guard_pro' else 'Standard'} ·
       {_panel_escape(link['lifecycle'])} · ważna do {date(end)} (czas polski)</p>
+      {percent_block}
       {form}</section><section class="card"><h2>Historia zmian okresu</h2>
       <div class="table-wrap"><table><thead><tr><th>Data</th><th>Operacja</th>
       <th>Poprzedni termin</th><th>Nowy termin</th><th>Powód</th></tr></thead>

@@ -870,6 +870,18 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     manage_page=get(manage_url)
     ensure(manage_page.status_code,200,'Licence management')
     assert 'Przedłużenie' in manage_page.text
+    assert 'class="owner-license-percent"' in manage_page.text
+    assert 'Pozostało czasu licencji:' in manage_page.text
+    assert 'name="paid_amount"' not in manage_page.text
+    from datetime import datetime as _time, timezone as _utc
+    start=_time(2026,1,1,tzinfo=_utc.utc)
+    finish=_time(2026,1,11,tzinfo=_utc.utc)
+    assert license._owner_remaining_percentage(start,finish,start)==100.0
+    assert license._owner_remaining_percentage(start,finish,start+timedelta(days=5))==50.0
+    assert license._owner_remaining_percentage(start,finish,finish)==0.0
+    assert license._owner_remaining_percentage(start,finish,finish+timedelta(days=1))==0.0
+    assert license._owner_remaining_percentage(start,finish,start-timedelta(days=1))==100.0
+    assert license._owner_remaining_percentage(start,start,start) is None
     short_day=(license._utcnow()+timedelta(days=30)).astimezone(ZoneInfo('Europe/Warsaw')).date()
     short_form={'operation_id':str(uuid.uuid4()),
                 'expected_end':license._iso(current_link['valid_until']),
@@ -1084,6 +1096,8 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"id":revoked_link["id"]}).scalar_one()
     assert state=="REVOKED" and audit==1
     revocation_page=get(manage_url)
+    assert "Pozostawało w chwili cofnięcia:" in revocation_page.text
+    assert 'class="owner-license-percent"' in revocation_page.text
     assert "Cofnięcie" in revocation_page.text
     assert "&lt;script&gt;unsafe&lt;/script&gt;" in revocation_page.text
     assert 'id="license-revocation"' not in revocation_page.text
