@@ -278,6 +278,7 @@ must_have=[
 "/multiguard/agent/remote/poll",
 "/multiguard/agent/remote/decision",
 "/multiguard/agent/remote/end",
+"/multiguard/agent/workshop/mesh-enroll",
 "/multiguard/agent/workshop/remote/poll",
 "/multiguard/agent/workshop/remote/decision",
 "/multiguard/agent/workshop/remote/end",
