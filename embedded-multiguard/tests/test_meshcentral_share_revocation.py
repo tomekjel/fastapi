@@ -52,7 +52,11 @@ class MeshCentralRevocationTests(unittest.TestCase):
     def test_lost_response_reconciles_when_other_shares_exist(self):
         listing = (
             "----------\nIdentifier:   another-id\nType: Desktop\n"
+            "UserId: demo\nGuest Name: Operator\nUser Consent: Desktop Notify\n"
+            "URL: https://mesh.example/share/another\n"
             "----------\nIdentifier:   third-id\nType: Files\n"
+            "UserId: demo\nGuest Name: Operator\nUser Consent: Files Notify\n"
+            "URL: https://mesh.example/share/third\n"
         )
         with patch.object(meshcentral, "_base_command", return_value=["meshctrl"]), \
              patch.object(meshcentral, "_run",
@@ -60,7 +64,11 @@ class MeshCentralRevocationTests(unittest.TestCase):
             meshcentral.revoke_share("node/example/device", "old-id")
 
     def test_lost_response_does_not_close_if_link_still_listed(self):
-        listing = "----------\nIdentifier:   old-id\nType: Desktop\n"
+        listing = (
+            "----------\nIdentifier:   old-id\nType: Desktop\n"
+            "UserId: demo\nGuest Name: Operator\nUser Consent: Desktop Notify\n"
+            "URL: https://mesh.example/share/old\n"
+        )
         with patch.object(meshcentral, "_base_command", return_value=["meshctrl"]), \
              patch.object(meshcentral, "_run", side_effect=["NOT OK", listing]):
             with self.assertRaises(meshcentral.MeshCentralError):
@@ -72,6 +80,18 @@ class MeshCentralRevocationTests(unittest.TestCase):
             "----------\nInvalid entry",
             "----------\nIdentifier: other\n----------\nMissing entry",
             "No device sharing links for this device.\nUnexpected output",
+            # A final entry truncated after Identifier must never imply absence.
+            "----------\nIdentifier: another\nType: Desktop\n",
+            # All mandatory fields present, but the URL (the last line in
+            # upstream MeshCtrl's share output) is missing.
+            "----------\nIdentifier: another\nType: Desktop\n"
+            "UserId: demo\nGuest Name: Test\nUser Consent: Desktop Notify\n",
+            # A complete first entry followed by a truncated second entry
+            # must not be accepted as a complete server-side list.
+            "----------\nIdentifier: another\nType: Desktop\n"
+            "UserId: demo\nGuest Name: Test\nUser Consent: Desktop Notify\n"
+            "URL: https://mesh.example/share/another\n"
+            "----------\nIdentifier: old-id\nType: Desktop\n",
         )
         for listing in invalid:
             with self.subTest(listing=listing):

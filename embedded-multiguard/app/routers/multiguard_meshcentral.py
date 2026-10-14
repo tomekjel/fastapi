@@ -116,24 +116,34 @@ def create_share(
 
 
 def _share_absent_from_listing(node_id: str, public_id: str) -> bool:
-    """Reconcile an uncertain remove via MeshCtrl's authoritative share list.
+    """Trust absence only in a COMPLETE MeshCtrl DeviceSharing listing.
 
-    Upstream DeviceSharing shows one ten-dash separator and Identifier line
-    per link, or exactly "No device sharing links for this device.".
-    Unknown / partial output is not proof of removal.
+    Upstream prints one '----------' section per share, including required
+    Identifier/Type/UserId/Guest Name/User Consent and ending in URL.
+    A truncated final share must not be mistaken for proof of removal.
     """
     listing = _run(_base_command() + ["--id", node_id]).strip()
     if listing == "No device sharing links for this device.":
         return True
-    if not listing.startswith("----------"):
+    blocks = re.split(r"(?m)^----------[ \t]*\r?$", listing)
+    if len(blocks) < 2 or blocks[0].strip():
         raise MeshCentralError("Nieznany format listy udostępnień MeshCentral.")
-    ids = re.findall(
-        r"(?m)^----------\r?\nIdentifier:[ \t]*([^\s\r\n]+)[ \t]*$",
-        listing,
-    )
-    delimiters = re.findall(r"(?m)^----------\r?$", listing)
-    if not ids or len(ids) != len(delimiters):
-        raise MeshCentralError("Niekompletna lista udostępnień MeshCentral.")
+
+    ids = set()
+    required = ("Identifier:", "Type:", "UserId:", "Guest Name:", "User Consent:")
+    optional = ("Start Time:", "Expire Time:", "Duration:", "Recurring:")
+    for block in blocks[1:]:
+        lines = [line.strip() for line in block.strip().splitlines()]
+        if (len(lines) < 6
+                or any(not lines[i].startswith(key) for i, key in enumerate(required))
+                or not lines[-1].startswith("URL:")
+                or not lines[-1][len("URL:"):].strip()
+                or any(not line.startswith(optional) for line in lines[5:-1])):
+            raise MeshCentralError("Niekompletna lista udostępnień MeshCentral.")
+        share_id = lines[0][len("Identifier:"):].strip()
+        if not share_id or share_id in ids:
+            raise MeshCentralError("Nieprawidłowy identyfikator udostępnienia MeshCentral.")
+        ids.add(share_id)
     return public_id not in ids
 
 
