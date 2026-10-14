@@ -1273,6 +1273,17 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         with engine.connect() as db:
             assert db.execute(text('SELECT status FROM guard.remote_sessions WHERE id=:id'),{'id':sid}).scalar_one()=='ENDED'
 
+        # Keep the preceding negative entitlement test intact. A fresh
+        # consent-expiration test needs an ACTIVE licence: otherwise OWNER's
+        # correct 403 blocks creation before consent can expire.
+        ensure(c.post('/multiguard/panel/remote/request',auth=auth,
+                      data=remote_form,follow_redirects=False).status_code,403,
+               'Expired licence refuses new consent before expiry test')
+        with engine.begin() as db:
+            db.execute(text("""
+                UPDATE guard.installations SET lifecycle='ACTIVE'
+                WHERE id=:id AND lifecycle='EXPIRED'
+            """), {'id':install_b})
         # Both expiry decisions must commit EXPIRED with an audit event.
         ensure(c.post('/multiguard/panel/remote/request',auth=auth,
                       data=remote_form,follow_redirects=False).status_code,303,
