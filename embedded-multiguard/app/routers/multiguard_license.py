@@ -3523,7 +3523,7 @@ def panel_direct_extension(
             <option value="6">+6 miesięcy</option>
             <option value="12" selected>+12 miesięcy</option>
           </select></label>
-          <label><input type="checkbox" name="payment_confirmed" value="yes" required>
+          <label class="owner-license-confirm-label"><input type="checkbox" name="payment_confirmed" value="yes" required>
             Potwierdzam otrzymanie płatności</label>
           <button type="submit">POTWIERDŹ PRZEDŁUŻENIE</button>
         </form>
@@ -3609,7 +3609,7 @@ def panel_extend_license(
         <section class="card">
           <div class="eyebrow">MULTI-GUARD / PRZEDŁUŻENIE UPRAWNIEŃ KLIENTA</div>
           <h1>Przedłuż licencję</h1>
-          <p><strong>{name}</strong> · Multi-Guard {edition}</p>
+          <p><strong class="owner-license-number">{name}</strong> · Multi-Guard {edition}</p>
           <p>Aktualna data wygaśnięcia: <strong>{date_txt}</strong>.</p>
           <p>Nowy okres zostanie dodany do obecnej daty końcowej,
              nie do dnia płatności. Nie wymaga ponownej instalacji
@@ -3624,7 +3624,7 @@ def panel_extend_license(
                 <option value="12" selected>12 miesięcy</option>
               </select>
             </label>
-            <label><input type="checkbox" name="payment_confirmed" value="yes" required>
+            <label class="owner-license-confirm-label"><input type="checkbox" name="payment_confirmed" value="yes" required>
               Potwierdzam otrzymanie płatności i przedłużenie licencji</label>
             <button type="submit">POTWIERDŹ PRZEDŁUŻENIE</button>
           </form>
@@ -3769,12 +3769,12 @@ def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
             <input type="hidden" name="expected_end" value="{_panel_escape(_iso(end))}">
             <label>Nowy ostatni dzień ważności<input type="date" name="new_last_day" required></label>
             <label>Powód skrócenia<input name="reason" minlength="3" maxlength="1000" required></label>
-            <label><input type="checkbox" name="confirmed" value="yes" required>Potwierdzam skrócenie licencji</label>
+            <label class="owner-license-confirm-label"><input type="checkbox" name="confirmed" value="yes" required>Potwierdzam skrócenie licencji</label>
             <button type="submit">ZAPISZ SKRÓCENIE</button>
           </form></details>'''
     return HTMLResponse(_panel_html(f'''<section class="card">
       <a href="/multiguard/panel/licenses">← Licencje</a>
-      <h1>Licencja {_panel_escape(link["reception_number"])}</h1>
+      <h1 class="owner-license-number">Licencja {_panel_escape(link["reception_number"])}</h1>
       <p>{'Pro' if link['plan_code']=='multi_guard_pro' else 'Standard'} ·
       {_panel_escape(link['lifecycle'])} · ważna do {date(end)} (czas polski)</p>
       {form}</section><section class="card"><h2>Historia zmian okresu</h2>
