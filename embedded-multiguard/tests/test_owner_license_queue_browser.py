@@ -47,7 +47,22 @@ with sync_playwright() as p:
         page.goto('https://owner.test/multiguard/panel/license-management')
         page.locator('#license-shortening summary').click()
         assert page.locator('input[name="new_last_day"]').is_visible()
-        assert page.locator('input[name="confirmed"]').evaluate('(el)=>el.required')
+        confirmation = page.locator('input[name="confirmed"]')
+        assert confirmation.evaluate('(el)=>el.required')
+        assert confirmation.evaluate('(el)=>el.closest("label").classList.contains("owner-license-confirm-label")')
+        check_box = confirmation.bounding_box()
+        assert check_box and 12 <= check_box["width"] <= 24 and 12 <= check_box["height"] <= 24, check_box
+        page.locator('label.owner-license-confirm-label').click()
+        assert confirmation.is_checked(), "Clicking confirmation label must toggle checkbox"
+        heading = page.locator('h1.owner-license-number')
+        assert heading.count() == 1
+        assert heading.evaluate("""el => {
+            const original = el.textContent;
+            el.textContent = 'Licencja ' + 'A'.repeat(110);
+            const wraps = el.scrollWidth <= el.clientWidth + 1;
+            el.textContent = original;
+            return wraps;
+        }"""), "Long reception number escapes the responsive heading"
         assert page.get_by_text('Historia zmian okresu', exact=True).count()==1
         page.screenshot(path=str(folder / f'license-management-{width}.png'),full_page=True)
         page.goto("https://owner.test/multiguard/panel/dashboard")
