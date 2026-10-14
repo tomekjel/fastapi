@@ -635,7 +635,45 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     owner_modes=get("/multiguard/panel/service-mode")
     ensure(owner_modes.status_code,200,"OWNER central service management")
     assert 'data-owner-monitor-toggle' in owner_modes.text
+    assert 'class="owner-service-row"' in owner_modes.text
+    assert f'/multiguard/panel/workshop/{mode_direct}/edition' in owner_modes.text
     assert f'/multiguard/panel/workshop/{mode_direct}/disable' in owner_modes.text
+    # Existing service grant must have its own edition controls. Neither
+    # the KeyGate creation form nor the prior uncertain-create warning may
+    # masquerade as a Standard->Pro service edition change.
+    assigned_device=get(f"/multiguard/panel/pending/{mode_direct}")
+    assert 'ZMIEŃ WARIANT SERWISOWY STANDARD / PRO' in assigned_device.text
+    assert f'action="/multiguard/panel/pending/{mode_direct}/direct"' not in assigned_device.text
+    edition_url=f"/multiguard/panel/workshop/{mode_direct}/edition"
+    ensure(c.post(edition_url,auth=auth,data={
+        "edition":"STANDARD","csrf_token":"bad"}).status_code,403,"Service edition CSRF")
+    ensure(c.post(edition_url,auth=auth,data={
+        "edition":"PREMIUM","csrf_token":token}).status_code,400,"Service edition validation")
+    ensure(c.post(edition_url,auth=auth,data={
+        "edition":"STANDARD","csrf_token":token},follow_redirects=False).status_code,
+        303,"Switch indefinite service Pro to Standard without KeyGate")
+    std_lease=c.post("/v1/multi-guard/discovery/assignment",json={
+        "installationId":str(mode_direct),"deviceId":"ci-mode-direct-device",
+        "discoveryCredential":mode_secret})
+    assert std_lease.status_code==200
+    assert _json.loads(std_lease.json()["workshopLease"]["payload"])["planCode"]=="multi_guard"
+    ensure(c.post(edition_url,auth=auth,data={
+        "edition":"PRO","csrf_token":token},follow_redirects=False).status_code,
+        303,"Restore indefinite service Pro without new KeyGate license")
+    with engine.connect() as db:
+        service_state=db.execute(text("""
+            SELECT edition,monitoring_profile,enabled
+            FROM guard.workshop_grants WHERE installation_id=:id
+        """),{"id":mode_direct}).mappings().one()
+        service_audit=db.execute(text("""
+            SELECT count(*) FROM guard.workshop_grant_audit
+            WHERE installation_id=:id
+        """),{"id":mode_direct}).scalar_one()
+        keygate_links=db.execute(text("""
+            SELECT count(*) FROM guard.license_links WHERE installation_id=:id
+        """),{"id":mode_direct}).scalar_one()
+    assert service_state["edition"]=="PRO" and service_state["monitoring_profile"]=="OFF"
+    assert service_state["enabled"] and service_audit>=3 and keygate_links==0
     ensure(get('/multiguard/panel/service-mode',False).status_code,401,'Private service mode')
     # Granted discovery-only installations must be in Computers, once, above paid ones.
     service_inventory=get('/multiguard/panel/computers').text
