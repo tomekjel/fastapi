@@ -70,9 +70,23 @@ with tempfile.TemporaryDirectory(prefix="owner-license-contract-") as folder:
     path.write_text(original.replace(tag,tag+"\n    pass",1),encoding="utf-8")
     reject=run()
     assert reject.returncode!=0,(reject.stdout,reject.stderr)
-    assert "unrelated" in (reject.stderr+reject.stdout)
+    assert "reviewed OWNER backend blob changed" in (reject.stderr+reject.stdout)
     path.write_text(original,encoding="utf-8")
-    print("PASS: unrelated heartbeat mutation is rejected.")
+    print("PASS: modified heartbeat is rejected by immutable reviewed-module guard.")
+
+    # The only permitted refresh change is included in a pinned complete
+    # license router blob. Even a harmless-looking extra statement changes
+    # the reviewed artifact and must block before deployment.
+    path=new/"multiguard_license.py"
+    original=path.read_text(encoding="utf-8")
+    tag="def refresh(req: RefreshRequest):"
+    assert original.count(tag)==1
+    path.write_text(original.replace(tag,tag+"\n    pass",1),encoding="utf-8")
+    reject=run()
+    assert reject.returncode!=0,(reject.stdout,reject.stderr)
+    assert "reviewed OWNER backend blob changed" in (reject.stdout+reject.stderr)
+    path.write_text(original,encoding="utf-8")
+    print("PASS: unreviewed refresh mutation is rejected.")
 
     # A mutated request interface on an explicitly authorised licensing
     # handler must also be denied, not accidentally treated as compatible.
