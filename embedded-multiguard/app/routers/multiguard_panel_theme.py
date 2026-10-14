@@ -572,6 +572,12 @@ table th,table td {padding:8px 11px}
 }
 
 
+
+/* OWNER license actions: checkbox must not inherit full-width text field styling. */
+.owner-license-confirm-label {display:flex;align-items:flex-start;gap:11px;max-width:100%;line-height:1.45;cursor:pointer}
+.owner-license-confirm-label input[type="checkbox"] {appearance:auto;display:inline-block;flex:0 0 18px;width:18px;height:18px;min-width:18px;min-height:18px;padding:0;margin:2px 0 0;accent-color:#e5c077}
+.owner-license-number {overflow-wrap:anywhere;word-break:normal}
+
 .owner-inventory-table td {padding:10px 12px;vertical-align:middle;white-space:nowrap}
 .owner-inventory-table .owner-machine-display,.inventory-hardware {display:block;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .inventory-hardware {color:var(--muted);font-size:13px}
