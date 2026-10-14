@@ -40,7 +40,7 @@ class OwnerServiceVisualContract(unittest.TestCase):
         self.assertIn('data-owner-monitor-form', self.license)
         self.assertIn("if monitoring_enabled not in", self.license)
         self.assertIn('profile=profile if monitoring_enabled=="yes" else "OFF"', self.license)
-        self.assertIn('return RedirectResponse("/multiguard/panel#service-modes",status_code=303)', self.license)
+        self.assertIn('return RedirectResponse("/multiguard/panel/service-mode#service-modes",status_code=303)', self.license)
 
     def test_controls_remain_owner_only(self):
         self.assertIn('def owner_set_workshop_monitoring(', self.license)

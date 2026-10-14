@@ -606,10 +606,26 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     queue_html=get("/multiguard/panel/licenses").text
     assert f'/multiguard/panel/pending/{mode_direct}' not in queue_html
     assert f'/multiguard/panel/pending/{mode_order}' in queue_html
-    owner_modes=get("/multiguard/panel")
+    owner_modes=get("/multiguard/panel/service-mode")
     ensure(owner_modes.status_code,200,"OWNER central service management")
     assert 'data-owner-monitor-toggle' in owner_modes.text
     assert f'/multiguard/panel/workshop/{mode_direct}/disable' in owner_modes.text
+    ensure(get('/multiguard/panel/service-mode',False).status_code,401,'Private service mode')
+    # Granted discovery-only installations must be in Computers, once, above paid ones.
+    service_inventory=get('/multiguard/panel/computers').text
+    assert service_inventory.count(f'data-installation="{mode_direct}"')==1
+    assert service_inventory.index(f'data-installation="{mode_direct}"') < service_inventory.index(f'/multiguard/panel/device/{install_a}')
+    assert 'SERWIS · PRO' in service_inventory
+    assert f'data-installation="{mode_order}"' not in service_inventory
+    # Equal-class installations sort by registration, independent of health/priority.
+    with engine.begin() as db:
+        db.execute(text("UPDATE guard.installations SET created_at='2020-01-01' WHERE id=:id"),{'id':install_a})
+        db.execute(text("UPDATE guard.installations SET created_at='2025-01-01' WHERE id=:id"),{'id':install_b})
+    sorted_inventory=get('/multiguard/panel/computers').text
+    assert sorted_inventory.index(f'/multiguard/panel/device/{install_b}') < sorted_inventory.index(f'/multiguard/panel/device/{install_a}')
+    if os.environ.get('OWNER_TEST_HTML_DIR'):
+        (output/'service-mode.html').write_text(owner_modes.text,encoding='utf-8')
+        (output/'computers.html').write_text(sorted_inventory,encoding='utf-8')
 
     discovery={"installationId":str(mode_direct),
                "deviceId":"ci-mode-direct-device",
@@ -881,6 +897,61 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     print("PASS: month=October uses Warsaw handover day and excludes September/READY/November.")
     print("PASS: OWNER's financial sums, costs and trend are collapsed by default.")
 
+    # The browser endpoints reuse actual remote-session consent and audit logic.
+    # Only MeshCentral transport is replaced; never contact a real customer.
+    remote=importlib.import_module('app.routers.multiguard_remote')
+    remote._ensure_schema()
+    support_id=uuid.uuid4()
+    with engine.begin() as db:
+        db.execute(text("UPDATE guard.installations SET mesh_node_id='ci-node-123', lifecycle='ACTIVE', valid_until=now()+interval '1 day' WHERE id=:id"),{'id':install_b})
+        db.execute(text("""INSERT INTO guard.support_requests
+            (id,local_request_id,installation_id,service_device_id,subject,description,created_at)
+            VALUES (:id,:local,:install,:device,'CI zdalna pomoc','Synthetic only',now())"""),
+            {'id':support_id,'local':uuid.uuid4(),'install':install_b,'device':pc_b})
+    ensure(get('/multiguard/panel/remote',False).status_code,401,'Private remote page')
+    remote_page=get(f'/multiguard/panel/remote?selected={install_b}')
+    ensure(remote_page.status_code,200,'Remote workspace')
+    assert 'CI zdalna pomoc' in remote_page.text
+    ensure(get(f'/multiguard/panel/remote?selected={install_a}').status_code,404,'Standard excluded from remote workspace')
+    remote_csrf=license._workshop_csrf()
+    remote_form={'support_id':str(support_id),'csrf_token':remote_csrf}
+    ensure(c.post('/multiguard/panel/remote/request',data=remote_form).status_code,401,'Remote mutation OWNER')
+    ensure(c.post('/multiguard/panel/remote/request',auth=auth,data={**remote_form,'csrf_token':'bad'}).status_code,403,'Remote mutation CSRF')
+    ensure(c.post('/multiguard/panel/remote/request',auth=auth,data=remote_form,follow_redirects=False).status_code,303,'Request client consent')
+    with engine.connect() as db:
+        sid=db.execute(text('SELECT id FROM guard.remote_sessions WHERE support_request_id=:id'),{'id':support_id}).scalar_one()
+    connect=f'/multiguard/panel/remote/{sid}/connect'
+    ensure(c.post(connect,auth=auth,data={'csrf_token':remote_csrf}).status_code,409,'No desktop without client consent')
+    mesh_calls=[]
+    original_create=remote.meshcentral.create_share
+    original_revoke=remote.meshcentral.revoke_share
+    os.environ['MESH_CENTRAL_URL']='wss://mesh.example.test/control.ashx'
+    remote.meshcentral.create_share=lambda *args: (mesh_calls.append('create') or remote.meshcentral.MeshShare('ci-share','https://mesh.example.test/sharing?ci=1'))
+    remote.meshcentral.revoke_share=lambda *args: mesh_calls.append('revoke')
+    try:
+        with engine.begin() as db:
+            db.execute(text("UPDATE guard.remote_sessions SET status='CONSENTED',granted_capabilities='[\"desktop\"]'::jsonb WHERE id=:id"),{'id':sid})
+        desktop=c.post(connect,auth=auth,data={'csrf_token':remote_csrf})
+        ensure(desktop.status_code,200,'Consented remote desktop')
+        assert 'id="owner-remote-desktop"' in desktop.text
+        assert 'src="https://mesh.example.test/sharing?ci=1"' in desktop.text
+        assert desktop.headers['cache-control']=='private, no-store'
+        assert mesh_calls==['create']
+        with engine.begin() as db:
+            db.execute(text("UPDATE guard.installations SET lifecycle='EXPIRED' WHERE id=:id"),{'id':install_b})
+        ensure(c.post(connect,auth=auth,data={'csrf_token':remote_csrf}).status_code,403,'Expired licence cannot reconnect')
+        end=f'/multiguard/panel/remote/{sid}/end'
+        ensure(c.post(end,auth=auth,data={'csrf_token':'bad'}).status_code,403,'End requires CSRF')
+        ensure(c.post(end,auth=auth,data={'csrf_token':remote_csrf},follow_redirects=False).status_code,303,'Owner ends session')
+        assert mesh_calls==['create','revoke']
+        with engine.connect() as db:
+            assert db.execute(text('SELECT status FROM guard.remote_sessions WHERE id=:id'),{'id':sid}).scalar_one()=='ENDED'
+        if os.environ.get('OWNER_TEST_HTML_DIR'):
+            (output/'remote.html').write_text(remote_page.text,encoding='utf-8')
+    finally:
+        remote.meshcentral.create_share=original_create
+        remote.meshcentral.revoke_share=original_revoke
+    print('PASS: six-section OWNER work, service-first inventory, remote auth/CSRF/consent/expiry/end; MeshCentral transport mocked.')
     print("PASS: read-only owner-panel schema and media-root preflight.")
     print("PASS: PostgreSQL + actual FastAPI owner routes, private media, device links,")
     print("      CSRF forms, configurable status, audited inactive diagnostic renewals.")

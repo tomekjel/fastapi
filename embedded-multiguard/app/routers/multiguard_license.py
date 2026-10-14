@@ -1259,12 +1259,10 @@ def _panel_html(body: str) -> str:
     <nav aria-label="Sekcje panelu">
       <a href="/multiguard/panel/dashboard"><span class="nav-icon" aria-hidden="true">⌂</span>Pulpit</a>
       <a href="/multiguard/panel/computers"><span class="nav-icon" aria-hidden="true">▤</span>Komputery</a>
-      <a href="/multiguard/panel/service"><span class="nav-icon" aria-hidden="true">◇</span>Zlecenia serwisowe</a>
-      <a href="/multiguard/panel/statistics"><span class="nav-icon" aria-hidden="true">▥</span>Statystyki</a>
-      <a href="/multiguard/panel/telemetry"><span class="nav-icon" aria-hidden="true">⌁</span>Telemetria i błędy</a>
       <a href="/multiguard/panel/licenses"><span class="nav-icon" aria-hidden="true">▣</span>Licencje</a>
-      <a href="/multiguard/panel/versions"><span class="nav-icon" aria-hidden="true">≡</span>Historia wersji</a>
-      <a href="/multiguard/panel/settings"><span class="nav-icon" aria-hidden="true">⚙</span>Ustawienia</a>
+      <a href="/multiguard/panel/service-mode"><span class="nav-icon" aria-hidden="true">⌁</span>Tryb serwisowy</a>
+      <a href="/multiguard/panel/remote"><span class="nav-icon" aria-hidden="true">▥</span>Zdalna pomoc</a>
+      <a href="/multiguard/panel/service"><span class="nav-icon" aria-hidden="true">◇</span>Zlecenia</a>
     </nav>
   </aside>
   <div class="workspace-content">
@@ -1287,7 +1285,9 @@ def _panel_html(body: str) -> str:
     const chosen = target.pathname === path ||
       (target.pathname === '/multiguard/panel/computers' && path.startsWith('/multiguard/panel/device/')) ||
       (target.pathname === '/multiguard/panel/service' && path.startsWith('/multiguard/panel/service/')) ||
-      (target.pathname === '/multiguard/panel/telemetry' && path.startsWith('/multiguard/panel/telemetry/'));
+      (target.pathname === '/multiguard/panel/licenses' && (path === '/multiguard/panel' || path.startsWith('/multiguard/panel/pending/') || path.startsWith('/multiguard/panel/license/'))) ||
+      (target.pathname === '/multiguard/panel/service-mode' && (path.startsWith('/multiguard/panel/workshop/') || path.startsWith('/multiguard/panel/telemetry'))) ||
+      (target.pathname === '/multiguard/panel/service' && path === '/multiguard/panel/statistics');
     // Distinct sections, exactly one active navigation item.
     if (chosen) link.setAttribute('aria-current', 'page');
   }}
@@ -2479,7 +2479,7 @@ def assign_direct_license_web(
                 UPDATE guard.workshop_grants SET associated_reception_id=NULL,
                 updated_at=now() WHERE installation_id=:id
             """),{"id":installation_id})
-        target="/multiguard/panel#service-modes"
+        target="/multiguard/panel/service-mode#service-modes"
     else:
         if months not in {"3","6","12"}:
             raise HTTPException(400, "Wybierz okres 3, 6, 12 lub tryb serwisowy.")
@@ -2653,7 +2653,7 @@ def multiguard_panel_pending(
         + '. Monitorowanie rozszerzone: '
         + _panel_escape(grant.get("monitoring_profile") or "OFF")
         + '. Zmiany i wyłączenie wyłącznie w '
-        + '<a href="/multiguard/panel#service-modes">panelu właściciela</a>.</p>'
+        + '<a href="/multiguard/panel/service-mode#service-modes">panelu właściciela</a>.</p>'
         if grant and grant["enabled"] else ""
     )
     return _panel_html(
@@ -2756,7 +2756,7 @@ def multiguard_panel_pending_assign(
                 WHERE installation_id=:id
             """),{"rid":reception["id"],"id":iid})
         return RedirectResponse(
-            "/multiguard/panel#service-modes",status_code=303,
+            "/multiguard/panel/service-mode#service-modes",status_code=303,
             headers={"Cache-Control":"private, no-store"},
         )
     if months not in {"3","6","12"}:
@@ -2930,7 +2930,7 @@ def owner_workshop_reports(
         )
     return HTMLResponse(_panel_html(f"""
       <section class="card">
-        <a href="/multiguard/panel#service-modes">← Tryby serwisowe</a>
+        <a href="/multiguard/panel/service-mode#service-modes">← Tryby serwisowe</a>
         <h1>Historia raportów diagnostycznych</h1>
         <p>Instalacja {_panel_escape(installation_id)} ·
            edycja {_panel_escape(grant["edition"])} ·
@@ -2985,7 +2985,7 @@ def owner_set_workshop_monitoring(
                 "before":json.dumps({"monitoring_profile":grant["monitoring_profile"]}),
                 "after":json.dumps({"monitoring_profile":profile}),
             })
-    return RedirectResponse("/multiguard/panel#service-modes",status_code=303)
+    return RedirectResponse("/multiguard/panel/service-mode#service-modes",status_code=303)
 
 
 @router.post("/multiguard/panel/workshop/{installation_id}/disable")
@@ -3007,7 +3007,7 @@ def owner_disable_workshop(
     _set_workshop_grant(
         installation_id,grant["edition"],grant["release_channel"],False,
     )
-    return RedirectResponse("/multiguard/panel#service-modes",status_code=303)
+    return RedirectResponse("/multiguard/panel/service-mode#service-modes",status_code=303)
 
 
 @router.get("/multiguard/panel/service-orders/suggest")
@@ -3074,6 +3074,15 @@ def _owner_keygate_reconciliation_panel() -> str:
     )
 
 
+@router.get("/multiguard/panel/service-mode", response_class=HTMLResponse)
+def owner_service_mode_page(_: None = Depends(_panel_auth)):
+    return _panel_html(
+        '<section class="card"><h1>Tryb serwisowy</h1>'
+        '<a href="/multiguard/panel/telemetry">Raporty i błędy</a></section>'
+        + _owner_workshop_manager_panel()
+    )
+
+
 @router.get("/multiguard/panel", response_class=HTMLResponse)
 def multiguard_panel(
     _: None = Depends(_panel_auth),
@@ -3081,7 +3090,6 @@ def multiguard_panel(
     return _panel_html(
         f"""
         {_owner_keygate_reconciliation_panel()}
-        {_owner_workshop_manager_panel()}
         <section class="card" id="new-license">
           <div class="eyebrow">MULTI-SERVIS / AKTYWACJA PROGRAMU</div>
           <h2>Licencja klienta — ze zleceniem serwisowym</h2>

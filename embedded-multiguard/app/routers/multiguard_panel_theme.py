@@ -571,4 +571,23 @@ table th,table td {padding:8px 11px}
   .owner-overview-tile {min-height:115px}
 }
 
+
+.owner-inventory-table td {padding:10px 12px;vertical-align:middle;white-space:nowrap}
+.owner-inventory-table .owner-machine-display,.inventory-hardware {display:block;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inventory-hardware {color:var(--muted);font-size:13px}
+.owner-remote-layout {display:grid;grid-template-columns:minmax(240px,30%) minmax(0,1fr);gap:16px}
+.owner-remote-layout table {min-width:0;width:100%;table-layout:fixed}
+.owner-remote-layout td {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:10px 8px}
+.owner-remote-layout section:first-child td:first-child {width:44%}
+.owner-inventory-table {width:100%;min-width:1000px;table-layout:fixed}
+.owner-inventory-table th,.owner-inventory-table td {overflow:hidden;text-overflow:ellipsis}
+.owner-inventory-table th:nth-child(1) {width:11%}
+.owner-inventory-table th:nth-child(2) {width:24%}
+.owner-inventory-table th:nth-child(3) {width:13%}
+.owner-inventory-table th:nth-child(4) {width:14%}
+.owner-inventory-table th:nth-child(5) {width:17%}
+.owner-inventory-table th:nth-child(6) {width:7%}
+.owner-inventory-table th:nth-child(7) {width:14%}
+.owner-remote-frame {width:100%;height:65vh;border:0;background:#080e18}
+@media(max-width:800px) {.owner-remote-layout {grid-template-columns:1fr}}
 """

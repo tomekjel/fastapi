@@ -334,7 +334,7 @@ def service_orders(
     <section class="card panel-hero service-hero">
       <div class="eyebrow">MULTI-SERVIS / SERWIS WŁAŚCICIELA</div>
       <h1>Zlecenia serwisowe</h1>
-      <p>Najpierw sprawy wymagające pracy. Finanse zbiorcze są wyłącznie w zakładce Statystyki.</p>
+      <p>Najpierw sprawy wymagające pracy. Finanse zbiorcze są dostępne w <a href="/multiguard/panel/statistics">zestawieniu właściciela</a>.</p>
       <div class="metrics owner-kpis">{cards}</div>
     </section>
     <section class="card">

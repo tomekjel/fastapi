@@ -1321,6 +1321,8 @@ def multi_guard_panel_dashboard(
         <h1>Pulpit</h1>
         <p>Aktualny stan serwisu i Multi-Guard. Kliknij oczekujące instalacje, aby od razu przypisać licencję.</p>
         <div class="metrics">{metrics_html}</div>
+        <p class="muted"><a href="/multiguard/panel/settings">Ustawienia</a> ·
+          <a href="/multiguard/panel/versions">Historia wersji</a></p>
       </section>
     """)
 
@@ -1552,6 +1554,59 @@ def _owner_license_queue(queue_status: str = "WAITING") -> str:
     return pending_section + archive_section
 
 
+def _fetch_owner_inventory(limit, presence_filter, search, offset, silence_days):
+    """OWNER inventory includes granted discovery installations before first heartbeat.
+
+    The existing /devices API and its sorting remain unchanged.
+    """
+    with engine.connect() as con:
+        return con.execute(text("""
+            WITH identities AS (
+                SELECT installation_external_id AS external_id FROM guard.installations WHERE is_current=TRUE
+                UNION
+                SELECT installation_id FROM guard.workshop_grants WHERE enabled=TRUE
+            )
+            SELECT ids.external_id AS installation_external_id, gi.id AS installation_id,
+                COALESCE(w.enabled,FALSE) AS service_mode,
+                CASE WHEN w.enabled THEN w.edition ELSE gi.plan_code END AS plan_code,
+                gi.lifecycle, gi.health_level,
+                COALESCE(p.first_seen_at,gi.created_at,w.created_at) AS installed_at,
+                COALESCE(gi.last_seen_at,p.last_seen_at) AS last_seen_at,
+                au.reported_at AS uninstall_reported_at,
+                COALESCE(d.manufacturer,p.manufacturer) AS manufacturer,
+                COALESCE(d.model,p.model) AS model,
+                COALESCE(d.hostname,p.hostname) AS hostname,
+                COALESCE(d.serial_number,p.serial_number) AS serial_number,
+                labels.friendly_name, COALESCE(gi.app_version,p.app_version) AS app_version,
+                COALESCE(notes.priority,'NORMAL') AS owner_priority,
+                (SELECT count(*) FROM service.service_orders so
+                  WHERE so.device_id=gi.service_device_id) AS service_order_count
+            FROM identities ids
+            LEFT JOIN guard.installations gi ON gi.installation_external_id=ids.external_id AND gi.is_current=TRUE
+            LEFT JOIN guard.pending_installations p ON p.installation_id=ids.external_id
+            LEFT JOIN guard.workshop_grants w ON w.installation_id=ids.external_id
+            LEFT JOIN core.devices d ON d.id=gi.service_device_id
+            LEFT JOIN guard.agent_uninstalls au ON au.installation_id=gi.id
+            LEFT JOIN guard.owner_installation_labels labels ON labels.installation_external_id=ids.external_id
+            LEFT JOIN guard.owner_device_notes notes ON notes.installation_id=gi.id
+            WHERE (:presence='all' OR (:presence='removed' AND au.installation_id IS NOT NULL)
+                OR (:presence='silent' AND au.installation_id IS NULL
+                    AND (gi.lifecycle='ACTIVE' OR w.enabled=TRUE)
+                    AND (COALESCE(gi.last_seen_at,p.last_seen_at) IS NULL OR
+                         COALESCE(gi.last_seen_at,p.last_seen_at)<now()-:days*interval '1 day')))
+              AND (:empty OR concat_ws(' ',ids.external_id::text,replace(ids.external_id::text,'-',''),
+                    d.manufacturer,p.manufacturer,d.model,p.model,d.hostname,p.hostname,
+                    d.serial_number,p.serial_number,labels.friendly_name) ILIKE :q
+                    OR EXISTS (SELECT 1 FROM guard.license_links ll
+                      WHERE ll.installation_id=ids.external_id AND ll.reception_number ILIKE :q))
+            ORDER BY COALESCE(w.enabled,FALSE) DESC,
+                     COALESCE(p.first_seen_at,gi.created_at,w.created_at) DESC, ids.external_id
+            LIMIT :limit OFFSET :offset
+        """), {"presence":presence_filter,"days":silence_days,"empty":not search.strip(),
+               "q":"%"+search.strip().replace("%",r"\%").replace("_",r"\_")+"%",
+               "limit":limit,"offset":offset}).mappings().all()
+
+
 @router.get("/panel/computers", response_class=HTMLResponse)
 def multi_guard_panel_computers(
     presence: str = "all",
@@ -1566,7 +1621,7 @@ def multi_guard_panel_computers(
     _ensure_schema()
     config = owner_panel_config()
     page_size = config["inventory_page_size"]
-    device_results = _fetch_device_rows(
+    device_results = _fetch_owner_inventory(
         page_size + 1,
         presence_filter=presence,
         search=q,
@@ -1602,65 +1657,38 @@ def multi_guard_panel_computers(
 
     rows_html = []
     for row in devices:
+        iid = row['installation_external_id']
+        detail = (f"/multiguard/panel/device/{row['installation_id']}" if row['installation_id']
+                  else f"/multiguard/panel/pending/{iid}")
         presence_style, presence_label = _presence_indicator(
-            row["last_seen_at"], row["uninstall_reported_at"],
-            config["contact_recent_hours"], config["contact_delayed_days"],
-        )
-        health = str(row["health_level"] or "GREEN").upper()
-        health_class = {
-            "RED": "critical",
-            "ORANGE": "bad",
-            "YELLOW": "warn",
-            "GREEN": "good",
-        }.get(health, "muted")
-        plan = "PRO" if str(row["plan_code"]).upper() == "PRO" else "STANDARD"
-        owner_priority = str(row["owner_priority"] or "NORMAL")
-        owner_attention = (
-            '<br><span class="badge mg-red">PILNE — OBSERWUJ</span>'
-            if owner_priority=="URGENT" else
-            ('<br><span class="badge mg-gold">DO OBSERWACJI</span>'
-             if owner_priority=="WATCH" else "")
-        )
-        rows_html.append(
-            f"""
-            <tr>
-              <td class="mono">
-                <a href="/multiguard/panel/device/{row['installation_id']}">
-                  {_panel_h(_short_installation_id(row['installation_external_id']))}
-                </a>
-              </td>
-              <td>
-                <b class="owner-machine-display">{_panel_h(row['friendly_name'] or _device_label(row))}</b><br>
-                <span class="muted">{_panel_h(row['serial_number'] or row['hostname'] or '')}</span>{owner_attention}
-              </td>
-              <td><span class="badge {'mg-gold' if plan=='PRO' else 'mg-red'}">{_panel_h(plan)}</span><br><span class="muted">{_panel_h(_human_license_state(row['lifecycle']))}</span></td>
-              <td><span class="badge {health_class}">{_panel_h(health)}</span></td>
-              <td>{_panel_h(row['app_version'] or '—')}</td>
-              <td><span class="presence-label"><span class="presence-dot presence-{presence_style}" aria-hidden="true"></span>{_panel_h(presence_label)}</span></td>
-              <td><a class="strong-link" href="/multiguard/panel/device/{row['installation_id']}#service-history">{_panel_h(row['service_order_count'])} wpisów</a></td>
-              <td>{_panel_dt(row['last_seen_at'])}</td>
-              <td class="numbers">
-                ⚠ {_panel_h(row['warning_30d'])}
-                &nbsp; ! {_panel_h(row['important_30d'])}
-                &nbsp; ⛔ {_panel_h(row['critical_30d'])}
-                &nbsp; ERR {_panel_h(row['error_30d'])}
-              </td>
-              <td>{_panel_h(row['open_support'])}</td>
-            </tr>
-            """
-        )
-
+            row['last_seen_at'], row['uninstall_reported_at'],
+            config['contact_recent_hours'], config['contact_delayed_days'])
+        name = _panel_h(row['friendly_name'] or _device_label(row))
+        hardware = _panel_h(' · '.join(str(v) for v in
+            (row['manufacturer'],row['model'],row['serial_number']) if v))
+        entitlement = ('SERWIS · ' if row['service_mode'] else '') + str(row['plan_code'] or '—')
+        state = 'Bezterminowo' if row['service_mode'] else _human_license_state(row['lifecycle'])
+        rows_html.append(f"""<tr data-installation="{iid}">
+          <td><a href="{detail}">{_panel_h(_short_installation_id(iid))}</a></td>
+          <td><a class="owner-machine-display" href="{detail}#owner-name" title="Edytuj nazwę: {name}">{name} ✎</a>
+              <span class="inventory-hardware" title="{hardware}">{hardware}</span></td>
+          <td>{_panel_h(entitlement)}<span class="inventory-hardware">{_panel_h(state)}</span></td>
+          <td>{_panel_dt(row['installed_at'])}</td>
+          <td><span class="presence-dot presence-{presence_style}"></span>{_panel_h(presence_label)}
+              <span class="inventory-hardware">{_panel_dt(row['last_seen_at'])}</span></td>
+          <td>{_panel_h(row['app_version'] or '—')}</td>
+          <td><a href="{detail}">SZCZEGÓŁY · {_panel_h(row['service_order_count'])} napraw</a>
+              <span class="inventory-hardware">{_panel_h(row['health_level'] or 'Brak raportu')} · {_panel_h(row['owner_priority'])}</span></td>
+        </tr>""")
     if not rows_html:
-        rows_html.append(
-            '<tr><td colspan="10" class="muted">Brak zarejestrowanych instalacji Multi-Guard.</td></tr>'
-        )
+        rows_html.append('<tr><td colspan="7">Brak komputerów dla wybranych filtrów.</td></tr>')
 
     return _panel_html(
         f"""
         <section class="card panel-hero computers-hero">
           <div class="eyebrow">MULTI-SERVIS / KOMPUTERY KLIENTÓW</div>
           <h1>Komputery</h1>
-          <p>Samodzielny rejestr instalacji Multi-Guard, ich ostatniego kontaktu, stanu technicznego i historii serwisu.</p>
+          <p>Najpierw komputery z trybem serwisowym, następnie pozostałe — od najnowszej rejestracji instalacji.</p>
           <div class="inventory-headline">
             <span class="badge mg-blue">Lista i historia urządzeń</span>
             <span class="muted">Stan łączności pochodzi z ostatniego raportu agenta.</span>
@@ -1680,11 +1708,10 @@ def multi_guard_panel_computers(
           </div>
           {device_search_form}
           <div class="table-wrap">
-            <table>
+            <table class="owner-inventory-table">
               <thead>
                 <tr>
-                  <th>ID</th><th>Komputer</th><th>Licencja</th><th>Stan</th>
-                  <th>Wersja</th><th>Łączność</th><th>Historia serwisu</th><th>Ostatni kontakt</th><th>Zdarzenia 30 dni</th><th>Zgłoszenia</th>
+                  <th>ID</th><th>Komputer</th><th>Uprawnienia</th><th>Rejestracja instalacji</th><th>Kontakt</th><th>Wersja</th><th>Historia i stan</th>
                 </tr>
               </thead>
               <tbody>{''.join(rows_html)}</tbody>
@@ -2723,3 +2750,153 @@ def event_detail(
         "event_id": str(row["event_id"]),
         "service_device_id": str(row["service_device_id"]),
     }
+def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: str = ""):
+    """OWNER HTML over the existing consent-based remote session implementation."""
+    import time
+    from app.routers import multiguard_remote as remote
+    from app.routers.multiguard_panel_settings import _csrf_token
+    remote._ensure_schema()
+    token = _csrf_token(int(time.time() // 3600))
+    with engine.connect() as con:
+        machines = con.execute(text("""
+            SELECT gi.id,gi.installation_external_id,gi.mesh_node_id,gi.lifecycle,
+                   gi.valid_until,COALESCE(d.manufacturer,p.manufacturer) AS manufacturer,
+                   COALESCE(d.model,p.model) AS model,labels.friendly_name
+            FROM guard.installations gi
+            LEFT JOIN core.devices d ON d.id=gi.service_device_id
+            LEFT JOIN guard.pending_installations p ON p.installation_id=gi.installation_external_id
+            LEFT JOIN guard.owner_installation_labels labels ON labels.installation_external_id=gi.installation_external_id
+            WHERE gi.is_current=TRUE AND gi.plan_code='PRO'
+              AND (:empty OR replace(gi.installation_external_id::text,'-','') ILIKE :q)
+            ORDER BY gi.created_at DESC,gi.id LIMIT 250
+        """), {"empty":not q,"q":"%"+q.replace('-','').replace('%',r'\%').replace('_',r'\_')+"%"}).mappings().all()
+        chosen = None
+        if selected:
+            chosen = con.execute(text("""
+                SELECT id,installation_external_id,mesh_node_id,lifecycle,valid_until
+                FROM guard.installations WHERE id=:id AND plan_code='PRO' AND is_current=TRUE
+            """),{"id":selected}).mappings().first()
+            if not chosen:
+                raise HTTPException(404,"Nie znaleziono bieżącego komputera Pro.")
+        sessions = con.execute(text("""
+            SELECT id,status,requested_at,ended_at FROM guard.remote_sessions
+            WHERE installation_id=:id ORDER BY requested_at DESC LIMIT 40
+        """),{"id":selected}).mappings().all() if chosen else []
+        requests = con.execute(text("""
+            SELECT id,subject FROM guard.support_requests
+            WHERE installation_id=:id AND status NOT IN ('RESOLVED','CANCELLED')
+            ORDER BY created_at DESC LIMIT 20
+        """),{"id":selected}).mappings().all() if chosen else []
+    links = ''.join(
+        f'<tr><td><a href="/multiguard/panel/remote?selected={m["id"]}">'
+        f'{_panel_h(_short_installation_id(m["installation_external_id"]))}</a></td>'
+        f'<td title="{_panel_h(m["friendly_name"] or "")}">{_panel_h(" ".join(str(v) for v in (m["manufacturer"],m["model"]) if v) or m["friendly_name"] or "Komputer")}</td></tr>'
+        for m in machines)
+    def action(path, label, fields=''):
+        return f'<form method="post" action="{path}"><input type="hidden" name="csrf_token" value="{token}">{fields}<button type="submit">{label}</button></form>'
+    controls = ''
+    if chosen:
+        controls = '<h2>'+_panel_h(_short_installation_id(chosen['installation_external_id']))+'</h2>'
+        if not chosen['mesh_node_id']:
+            controls += '<p>Komputer nie ma jeszcze skonfigurowanego połączenia zdalnego.</p>'
+        elif chosen['lifecycle'] != 'ACTIVE' or (chosen['valid_until'] and chosen['valid_until'] <= datetime.now(timezone.utc)):
+            controls += '<p>Uruchomienie sesji wymaga aktywnej licencji Pro.</p>'
+        else:
+            for request in requests:
+                controls += action('/multiguard/panel/remote/request','POPROŚ O ZGODĘ NA SESJĘ',
+                    f'<input type="hidden" name="support_id" value="{request["id"]}"><span>{_panel_h(request["subject"])}</span>')
+            if not requests:
+                controls += '<p>Brak otwartego zgłoszenia pomocy z tego komputera.</p>'
+    else:
+        controls = '<p>Wybierz komputer z listy.</p>'
+    history = []
+    statuses={'REQUESTED':'Oczekuje na zgodę','CONSENTED':'Zgoda udzielona','CONNECT_READY':'Gotowa do połączenia',
+              'ACTIVE':'Aktywna','DENIED':'Odmowa','ENDED':'Zakończona','EXPIRED':'Wygasła','ERROR':'Błąd'}
+    for session in sessions:
+        buttons = ''
+        if session['status'] in {'CONSENTED','CONNECT_READY','ACTIVE'}:
+            buttons += action(f'/multiguard/panel/remote/{session["id"]}/connect','OTWÓRZ PULPIT')
+        if session['status'] in {'REQUESTED','CONSENTED','CONNECT_READY','ACTIVE'}:
+            buttons += action(f'/multiguard/panel/remote/{session["id"]}/end','ZAKOŃCZ SESJĘ')
+        history.append(f'<tr><td>{_panel_dt(session["requested_at"])}</td><td>{statuses[session["status"]]}</td><td>{buttons}</td></tr>')
+    desktop = ('<iframe id="owner-remote-desktop" class="owner-remote-frame" title="Zdalny pulpit" '
+               f'src="{_panel_h(desktop_url)}" referrerpolicy="no-referrer" allowfullscreen></iframe>'
+               '<button type="button" onclick="document.getElementById(\'owner-remote-desktop\').requestFullscreen()">PEŁNY EKRAN</button>'
+               if desktop_url else '<p>Zdalny pulpit pojawi się po zgodzie klienta i otwarciu sesji.</p>')
+    return HTMLResponse(_panel_html(f'''<section class="card"><h1>Zdalna pomoc</h1></section>
+        <div class="owner-remote-layout"><section class="card"><h2>Komputery Pro</h2>
+        <form method="get"><label>Wyszukaj po ID<input name="q" maxlength="64" value="{_panel_h(q)}"></label><button>SZUKAJ</button></form>
+        <div class="table-wrap"><table><tbody>{links or '<tr><td>Brak komputerów Pro.</td></tr>'}</tbody></table></div></section>
+        <section class="card">{controls}{desktop}<p>Blokada myszy i klawiatury klienta nie jest jeszcze dostępna w panelu.</p>
+        <a href="/multiguard/panel/remote{('?selected='+str(selected)) if selected else ''}">ODŚWIEŻ STAN</a>
+        <h2>Historia sesji</h2><div class="table-wrap"><table><tbody>{''.join(history) or '<tr><td>Brak sesji.</td></tr>'}</tbody></table></div>
+        </section></div>'''), headers={'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer'})
+
+
+@router.get('/panel/remote', response_class=HTMLResponse)
+def owner_remote_panel(selected: Optional[uuid.UUID] = None, q: str = '', _: None = Depends(_panel_auth)):
+    if len(q)>64:
+        raise HTTPException(400,'Zbyt długi identyfikator.')
+    return _owner_remote_workspace(selected,q.removeprefix('MG-'))
+
+
+def _owner_remote_actor(csrf_token):
+    from types import SimpleNamespace
+    from app.routers.multiguard_panel_settings import _token_valid
+    if not _token_valid(csrf_token):
+        raise HTTPException(403,'Nieprawidłowy formularz.')
+    # Only called after the route has authenticated the existing OWNER Basic account.
+    return SimpleNamespace(id=None,display_name='OWNER WWW')
+
+
+def _owner_remote_eligible(connection, installation_id):
+    row=connection.execute(text("""SELECT id FROM guard.installations
+        WHERE id=:id AND is_current=TRUE AND plan_code='PRO' AND lifecycle='ACTIVE'
+          AND (valid_until IS NULL OR valid_until>now())"""),{'id':installation_id}).first()
+    if not row:
+        raise HTTPException(403,'Sesja wymaga aktywnej licencji Pro.')
+
+
+@router.post('/panel/remote/request')
+def owner_remote_request(support_id: uuid.UUID = Form(...), csrf_token: str = Form(...), _: None = Depends(_panel_auth)):
+    from fastapi.responses import RedirectResponse
+    from app.routers import multiguard_remote as remote
+    actor=_owner_remote_actor(csrf_token)
+    remote._ensure_schema()
+    with engine.connect() as con:
+        installation=con.execute(text("""SELECT installation_id FROM guard.support_requests
+            WHERE id=:id AND status NOT IN ('RESOLVED','CANCELLED')"""),{'id':support_id}).scalar_one_or_none()
+        if not installation:
+            raise HTTPException(404,'Nie znaleziono otwartego zgłoszenia.')
+        _owner_remote_eligible(con,installation)
+    remote.create_remote_session(remote.OwnerRemoteCreateBody(supportRequestId=support_id),actor)
+    return RedirectResponse(f'/multiguard/panel/remote?selected={installation}',status_code=303)
+
+
+@router.post('/panel/remote/{session_id}/connect', response_class=HTMLResponse)
+def owner_remote_connect(session_id: uuid.UUID, csrf_token: str = Form(...), _: None = Depends(_panel_auth)):
+    import os
+    from app.routers import multiguard_remote as remote
+    actor=_owner_remote_actor(csrf_token)
+    remote._ensure_schema()
+    with engine.connect() as con:
+        installation=con.execute(text('SELECT installation_id FROM guard.remote_sessions WHERE id=:id'),{'id':session_id}).scalar_one_or_none()
+        if not installation:
+            raise HTTPException(404,'Nie znaleziono sesji.')
+        _owner_remote_eligible(con,installation)
+    result=remote.remote_session_connect(str(session_id),actor)
+    url=urllib.parse.urlsplit(result['url'])
+    configured=urllib.parse.urlsplit(os.environ.get('MESH_CENTRAL_URL',''))
+    if url.scheme!='https' or not configured.hostname or url.hostname!=configured.hostname or url.username or url.password:
+        remote.remote_session_end(str(session_id),actor)
+        raise HTTPException(502,'Serwer zdalny zwrócił nieprawidłowy adres pulpitu.')
+    return _owner_remote_workspace(installation,'',result['url'])
+
+
+@router.post('/panel/remote/{session_id}/end')
+def owner_remote_end(session_id: uuid.UUID, csrf_token: str = Form(...), _: None = Depends(_panel_auth)):
+    from fastapi.responses import RedirectResponse
+    from app.routers import multiguard_remote as remote
+    actor=_owner_remote_actor(csrf_token)
+    remote.remote_session_end(str(session_id),actor)
+    return RedirectResponse('/multiguard/panel/remote',status_code=303)

@@ -170,7 +170,7 @@ jobs:
           assert 'device_search_form' in runtime
           assert 'device_paging' in runtime
           assert ':search_like' in runtime and ':silence_days' in runtime
-          assert '>Ustawienia</a>' in theme
+          assert '>Ustawienia</a>' in runtime
           assert '/multiguard/panel/settings' in install
           for fragment in [
               'service_order_count',
@@ -190,7 +190,7 @@ jobs:
               '_changelog',
           ]:
               assert fragment in source, fragment
-          assert "Historia wersji" in theme
+          assert "Historia wersji" in runtime
           # Exercise the release-note formatter without importing the production
           # backend. User-authored release notes must be escaped.
           import ast, html
