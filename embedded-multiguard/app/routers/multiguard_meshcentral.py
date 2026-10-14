@@ -126,10 +126,14 @@ def create_share(
                 or returned.username is not None
                 or returned.password is not None
                 or returned.fragment
-                or returned.port == 0):
+                or (returned.port or 443) != (
+                    configured.port or (
+                        443 if configured.scheme in {"wss", "https"} else 80
+                    )
+                )):
             raise ValueError("Untrusted MeshCentral share URL")
-        # Reading .port also rejects malformed ports such as :99999.
-        _ = returned.port
+        # Reading .port above also rejects malformed ports such as :99999.
+        # A matching hostname with an unrelated port is a different service.
     except ValueError as exc:
         raise MeshCentralError("MeshCentral zwrócił niebezpieczny adres sesji.") from exc
     return MeshShare(public_match.group(1), share_url)

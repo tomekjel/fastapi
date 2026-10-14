@@ -22,6 +22,8 @@ class MeshCentralRevocationTests(unittest.TestCase):
             "https://user:pass@mesh.example.test/sharing?token=1",
             "https://mesh.example.test:99999/sharing?token=1",
             "https://mesh.example.test/sharing?token=1#fragment",
+            "https://mesh.example.test:8080/sharing?token=1",
+            "https://mesh.example.test:8443/sharing?token=1",
         )
         with patch.dict(os.environ, {"MESH_CENTRAL_URL":
                                     "wss://mesh.example.test/control.ashx"}):
@@ -38,6 +40,28 @@ class MeshCentralRevocationTests(unittest.TestCase):
                 share = meshcentral.create_share("node/domain/id", "owner", ["desktop"])
                 self.assertEqual(share.public_id, "ci-id")
                 self.assertEqual(share.url, "https://mesh.example.test/sharing?ci=1")
+
+        # The public share may use a custom HTTPS port if that same port is
+        # explicitly configured in the MeshCentral control URL.
+        with patch.dict(os.environ, {
+            "MESH_CENTRAL_URL": "wss://mesh.example.test:8443/control.ashx"
+        }):
+            with patch.object(meshcentral, "_base_command", return_value=["meshctrl"]), \
+                 patch.object(meshcentral, "_run", return_value=(
+                     "ID: ci-custom\nURL: https://mesh.example.test:8443/sharing?ci=2")):
+                custom = meshcentral.create_share(
+                    "node/domain/id", "owner", ["desktop"]
+                )
+                self.assertEqual(
+                    custom.url, "https://mesh.example.test:8443/sharing?ci=2"
+                )
+            with patch.object(meshcentral, "_base_command", return_value=["meshctrl"]), \
+                 patch.object(meshcentral, "_run", return_value=(
+                     "ID: ci-wrong\nURL: https://mesh.example.test/sharing?ci=3")):
+                with self.assertRaises(meshcentral.MeshCentralError):
+                    meshcentral.create_share(
+                        "node/domain/id", "owner", ["desktop"]
+                    )
 
     def test_explicit_success_only(self):
         for output in ("OK", "ok", " \nOK\n "):
