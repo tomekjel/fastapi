@@ -26,13 +26,52 @@ def _required(name: str) -> str:
     return value
 
 
+# Executed inside Node, not a shell. Credentials are read by this process
+# and added only to JavaScript's process.argv (never to the OS command line).
+# The token file is protected by root:multiservis 0640 on the OWNER host.
+_MESHCTRL_TOKEN_BOOTSTRAP = r"""
+"use strict";
+const fs = require("node:fs");
+const meshctrl = process.argv[1];
+const requested = process.argv.slice(2);
+const tokenFile = process.env.MESH_CENTRAL_TOKEN_FILE;
+let token;
+try {
+    token = JSON.parse(fs.readFileSync(tokenFile, "utf8"));
+} catch (_) {
+    process.stderr.write("MeshCentral: token file missing or invalid.\\n");
+    process.exit(2);
+}
+if (!token || typeof token.username !== "string" ||
+        !token.username.startsWith("~t:") ||
+        typeof token.password !== "string" || !token.password) {
+    process.stderr.write("MeshCentral: token credentials invalid.\\n");
+    process.exit(2);
+}
+process.argv = [process.execPath, meshctrl, ...requested,
+                "--loginuser", token.username,
+                "--loginpass", token.password];
+require(meshctrl);
+"""
+
+
 def _base_command() -> list[str]:
     node = os.getenv("MESH_CENTRAL_NODE_BIN", "node").strip() or "node"
     meshctrl = _required("MESH_CENTRAL_MESHCTRL_PATH")
     url = _required("MESH_CENTRAL_URL")
+    # Token mode is explicit. Fail closed when configured token is missing;
+    # never silently fall back to a differently privileged account.
+    token_file = os.getenv("MESH_CENTRAL_TOKEN_FILE", "").strip()
+    if token_file:
+        if not os.path.isfile(token_file):
+            raise MeshCentralError("Plik tokenu MeshCentral jest niedostępny.")
+        return [node, "-e", _MESHCTRL_TOKEN_BOOTSTRAP,
+                "--", meshctrl, "DeviceSharing", "--url", url]
+
+    # Legacy authentication is retained for older, separately configured
+    # installations; production OWNER uses the safer token-file mode.
     user = _required("MESH_CENTRAL_LOGIN_USER")
     cmd = [node, meshctrl, "DeviceSharing", "--url", url, "--loginuser", user]
-
     key_file = os.getenv("MESH_CENTRAL_LOGIN_KEY_FILE", "").strip()
     password = os.getenv("MESH_CENTRAL_LOGIN_PASS", "").strip()
     if key_file:
@@ -41,7 +80,8 @@ def _base_command() -> list[str]:
         cmd += ["--loginpass", password]
     else:
         raise MeshCentralError(
-            "Skonfiguruj MESH_CENTRAL_LOGIN_KEY_FILE albo MESH_CENTRAL_LOGIN_PASS."
+            "Skonfiguruj MESH_CENTRAL_TOKEN_FILE, "
+            "MESH_CENTRAL_LOGIN_KEY_FILE albo MESH_CENTRAL_LOGIN_PASS."
         )
     return cmd
 
@@ -70,6 +110,10 @@ def _run(args: list[str]) -> str:
         )
     if error and not output:
         raise MeshCentralError(error[:600])
+    # MeshCtrl 1.2.5 can exit with code 0 after an authentication failure.
+    # Never interpret that success code as a successful remote operation.
+    if not output or output.startswith(("Invalid login", "Unable to connect")):
+        raise MeshCentralError("MeshCtrl nie potwierdził połączenia.")
     return output
 
 
@@ -82,7 +126,10 @@ def verify_registered_node(node_id: str) -> bool:
     if not re.fullmatch(r"node/[^/]*/[A-Za-z0-9@$]{64}", node_id):
         return False
     cmd = _base_command()
-    cmd[2] = "ListDevices"
+    # With token-file mode MeshCtrl receives a Node bootstrap first.
+    # Change the action without relying on a fixed argv index.
+    action_index = cmd.index("DeviceSharing")
+    cmd[action_index] = "ListDevices"
     output = _run(cmd + ["--json"])
     if len(output) > 2_000_000:
         raise MeshCentralError("Zbyt duża odpowiedź MeshCentral ListDevices.")
