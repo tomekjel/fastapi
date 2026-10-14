@@ -48,6 +48,23 @@ class ProtectedLoginTokenTests(unittest.TestCase):
                 self.assertNotIn("--loginpass", command)
                 self.assertNotIn("--loginkeyfile", command)
 
+    def test_existing_owner_token_is_auto_detected_without_systemd_secrets(self):
+        with patch.dict(os.environ, {
+            "MESH_CENTRAL_TOKEN_FILE": "",
+            "MESH_CENTRAL_MESHCTRL_PATH": "",
+            "MESH_CENTRAL_URL": "",
+            "MESH_CENTRAL_LOGIN_USER": "",
+        }), patch.object(mesh.os.path, "isfile", side_effect=lambda p:
+            p == "/etc/multiservis/meshcentral-token.json"):
+            command = mesh._base_command()
+        self.assertEqual(command[1], "-e")
+        self.assertEqual(command[-2:], ["--url", "wss://mesh.multi-servis.pl"])
+        self.assertIn(
+            "/opt/multiservis-meshctrl/node_modules/meshcentral/meshctrl.js",
+            command
+        )
+        self.assertNotIn("mg-bridge", command)
+
     def test_bootstrap_reads_credentials_only_in_node_process(self):
         node = shutil.which("node")
         if node is None:
