@@ -521,6 +521,19 @@ ALTER TABLE guard.direct_keygate_attempts ADD COLUMN IF NOT EXISTS release_chann
 CREATE INDEX IF NOT EXISTS idx_guard_direct_keygate_attempts_state
     ON guard.direct_keygate_attempts(state);
 
+CREATE TABLE IF NOT EXISTS guard.license_shortening (
+    id UUID PRIMARY KEY,
+    license_link_id UUID NOT NULL REFERENCES guard.license_links(id) ON DELETE RESTRICT,
+    previous_valid_until TIMESTAMPTZ NOT NULL,
+    new_valid_until TIMESTAMPTZ NOT NULL,
+    reason TEXT NOT NULL CHECK (length(reason) BETWEEN 3 AND 1000),
+    source TEXT NOT NULL DEFAULT 'WEB' CHECK (source='WEB'),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (new_valid_until < previous_valid_until)
+);
+CREATE INDEX IF NOT EXISTS idx_guard_license_shortening_license
+    ON guard.license_shortening(license_link_id,created_at DESC);
+
 CREATE TABLE IF NOT EXISTS guard.license_extensions (
     id UUID PRIMARY KEY,
     license_link_id UUID NOT NULL
@@ -3655,3 +3668,139 @@ def panel_extend_license_post(
         <a class="button-link" href="/multiguard/panel/license/{reception_id}/extend">
           HISTORIA LICENCJI</a></section>
     """), headers={"Cache-Control": "private, no-store"})
+
+
+def _license_operation_date(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("Missing timezone")
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Nieprawidłowy termin licencji.")
+
+
+def _shorten_owner_license(link_id: uuid.UUID, operation_id: uuid.UUID,
+                          expected_end: datetime, new_end: datetime,
+                          reason: str) -> None:
+    reason = reason.strip()
+    if not 3 <= len(reason) <= 1000:
+        raise HTTPException(400, "Podaj powód zmiany (3–1000 znaków).")
+    _ensure_schema()
+    with engine.begin() as con:
+        row = con.execute(text("SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE"),
+                          {"id": link_id}).mappings().first()
+        if not row:
+            raise HTTPException(404, "Nie znaleziono licencji.")
+        link = _normalize_link(dict(row))
+        previous = con.execute(text("SELECT * FROM guard.license_shortening WHERE id=:id"),
+                               {"id": operation_id}).mappings().first()
+        if previous:
+            if (previous["license_link_id"] != link_id
+                    or previous["previous_valid_until"] != expected_end
+                    or previous["new_valid_until"] != new_end
+                    or previous["reason"] != reason):
+                raise HTTPException(409, "Identyfikator operacji został już wykorzystany.")
+            return
+        if link["lifecycle"] != "ACTIVE" or not link.get("valid_until"):
+            raise HTTPException(409, "Skrócić można wyłącznie aktywną licencję klienta.")
+        if link["valid_until"] != expected_end:
+            raise HTTPException(409, "Termin został zmieniony. Otwórz formularz ponownie.")
+        if not _utcnow() < new_end < expected_end:
+            raise HTTPException(400, "Nowy termin musi być przyszły i wcześniejszy od obecnego.")
+        # Existing KeyGate absolute-date operation: retry after SQL rollback
+        # sends the same date, never subtracts the period for a second time.
+        _keygate_set_valid_until(link["keygate_license_id"], new_end)
+        updated = con.execute(text("""
+            UPDATE guard.license_links SET valid_until=:end,updated_at=now()
+            WHERE id=:id RETURNING *
+        """), {"id": link_id, "end": new_end}).mappings().one()
+        _update_installation_mirror(con, _normalize_link(dict(updated)))
+        con.execute(text("""
+            INSERT INTO guard.license_shortening
+                (id,license_link_id,previous_valid_until,new_valid_until,reason)
+            VALUES (:op,:id,:old,:new,:reason)
+        """), {"op": operation_id, "id": link_id, "old": expected_end,
+               "new": new_end, "reason": reason})
+
+
+@router.get("/multiguard/panel/license/manage/{link_id}", response_class=HTMLResponse)
+def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
+    from zoneinfo import ZoneInfo
+    _ensure_schema()
+    with engine.connect() as con:
+        row = con.execute(text("SELECT * FROM guard.license_links WHERE id=:id"),
+                          {"id": link_id}).mappings().first()
+        if not row:
+            raise HTTPException(404, "Nie znaleziono licencji.")
+        history = con.execute(text("""
+            SELECT created_at,previous_valid_until,new_valid_until,reason,'Skrócenie' AS action
+            FROM guard.license_shortening WHERE license_link_id=:id
+            UNION ALL
+            SELECT created_at,previous_valid_until,new_valid_until,
+                   'Potwierdzono otrzymanie płatności (' || source || ')','Przedłużenie'
+            FROM guard.license_extensions WHERE license_link_id=:id
+            ORDER BY created_at DESC LIMIT 100
+        """), {"id": link_id}).mappings().all()
+    link = _normalize_link(dict(row))
+    waw = ZoneInfo("Europe/Warsaw")
+    def date(value):
+        return _panel_escape(value.astimezone(waw).strftime("%d.%m.%Y %H:%M")) if value else "—"
+    history_rows = "".join(
+        f'<tr><td>{date(item["created_at"])}</td><td>{_panel_escape(item["action"])}</td>'
+        f'<td>{date(item["previous_valid_until"])}</td><td>{date(item["new_valid_until"])}</td>'
+        f'<td>{_panel_escape(item["reason"])}</td></tr>' for item in history
+    ) or '<tr><td colspan="5">Brak zmian okresu licencji.</td></tr>'
+    end = link.get("valid_until")
+    form = ''
+    if link["lifecycle"] == "ACTIVE" and end and end > _utcnow():
+        extension = (f'/multiguard/panel/license/installation/{link["installation_id"]}/extend'
+                     if link["sale_kind"] == "DIRECT" and link.get("installation_id")
+                     else f'/multiguard/panel/license/{link["reception_id"]}/extend'
+                     if link.get("reception_id") else '')
+        if extension:
+            form += f'<a class="button-link" href="{extension}">PRZEDŁUŻ LICENCJĘ</a>'
+        form += f'''<details id="license-shortening"><summary>Skróć okres licencji</summary>
+          <p>Nowy termin kończy ważność licencji o 23:59:59 wybranego dnia (czas polski).
+             Zmiana zostanie zapisana w historii. Nie wykonuje zwrotu pieniędzy.</p>
+          <form method="post" action="/multiguard/panel/license/manage/{link_id}/shorten">
+            <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+            <input type="hidden" name="operation_id" value="{uuid.uuid4()}">
+            <input type="hidden" name="expected_end" value="{_panel_escape(_iso(end))}">
+            <label>Nowy ostatni dzień ważności<input type="date" name="new_last_day" required></label>
+            <label>Powód skrócenia<input name="reason" minlength="3" maxlength="1000" required></label>
+            <label><input type="checkbox" name="confirmed" value="yes" required>Potwierdzam skrócenie licencji</label>
+            <button type="submit">ZAPISZ SKRÓCENIE</button>
+          </form></details>'''
+    return HTMLResponse(_panel_html(f'''<section class="card">
+      <a href="/multiguard/panel/licenses">← Licencje</a>
+      <h1>Licencja {_panel_escape(link["reception_number"])}</h1>
+      <p>{'Pro' if link['plan_code']=='multi_guard_pro' else 'Standard'} ·
+      {_panel_escape(link['lifecycle'])} · ważna do {date(end)} (czas polski)</p>
+      {form}</section><section class="card"><h2>Historia zmian okresu</h2>
+      <div class="table-wrap"><table><thead><tr><th>Data</th><th>Operacja</th>
+      <th>Poprzedni termin</th><th>Nowy termin</th><th>Powód</th></tr></thead>
+      <tbody>{history_rows}</tbody></table></div></section>'''),
+      headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/multiguard/panel/license/manage/{link_id}/shorten")
+def panel_shorten_license(link_id: uuid.UUID, operation_id: uuid.UUID = Form(...),
+                         expected_end: str = Form(...), new_last_day: str = Form(...),
+                         reason: str = Form(...), confirmed: str = Form(""),
+                         csrf_token: str = Form(...), _: None = Depends(_panel_auth)):
+    from datetime import date, time
+    from zoneinfo import ZoneInfo
+    from fastapi.responses import RedirectResponse
+    from app.routers.multiguard_panel_settings import _token_valid
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Wygasły formularz.")
+    if confirmed != "yes":
+        raise HTTPException(400, "Potwierdź skrócenie licencji.")
+    try:
+        new_end = datetime.combine(date.fromisoformat(new_last_day), time(23, 59, 59),
+                                   ZoneInfo("Europe/Warsaw")).astimezone(timezone.utc)
+    except ValueError:
+        raise HTTPException(400, "Nieprawidłowa data.")
+    _shorten_owner_license(link_id, operation_id, _license_operation_date(expected_end), new_end, reason)
+    return RedirectResponse(f"/multiguard/panel/license/manage/{link_id}", status_code=303)

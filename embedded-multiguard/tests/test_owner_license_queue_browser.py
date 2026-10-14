@@ -4,7 +4,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 folder = Path(os.environ["OWNER_TEST_HTML_DIR"])
-for name in ("licenses", "computers", "dashboard", "service-mode", "remote"):
+for name in ("licenses", "computers", "dashboard", "service-mode", "remote", "license-management"):
     assert (folder / (name + ".html")).is_file(), (
         "Missing PostgreSQL fixture: " + name + ". Run the integration test first."
     )
@@ -44,6 +44,12 @@ with sync_playwright() as p:
         assert page.locator('.owner-remote-layout').count()==1
         assert page.locator('.workspace-sidebar [aria-current="page"]').inner_text().strip().endswith('Zdalna pomoc')
         page.screenshot(path=str(folder / f'remote-{width}.png'),full_page=True)
+        page.goto('https://owner.test/multiguard/panel/license-management')
+        page.locator('#license-shortening summary').click()
+        assert page.locator('input[name="new_last_day"]').is_visible()
+        assert page.locator('input[name="confirmed"]').evaluate('(el)=>el.required')
+        assert page.get_by_text('Historia zmian okresu', exact=True).count()==1
+        page.screenshot(path=str(folder / f'license-management-{width}.png'),full_page=True)
         page.goto("https://owner.test/multiguard/panel/dashboard")
         assert page.locator('.hub-tile,.owner-overview-tile').count() == 0
         assert page.get_by_text('Szybkie działania', exact=True).count() == 0

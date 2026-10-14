@@ -2335,6 +2335,7 @@ def multi_guard_panel_licenses(
             text(
                 """
                 SELECT
+                    ll.id AS license_link_id,
                     ll.reception_number,
                     ll.keygate_license_id,
                     ll.plan_code,
@@ -2376,7 +2377,7 @@ def multi_guard_panel_licenses(
         table_rows.append(
             f"""
             <tr>
-              <td>{_panel_h(row['reception_number'])}</td>
+              <td><a href="/multiguard/panel/license/manage/{row['license_link_id']}">{_panel_h(row['reception_number'])}</a></td>
               <td><span class="badge {'mg-gold' if edition=='PRO' else 'mg-red'}">{edition}</span></td>
               <td>{_panel_h(row['duration_months'])} mies.</td>
               <td>{_panel_h(row['release_channel'] or 'STABLE')}</td>

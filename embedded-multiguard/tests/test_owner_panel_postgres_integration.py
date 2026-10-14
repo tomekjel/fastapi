@@ -834,6 +834,63 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """)).scalar_one()==1
     assert len(mock_calls["keygate_end"])==2
 
+    # OWNER shortening uses the same absolute expiry operation as renewal.
+    # KeyGate transport remains synthetic; SQL, routes and signatures are real.
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    current_link=license._link_by_installation(direct_id)
+    manage_url=f'/multiguard/panel/license/manage/{current_link["id"]}'
+    short_url=manage_url+'/shorten'
+    ensure(get(manage_url,False).status_code,401,'Licence management OWNER')
+    manage_page=get(manage_url)
+    ensure(manage_page.status_code,200,'Licence management')
+    assert 'Przedłużenie' in manage_page.text
+    short_day=(license._utcnow()+timedelta(days=30)).astimezone(ZoneInfo('Europe/Warsaw')).date()
+    short_form={'operation_id':str(uuid.uuid4()),
+                'expected_end':license._iso(current_link['valid_until']),
+                'new_last_day':short_day.isoformat(),
+                'reason':'CI: korekta terminu <script>test</script>',
+                'confirmed':'yes','csrf_token':license._workshop_csrf()}
+    ensure(c.post(short_url,data=short_form).status_code,401,'Shortening OWNER')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'csrf_token':'bad'}).status_code,403,'Shortening CSRF')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'confirmed':''}).status_code,400,'Shortening confirmation')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'expected_end':short_day.isoformat()}).status_code,400,'Naive expiry rejected')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'new_last_day':'2000-01-01'}).status_code,400,'Past expiry rejected')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'new_last_day':'2099-01-01'}).status_code,400,'Extension through shortening rejected')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'expected_end':license._iso(current_link['valid_until']-timedelta(days=1))}).status_code,409,'Stale form rejected')
+    before_calls=len(mock_calls['keygate_end'])
+    real_set=license._keygate_set_valid_until
+    def unavailable_keygate(*args):
+        from fastapi import HTTPException
+        raise HTTPException(502,'Synthetic KeyGate outage')
+    license._keygate_set_valid_until=unavailable_keygate
+    try:
+        ensure(c.post(short_url,auth=auth,data=short_form).status_code,502,'KeyGate failure blocks shortening')
+        assert license._link_by_installation(direct_id)['valid_until']==current_link['valid_until']
+        with engine.connect() as db:
+            assert db.execute(text('SELECT count(*) FROM guard.license_shortening WHERE license_link_id=:id'),{'id':current_link['id']}).scalar_one()==0
+    finally:
+        license._keygate_set_valid_until=real_set
+    ensure(c.post(short_url,auth=auth,data=short_form,follow_redirects=False).status_code,303,'Shorten paid licence')
+    ensure(c.post(short_url,auth=auth,data=short_form,follow_redirects=False).status_code,303,'Shortening double submit')
+    ensure(c.post(short_url,auth=auth,data={**short_form,'reason':'Changed reason'}).status_code,409,'Operation ID reuse rejected')
+    assert len(mock_calls['keygate_end'])==before_calls+1
+    shortened=license._link_by_installation(direct_id)
+    assert shortened['valid_from']==current_link['valid_from']
+    assert shortened['accepted_documents']==current_link['accepted_documents']
+    local_end=shortened['valid_until'].astimezone(ZoneInfo('Europe/Warsaw'))
+    assert local_end.date()==short_day and (local_end.hour,local_end.minute,local_end.second)==(23,59,59)
+    with engine.connect() as db:
+        assert db.execute(text('SELECT count(*) FROM guard.license_shortening WHERE license_link_id=:id'),{'id':current_link['id']}).scalar_one()==1
+        assert db.execute(text('SELECT valid_until FROM guard.installations WHERE installation_external_id=:id'),{'id':direct_id}).scalar_one()==shortened['valid_until']
+    manage_page=get(manage_url)
+    assert '&lt;script&gt;test&lt;/script&gt;' in manage_page.text
+    assert manage_page.headers['cache-control']=='private, no-store'
+    if os.environ.get('OWNER_TEST_HTML_DIR'):
+        (output/'license-management.html').write_text(manage_page.text,encoding='utf-8')
+    print('PASS: OWNER shortening, stale forms, duplicate submits, KeyGate outage rollback, history and installation expiry mirror.')
+
+
     # Gate future deployment on read-only compatibility with the historical
     # Multi-Servis schema. It must neither mutate nor fetch customer records.
     spec=importlib.util.spec_from_file_location(
