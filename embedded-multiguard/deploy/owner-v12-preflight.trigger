@@ -9,3 +9,5 @@ Run Chromium/PostgreSQL and deployment guards on this exact base-branch source b
 2026-10-14 PR #20 rerun: exact reviewed backend guard + JSON-mode heartbeat serialization. Synthetic PostgreSQL, Chromium and MeshCtrl only; no production deployment.
 2026-10-14 PR #20 final rerun: immutable deploy guard regressions, approved heartbeat telemetry serialization; PostgreSQL and Chromium isolated acceptance only.
 2026-10-14 PR #20 acceptance gate after immutable reviewed-backend error-message regression assertions; synthetic only, never deploy from test branch.
+
+2026-10-14 OWNER PR20 final combined gate: switch PostgreSQL service image from rate-limited public ECR to official Docker Hub; tests only, no production deploy.
