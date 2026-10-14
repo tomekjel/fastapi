@@ -2785,7 +2785,7 @@ def multiguard_panel_pending(
 )
 def multiguard_panel_pending_assign(
     installation_id: str,
-    reception_number: str = Form(...),
+    reception_number: str = Form(""),
     edition: str = Form(...),
     months: str = Form(...),
     release_channel: str = Form("STABLE"),
@@ -2807,6 +2807,8 @@ def multiguard_panel_pending_assign(
         return RedirectResponse("/multiguard/panel/licenses#pending", status_code=303,
                                 headers={"Cache-Control":"private, no-store"})
 
+    if not reception_number.strip():
+        raise HTTPException(400, "Podaj numer zlecenia dla licencji lub trybu serwisowego.")
     reception = _reception_by_number(reception_number)
     if months == "SERVICE":
         if service_confirm != "CONFIRM_WORKSHOP":
