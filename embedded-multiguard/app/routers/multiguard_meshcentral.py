@@ -32,9 +32,9 @@ def _required(name: str) -> str:
 _MESHCTRL_TOKEN_BOOTSTRAP = r"""
 "use strict";
 const fs = require("node:fs");
-const meshctrl = process.argv[1];
-const requested = process.argv.slice(2);
-const tokenFile = process.env.MESH_CENTRAL_TOKEN_FILE;
+const tokenFile = process.argv[1];
+const meshctrl = process.argv[2];
+const requested = process.argv.slice(3);
 let token;
 try {
     token = JSON.parse(fs.readFileSync(tokenFile, "utf8"));
@@ -74,7 +74,7 @@ def _base_command() -> list[str]:
             "wss://mesh.multi-servis.pl"
         )
         return [node, "-e", _MESHCTRL_TOKEN_BOOTSTRAP,
-                "--", meshctrl, "DeviceSharing", "--url", url]
+                "--", token_file, meshctrl, "DeviceSharing", "--url", url]
 
     # Existing non-token installations retain explicit legacy configuration.
     meshctrl = _required("MESH_CENTRAL_MESHCTRL_PATH")
