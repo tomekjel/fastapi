@@ -115,23 +115,48 @@ def create_share(
     return MeshShare(public_match.group(1), url_match.group(1))
 
 
-def revoke_share(node_id: str, public_id: str) -> None:
-    """Fail closed unless MeshCtrl explicitly confirms removal with OK.
+def _share_absent_from_listing(node_id: str, public_id: str) -> bool:
+    """Reconcile an uncertain remove via MeshCtrl's authoritative share list.
 
-    The upstream removeDeviceShare response prints precisely its result
-    (OK on success, a reason on failure). Neither an empty CLI response nor
-    a substring such as "NOT OK" is proof that the share was revoked.
+    Upstream DeviceSharing shows one ten-dash separator and Identifier line
+    per link, or exactly "No device sharing links for this device.".
+    Unknown / partial output is not proof of removal.
     """
-    if not node_id.strip() or not public_id.strip():
-        raise MeshCentralError("Brak identyfikatora węzła lub linku MeshCentral.")
-    output = _run(
-        _base_command() + [
-            "--id", node_id.strip(),
-            "--remove", public_id.strip(),
-        ]
+    listing = _run(_base_command() + ["--id", node_id]).strip()
+    if listing == "No device sharing links for this device.":
+        return True
+    if not listing.startswith("----------"):
+        raise MeshCentralError("Nieznany format listy udostępnień MeshCentral.")
+    ids = re.findall(
+        r"(?m)^----------\r?\nIdentifier:[ \t]*([^\s\r\n]+)[ \t]*$",
+        listing,
     )
-    if output.strip().upper() != "OK":
-        raise MeshCentralError(
-            "Nie potwierdzono usunięcia linku MeshCentral: "
-            + (output[:500] if output else "brak odpowiedzi")
-        )
+    delimiters = re.findall(r"(?m)^----------\r?$", listing)
+    if not ids or len(ids) != len(delimiters):
+        raise MeshCentralError("Niekompletna lista udostępnień MeshCentral.")
+    return public_id not in ids
+
+
+def revoke_share(node_id: str, public_id: str) -> None:
+    """Remove a share, or confirm it was already removed after a lost reply."""
+    node_id = node_id.strip()
+    public_id = public_id.strip()
+    if not node_id or not public_id:
+        raise MeshCentralError("Brak identyfikatora węzła lub linku MeshCentral.")
+    cmd = _base_command() + ["--id", node_id, "--remove", public_id]
+    try:
+        result = _run(cmd)
+        if result.strip().upper() == "OK":
+            return
+        failure = "MeshCtrl nie potwierdził usunięcia: " + (result[:200] or "brak odpowiedzi")
+    except MeshCentralError as exc:
+        failure = "MeshCtrl nie zwrócił potwierdzenia: " + str(exc)[:200]
+
+    # After network loss, the remove may already have taken effect. Do not
+    # trust the error text: check the server's currently listed share IDs.
+    try:
+        if _share_absent_from_listing(node_id, public_id):
+            return
+    except MeshCentralError as exc:
+        raise MeshCentralError(f"{failure}. Odczyt stanu nieudany: {exc}") from exc
+    raise MeshCentralError(f"{failure}. Link nadal jest aktywny na serwerze.")

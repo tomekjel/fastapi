@@ -35,6 +35,51 @@ class MeshCentralRevocationTests(unittest.TestCase):
                     with self.assertRaises(meshcentral.MeshCentralError):
                         meshcentral.revoke_share("node/test/device", "test-share-id")
 
+
+    def test_lost_response_reconciles_from_empty_server_list(self):
+        calls = []
+        def simulate_run(args):
+            calls.append(args)
+            if "--remove" in args:
+                raise meshcentral.MeshCentralError("lost response")
+            return "No device sharing links for this device."
+        with patch.object(meshcentral, "_base_command", return_value=["meshctrl"]), \
+             patch.object(meshcentral, "_run", side_effect=simulate_run):
+            meshcentral.revoke_share("node/example/device", "old-id")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][-2:], ["--id", "node/example/device"])
+
+    def test_lost_response_reconciles_when_other_shares_exist(self):
+        listing = (
+            "----------\nIdentifier:   another-id\nType: Desktop\n"
+            "----------\nIdentifier:   third-id\nType: Files\n"
+        )
+        with patch.object(meshcentral, "_base_command", return_value=["meshctrl"]), \
+             patch.object(meshcentral, "_run",
+                          side_effect=["Invalid device share identifier.", listing]):
+            meshcentral.revoke_share("node/example/device", "old-id")
+
+    def test_lost_response_does_not_close_if_link_still_listed(self):
+        listing = "----------\nIdentifier:   old-id\nType: Desktop\n"
+        with patch.object(meshcentral, "_base_command", return_value=["meshctrl"]), \
+             patch.object(meshcentral, "_run", side_effect=["NOT OK", listing]):
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.revoke_share("node/example/device", "old-id")
+
+    def test_unknown_or_partial_server_list_never_confirms_removal(self):
+        invalid = (
+            "", "Access denied", "No links", "Unknown device",
+            "----------\nInvalid entry",
+            "----------\nIdentifier: other\n----------\nMissing entry",
+            "No device sharing links for this device.\nUnexpected output",
+        )
+        for listing in invalid:
+            with self.subTest(listing=listing):
+                with patch.object(meshcentral, "_base_command", return_value=["meshctrl"]), \
+                     patch.object(meshcentral, "_run", side_effect=["", listing]):
+                    with self.assertRaises(meshcentral.MeshCentralError):
+                        meshcentral.revoke_share("node/example/device", "old-id")
+
     def test_missing_ids_are_fail_closed(self):
         with patch.object(meshcentral, "_base_command") as cmd:
             for node_id, public_id in (("", "test"), ("node/test/device", ""),
