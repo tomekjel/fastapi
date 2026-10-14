@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "owner-web-only",
-  "sequence": 22,
-  "target_sha": "a7f5b483702456fcacd20d9ccdc73ff75401a020",
-  "summary": "OWNER V12: compact service-mode rows (two lines), in-place workshop Standard/Pro switch without KeyGate, safe licence forms; PostgreSQL + Chromium PASS; backup and rollback."
+  "sequence": 23,
+  "target_sha": "11967db4d813b31043bf22b376a5c66c9cb63edd",
+  "summary": "OWNER V12: Workshop PRO consent-based remote assistance for Multi-Guard 0.3.42 BETA; find computers by name, model, installation ID or service order number; protected remote sessions; PostgreSQL and Chromium PASS."
 }
