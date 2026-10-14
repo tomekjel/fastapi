@@ -1096,6 +1096,8 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"id":revoked_link["id"]}).scalar_one()
     assert state=="REVOKED" and audit==1
     revocation_page=get(manage_url)
+    assert "Cofnięta · poprzedni termin ważności" in revocation_page.text
+    assert "Historia zmian licencji" in revocation_page.text
     assert "Pozostawało w chwili cofnięcia:" in revocation_page.text
     assert 'class="owner-license-percent"' in revocation_page.text
     assert "Cofnięcie" in revocation_page.text

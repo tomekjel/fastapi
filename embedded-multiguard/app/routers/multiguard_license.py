@@ -4146,8 +4146,15 @@ def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
         f'<tr><td>{date(item["created_at"])}</td><td>{_panel_escape(item["action"])}</td>'
         f'<td>{date(item["previous_valid_until"])}</td><td>{date(item["new_valid_until"])}</td>'
         f'<td>{_panel_escape(item["reason"])}</td></tr>' for item in history
-    ) or '<tr><td colspan="5">Brak zmian okresu licencji.</td></tr>'
+    ) or '<tr><td colspan="5">Brak historii zmian licencji.</td></tr>'
     end = link.get("valid_until")
+    status_label = ("Cofnięta" if link["lifecycle"] == "REVOKED"
+                    else "Wygasła" if link["lifecycle"] == "EXPIRED"
+                    else "Aktywna" if link["lifecycle"] == "ACTIVE"
+                    else _panel_escape(link["lifecycle"]))
+    term_label = ("poprzedni termin ważności" if link["lifecycle"] == "REVOKED"
+                  else "termin ważności" if link["lifecycle"] == "EXPIRED"
+                  else "ważna do")
     percent_block = ""
     reference_time = _utcnow()
     reference_end = end
@@ -4244,9 +4251,9 @@ def panel_manage_license(link_id: uuid.UUID, _: None = Depends(_panel_auth)):
       <a href="/multiguard/panel/licenses">← Licencje</a>
       <h1 class="owner-license-number">Licencja {_panel_escape(link["reception_number"])}</h1>
       <p>{'Pro' if link['plan_code']=='multi_guard_pro' else 'Standard'} ·
-      {_panel_escape(link['lifecycle'])} · ważna do {date(end)} (czas polski)</p>
+      {status_label} · {term_label} {date(end)} (czas polski)</p>
       {percent_block}
-      {form}</section><section class="card"><h2>Historia zmian okresu</h2>
+      {form}</section><section class="card"><h2>Historia zmian licencji</h2>
       <div class="table-wrap"><table><thead><tr><th>Data</th><th>Operacja</th>
       <th>Poprzedni termin</th><th>Nowy termin</th><th>Powód</th></tr></thead>
       <tbody>{history_rows}</tbody></table></div></section>'''),
