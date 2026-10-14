@@ -36,6 +36,8 @@ jobs:
             embedded-multiguard/app/routers/multiguard_panel_diagnostics.py
       - name: Exercise MeshCentral revoke and strict share URL unit tests
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_meshcentral_share_revocation.py' -v
+      - name: Verify secure MeshAgent node self-registration
+        run: python -m unittest discover -s embedded-multiguard/tests -p 'test_meshcentral_auto_enrollment.py' -v
       - name: Verify OWNER V12 service visual contract
         run: python embedded-multiguard/tests/test_owner_v12_service_visual_contract.py
       - name: Validate reversible backend installer syntax
