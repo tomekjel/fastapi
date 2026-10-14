@@ -12,3 +12,4 @@ Run Chromium/PostgreSQL and deployment guards on this exact base-branch source b
 
 2026-10-14 OWNER PR20 final combined gate: switch PostgreSQL service image from rate-limited public ECR to official Docker Hub; tests only, no production deploy.
 2026-10-14 PR #21 isolated OWNER UI hotfix gate: two-line service rows, in-place workshop STANDARD/PRO upgrade, no KeyGate mutation; PostgreSQL/Chromium only, no production release.
+2026-10-14 PR #21 final isolated rerun after fixing owner device paid form guard; review exact-license pin, service edition switch and responsive service table.
