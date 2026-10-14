@@ -106,8 +106,10 @@ def reviewed_change(name,key,original,revised):
         raise SystemExit(f"BLOCKED: reviewed OWNER backend blob changed: {name}")
     if (ast.dump(original.args,include_attributes=False)
           !=ast.dump(revised.args,include_attributes=False)
-          or ast.dump(original.returns,include_attributes=False)
-             !=ast.dump(revised.returns,include_attributes=False)
+          or (ast.dump(original.returns,include_attributes=False)
+              if original.returns is not None else None)
+             !=(ast.dump(revised.returns,include_attributes=False)
+              if revised.returns is not None else None)
           or [ast.dump(d,include_attributes=False) for d in original.decorator_list]
              !=[ast.dump(d,include_attributes=False) for d in revised.decorator_list]):
         raise SystemExit(f"BLOCKED: reviewed public endpoint interface changed: {key}")
