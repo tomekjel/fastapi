@@ -10,10 +10,34 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from types import ModuleType
 
 from fastapi import HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# This repository's embedded router code is mounted inside the deployed
+# FastAPI app. Mock host-only services here to make tests genuinely offline.
+database=ModuleType("app.database")
+database.engine=MagicMock()
+security=ModuleType("app.security")
+security.CurrentUser=object
+security.require_owner=lambda: None
+runtime=ModuleType("app.routers.multiguard_runtime")
+runtime._ensure_schema=lambda: None
+runtime._require_agent=lambda *args,**kwargs: None
+mesh=ModuleType("app.routers.multiguard_meshcentral")
+mesh.MeshCentralError=type("MeshCentralError",(Exception,),{})
+mesh.create_share=MagicMock()
+mesh.revoke_share=MagicMock()
+mesh.verify_registered_node=MagicMock()
+license=ModuleType("app.routers.multiguard_license")
+for name,mod in (
+    ("app.database",database), ("app.security",security),
+    ("app.routers.multiguard_runtime",runtime),
+    ("app.routers.multiguard_meshcentral",mesh),
+    ("app.routers.multiguard_license",license),
+):
+    sys.modules.setdefault(name,mod)
 from app.routers import multiguard_workshop_remote as workshop
 from app.routers import multiguard_remote as commercial
 
