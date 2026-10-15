@@ -191,12 +191,19 @@ def create_share(
 
     share_type = "desktop,files" if "files" in granted else "desktop"
     duration = max(5, min(int(duration_minutes), 120))
-    consent = os.getenv(
-        "MESH_CENTRAL_SHARE_CONSENT",
-        "prompt,bar",
+    # Every commercial/temporary workshop client share MUST require both
+    # a fresh prompt on the endpoint and the visible privacy toolbar.
+    # Previous versions accepted notify-only MESH_CENTRAL_SHARE_CONSENT,
+    # which could silently bypass client choice despite application consent.
+    # OWNER_UNATTENDED must use a separate, independently authorized method.
+    configured_consent = os.getenv(
+        "MESH_CENTRAL_SHARE_CONSENT", "prompt,bar"
     ).strip() or "prompt,bar"
-    if consent not in {"prompt,bar", "prompt", "notify,bar", "notify"}:
-        raise MeshCentralError("Niedozwolona wartość MESH_CENTRAL_SHARE_CONSENT.")
+    if configured_consent != "prompt,bar":
+        raise MeshCentralError(
+            "Połączenie z klientem wymaga MeshCentral: prompt,bar."
+        )
+    consent = "prompt,bar"
 
     cmd = _base_command() + [
         "--id", node_id,
