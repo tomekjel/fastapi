@@ -4,6 +4,9 @@ on:
     branches: [feature/owner-v12-unattended-policy-20261015]
     paths:
       - 'embedded-multiguard/app/routers/multiguard_remote_policy.py'
+      - 'embedded-multiguard/app/routers/multiguard_remote.py'
+      - 'embedded-multiguard/app/routers/multiguard_workshop_remote.py'
+      - 'embedded-multiguard/tests/test_dormant_mesh_consent_first.py'
       - 'embedded-multiguard/tests/test_remote_consent_policy.py'
       - '.github/workflows/owner-remote-policy-offline.yml'
 permissions:
@@ -20,6 +23,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install offline policy-test import dependencies
+        run: |
+          python -m pip install --disable-pip-version-check 'fastapi>=0.110,<1' 'sqlalchemy>=2,<3'
+      - name: Consent before MeshAgent enrollment contract (mock DB and MeshCtrl)
+        run: |
+          python -m py_compile embedded-multiguard/app/routers/multiguard_remote.py embedded-multiguard/app/routers/multiguard_workshop_remote.py
+          python -m unittest discover -s embedded-multiguard/tests -p 'test_dormant_mesh_consent_first.py' -v
+          echo 'PASS: dormant remote first consent; only verified node can connect. No live system access.'
       - name: Syntax and fail-closed permission matrix (no network, no DB)
         run: |
           python -m py_compile embedded-multiguard/app/routers/multiguard_remote_policy.py
