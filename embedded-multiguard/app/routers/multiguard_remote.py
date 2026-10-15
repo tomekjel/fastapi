@@ -611,11 +611,9 @@ def create_remote_session(
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         if support["support_status"] in {"RESOLVED", "CANCELLED"}:
             raise HTTPException(409, "Zgłoszenie pomocy jest już zamknięte.")
-        if not support["mesh_node_id"]:
-            raise HTTPException(
-                409,
-                "Urządzenie nie ma jeszcze powiązanego węzła zdalnej pomocy.",
-            )
+        # A Standard->Pro client may have a dormant bundled agent.
+        # Ask for each-session consent first; require a verified MeshCentral
+        # node later, in remote_session_connect, before any transport link.
 
         existing = _expire_and_find_open(
             connection,
