@@ -5,6 +5,8 @@ on:
     paths:
       - 'embedded-multiguard/app/routers/multiguard_remote_policy.py'
       - 'embedded-multiguard/app/routers/multiguard_remote.py'
+      - 'embedded-multiguard/app/routers/multiguard_meshcentral.py'
+      - 'embedded-multiguard/tests/test_meshcentral_share_revocation.py'
       - 'embedded-multiguard/app/routers/multiguard_workshop_remote.py'
       - 'embedded-multiguard/tests/test_dormant_mesh_consent_first.py'
       - 'embedded-multiguard/tests/test_remote_consent_policy.py'
@@ -31,6 +33,10 @@ jobs:
           python -m py_compile embedded-multiguard/app/routers/multiguard_remote.py embedded-multiguard/app/routers/multiguard_workshop_remote.py
           python -m unittest discover -s embedded-multiguard/tests -p 'test_dormant_mesh_consent_first.py' -v
           echo 'PASS: dormant remote first consent; only verified node can connect. No live system access.'
+      - name: MeshCentral desktop prompt cannot be downgraded by configuration
+        run: |
+          python -m unittest discover -s embedded-multiguard/tests -p 'test_meshcentral_share_revocation.py' -v
+          echo 'PASS: customer guest shares mandate prompt and bar and links revoke fail closed.'
       - name: Syntax and fail-closed permission matrix (no network, no DB)
         run: |
           python -m py_compile embedded-multiguard/app/routers/multiguard_remote_policy.py
