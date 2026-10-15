@@ -63,6 +63,37 @@ class MeshCentralRevocationTests(unittest.TestCase):
                         "node/domain/id", "owner", ["desktop"]
                     )
 
+    def test_client_shares_always_require_prompt_and_privacy_bar(self):
+        # An env override cannot silently change customer desktop consent.
+        response = (
+            "ID: safe-guest-id\n"
+            "URL: https://mesh.example.test/sharing?nonce=safe\n"
+        )
+        with patch.dict(os.environ, {
+            "MESH_CENTRAL_URL": "wss://mesh.example.test",
+            "MESH_CENTRAL_SHARE_CONSENT": "prompt,bar",
+        }):
+            with patch.object(meshcentral, "_base_command",
+                              return_value=["meshctrl", "DeviceSharing"]), \
+                 patch.object(meshcentral, "_run", return_value=response) as run:
+                share = meshcentral.create_share(
+                    "node/test/device", "private-session", ["desktop"], 30
+                )
+                self.assertEqual(share.public_id, "safe-guest-id")
+                params = run.call_args.args[0]
+                self.assertEqual(params[params.index("--consent")+1], "prompt,bar")
+        for unsafe in ("notify", "notify,bar", "prompt", "none", "owner", "0"):
+            with self.subTest(unsafe=unsafe), \
+                 patch.dict(os.environ, {
+                     "MESH_CENTRAL_SHARE_CONSENT": unsafe,
+                 }), \
+                 patch.object(meshcentral, "_run") as run:
+                with self.assertRaises(meshcentral.MeshCentralError):
+                    meshcentral.create_share(
+                        "node/test/device", "private-session", ["desktop"]
+                    )
+                run.assert_not_called()
+
     def test_explicit_success_only(self):
         for output in ("OK", "ok", " \nOK\n "):
             with self.subTest(output=output):

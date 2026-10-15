@@ -47,6 +47,11 @@ class AgentRemoteEndBody(AgentRemoteAuthBody):
     reason: str = Field(default="CLIENT_ENDED", max_length=80)
 
 
+class AgentSessionMeshBody(AgentRemoteAuthBody):
+    sessionId: uuid.UUID
+    meshNodeId: str = Field(pattern=r"^[A-Za-z0-9@$]{64}$")
+
+
 class OwnerRemoteCreateBody(BaseModel):
     supportRequestId: uuid.UUID
     requestFiles: bool = False
@@ -206,7 +211,9 @@ def _remote_public(row):
         "requestedCapabilities": list(row["requested_capabilities"] or []),
         "grantedCapabilities": list(row["granted_capabilities"] or []),
         "requestedAt": _iso(row["requested_at"]),
-        "expiresAt": _iso(row["expires_at"]),
+        "expiresAt": _iso(row.get("mesh_share_expires_at")
+                          if row["status"] in {"CONNECT_READY", "ACTIVE"}
+                          else row["expires_at"]),
         "consentedAt": _iso(row["consented_at"]),
         "connectedAt": _iso(row["connected_at"]),
         "endedAt": _iso(row["ended_at"]),
@@ -311,6 +318,56 @@ def _expire_and_find_open(connection, installation_id, *, entitlement_lost=False
         ),
         {"installation_id": installation_id},
     ).mappings().first()
+
+
+def _require_transport_consent(row, installation_id, now):
+    if (not row or row["installation_id"] != installation_id
+            or row["status"] != "CONSENTED" or row["expires_at"] <= now
+            or row.get("ended_at") is not None or row.get("consented_at") is None
+            or "desktop" not in (row.get("granted_capabilities") or [])
+            or row.get("mesh_public_id")):
+        raise HTTPException(409, "Brak aktualnej zgody na rejestrację agenta tej sesji.")
+
+
+@router.post("/agent/remote/mesh-enroll")
+def agent_session_mesh_enroll(body: AgentSessionMeshBody):
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    now = datetime.now(timezone.utc)
+    if body.sentAt.tzinfo is None or abs((now - body.sentAt).total_seconds()) > 300:
+        raise HTTPException(401, "Wygasłe żądanie rejestracji agenta.")
+    def validate(db, lock=False):
+        authenticated = _require_agent(db, body.installationId, body.deviceId, body.installationCredential)
+        installation = db.execute(text("SELECT * FROM guard.installations WHERE id=:iid"
+                                       + (" FOR UPDATE" if lock else "")),
+                                  {"iid":authenticated["id"]}).mappings().first()
+        if (not installation or not _has_active_remote_pro(installation, datetime.now(timezone.utc))
+                or _plan_change_pending(db, installation["id"])):
+            raise HTTPException(403, "Zdalna pomoc wymaga aktywnego Pro.")
+        if body.serviceDeviceId and body.serviceDeviceId != installation["service_device_id"]:
+            raise HTTPException(409, "Nieprawidłowe powiązanie instalacji.")
+        row = db.execute(text("SELECT * FROM guard.remote_sessions WHERE id=:sid"
+                              + (" FOR UPDATE" if lock else "")),
+                         {"sid":body.sessionId}).mappings().first()
+        _require_transport_consent(row, installation["id"], datetime.now(timezone.utc))
+        return installation
+    with engine.connect() as db:
+        validate(db)
+    try:
+        node = meshcentral.verify_session_node(body.meshNodeId, str(body.sessionId))
+    except meshcentral.MeshCentralError as exc:
+        raise HTTPException(409, "Serwer nie potwierdził jeszcze agenta tej sesji.") from exc
+    with engine.begin() as db:
+        installation = validate(db, True)
+        if installation.get("mesh_node_id") not in (None, "", node):
+            raise HTTPException(409, "Instalacja ma już innego agenta; wymagana kontrola OWNER.")
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:node))"), {"node":node})
+        if db.execute(text("SELECT 1 FROM guard.workshop_mesh_nodes WHERE mesh_node_id=:node"), {"node":node}).first():
+            raise HTTPException(409, "Agent jest przypisany do innej instalacji.")
+        db.execute(text("UPDATE guard.installations SET mesh_node_id=:node WHERE id=:iid"),
+                   {"node":node,"iid":installation["id"]})
+        _audit(db, body.sessionId, "SESSION_AGENT_VERIFIED", "CLIENT")
+    return {"requestId":body.requestId,"sessionId":str(body.sessionId),"accepted":True}
 
 
 @router.post("/agent/remote/poll")
@@ -611,11 +668,9 @@ def create_remote_session(
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         if support["support_status"] in {"RESOLVED", "CANCELLED"}:
             raise HTTPException(409, "Zgłoszenie pomocy jest już zamknięte.")
-        if not support["mesh_node_id"]:
-            raise HTTPException(
-                409,
-                "Urządzenie nie ma jeszcze powiązanego węzła zdalnej pomocy.",
-            )
+        # A Standard->Pro client may have a dormant bundled agent.
+        # Ask for each-session consent first; require a verified MeshCentral
+        # node later, in remote_session_connect, before any transport link.
 
         existing = _expire_and_find_open(
             connection,
@@ -1034,3 +1089,4 @@ def bind_mesh_node(
             )
 
     return {"status": "ok", "meshNodeId": node_id}
+
