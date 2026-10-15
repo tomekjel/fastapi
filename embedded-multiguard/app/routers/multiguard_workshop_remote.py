@@ -241,8 +241,9 @@ def request_for_owner(iid: uuid.UUID):
         grant = _grant(db, iid)
         if not _eligible(grant):
             raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
-        if not grant["mesh_node_id"]:
-            raise HTTPException(409, "Najpierw powiąż komputer z MeshCentral.")
+        # Request the customer's consent even before a transient MeshAgent
+        # exists. Desktop connection remains impossible until consent and
+        # a verified agent identity are BOTH present.
         if _open(db, iid):
             raise HTTPException(409, "Dla komputera istnieje już otwarta sesja.")
         sid = uuid.uuid4()
