@@ -172,6 +172,57 @@ def verify_registered_node(node_id: str) -> bool:
     return found
 
 
+def verify_session_node(local_id: str, session_id: str) -> str:
+    """Exact live node + explicitly configured consent group + session marker.
+
+    Used only by authenticated, consented sessions. No hostname matching,
+    automatic group discovery, or adoption of pre-existing agents.
+    """
+    import json
+    import uuid
+    session_id = str(uuid.UUID(session_id))
+    if not re.fullmatch(r"[A-Za-z0-9@$]{64}", local_id):
+        raise MeshCentralError("Nieprawidłowa tożsamość agenta sesji.")
+    group = _required("MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID")
+    if not re.fullmatch(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", group):
+        raise MeshCentralError("Nieprawidłowa grupa agentów sesji.")
+    domain = group.split("/")[1]
+    node = f"node/{domain}/{local_id}"
+    command = _base_command()
+    command[command.index("DeviceSharing")] = "ListDevices"
+    output = _run(command + ["--json"])
+    if len(output) > 2_000_000:
+        raise MeshCentralError("Zbyt duży spis agentów sesji.")
+    try:
+        records = json.loads(output)
+    except ValueError as exc:
+        raise MeshCentralError("Nieprawidłowy spis agentów sesji.") from exc
+    matches = []
+    stack = [records]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, dict):
+            if item.get("_id", item.get("id")) == node:
+                matches.append(item)
+            for key, value in item.items():
+                if isinstance(value, (list, dict)):
+                    if key == node and isinstance(value, dict) and "_id" not in value and "id" not in value:
+                        stack.append({**value, "_id": node})
+                    else:
+                        stack.append(value)
+    if len(matches) != 1:
+        raise MeshCentralError("Agent sesji nie jest jednoznacznie widoczny.")
+    record = matches[0]
+    connected = record.get("conn")
+    if (record.get("meshid") != group
+            or record.get("name") != f"MultiGuard-{session_id}"
+            or type(connected) is not int or not (connected & 1)):
+        raise MeshCentralError("Agent nie potwierdził grupy, sesji lub połączenia.")
+    return node
+
+
 def create_share(
     node_id: str,
     session_label: str,
@@ -300,3 +351,4 @@ def revoke_share(node_id: str, public_id: str) -> None:
     except MeshCentralError as exc:
         raise MeshCentralError(f"{failure}. Odczyt stanu nieudany: {exc}") from exc
     raise MeshCentralError(f"{failure}. Link nadal jest aktywny na serwerze.")
+

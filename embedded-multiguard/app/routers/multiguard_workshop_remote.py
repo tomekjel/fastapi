@@ -51,6 +51,10 @@ class WorkshopDecision(WorkshopAuth):
     allowFiles: bool = False
 
 
+class WorkshopSessionMeshEnrollment(WorkshopMeshEnrollment):
+    sessionId: uuid.UUID
+
+
 class WorkshopEnd(WorkshopAuth):
     sessionId: uuid.UUID
     reason: str = Field(default="CLIENT_ENDED", max_length=80)
@@ -177,7 +181,9 @@ def _public(row):
         "requestedCapabilities": list(row["requested_capabilities"] or []),
         "grantedCapabilities": list(row["granted_capabilities"] or []),
         "requestedAt": paid_remote._iso(row["requested_at"]),
-        "expiresAt": paid_remote._iso(row["expires_at"]),
+        "expiresAt": paid_remote._iso(row.get("mesh_share_expires_at")
+                                      if row["status"] in {"CONNECT_READY", "ACTIVE"}
+                                      else row["expires_at"]),
         "consentedAt": paid_remote._iso(row["consented_at"]),
         "connectedAt": paid_remote._iso(row["connected_at"]),
         "endedAt": paid_remote._iso(row["ended_at"]),
@@ -254,6 +260,42 @@ def request_for_owner(iid: uuid.UUID):
         """), {"sid":sid,"iid":iid,"expires":_now()+timedelta(minutes=5),"now":_now()})
         _event(db,sid,"OWNER_REQUESTED","TECHNICIAN")
         return sid
+
+
+@router.post("/agent/workshop/remote/mesh-enroll")
+def workshop_session_mesh_enroll(request: WorkshopSessionMeshEnrollment):
+    _schema()
+    _authenticate(request)
+    def validate(db, lock=False):
+        grant = _grant(db, request.installationId)
+        if not _eligible(grant):
+            raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
+        row = db.execute(text("SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid"
+                              + (" FOR UPDATE" if lock else "")),
+                         {"sid":request.sessionId}).mappings().first()
+        paid_remote._require_transport_consent(row, request.installationId, _now())
+        return grant
+    with engine.connect() as db:
+        validate(db)
+    try:
+        node = meshcentral.verify_session_node(request.meshNodeId, str(request.sessionId))
+    except meshcentral.MeshCentralError as exc:
+        raise HTTPException(409, "Serwer nie potwierdził jeszcze agenta tej sesji.") from exc
+    with engine.begin() as db:
+        db.execute(text("SELECT installation_id FROM guard.workshop_grants WHERE installation_id=:iid FOR UPDATE"),
+                   {"iid":request.installationId})
+        grant = validate(db, True)
+        if grant.get("mesh_node_id") not in (None, "", node):
+            raise HTTPException(409, "Instalacja ma już innego agenta; wymagana kontrola OWNER.")
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:node))"), {"node":node})
+        if db.execute(text("SELECT 1 FROM guard.installations WHERE mesh_node_id=:node"), {"node":node}).first():
+            raise HTTPException(409, "Agent jest przypisany do innej instalacji.")
+        db.execute(text("""INSERT INTO guard.workshop_mesh_nodes(installation_id,mesh_node_id)
+            VALUES (:iid,:node) ON CONFLICT(installation_id) DO UPDATE
+            SET mesh_node_id=EXCLUDED.mesh_node_id,updated_at=now()"""),
+            {"iid":request.installationId,"node":node})
+        _event(db, request.sessionId, "SESSION_AGENT_VERIFIED", "CLIENT")
+    return {"requestId":request.requestId,"sessionId":str(request.sessionId),"accepted":True}
 
 
 @router.post("/agent/workshop/mesh-enroll")
@@ -540,3 +582,4 @@ def bind_for_owner(iid, node_id):
                mesh_node_id=EXCLUDED.mesh_node_id,updated_at=now()
         """),{"iid":iid,"node":node_id})
     return {"meshNodeId":node_id}
+
