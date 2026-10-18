@@ -1311,6 +1311,134 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
     return HTMLResponse(_panel_html(body), headers={"Cache-Control": "private, no-store"})
 
 
+
+@router.get("/panel/remote/workshop/{installation_id}")
+def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_panel_auth)):
+    """Workshop PRO control room: fresh per-session consent, new browser tab."""
+    from fastapi.responses import HTMLResponse
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    with engine.connect() as db:
+        grant = workshop._grant(db, installation_id)
+    if not workshop._eligible(grant):
+        raise HTTPException(403, "Wymagany aktywny tryb serwisowy PRO.")
+    csrf = _csrf_token(int(time.time() // 3600))
+    body = """
+    <section class="card" style="max-width:none;min-height:65vh">
+      <h1>Zdalny pulpit · PRO / tryb serwisowy</h1>
+      <p>Każda nowa sesja wymaga potwierdzenia na komputerze klienta.</p>
+      <button type="button" id="ws-start">POŁĄCZ · POPROŚ O ZGODĘ</button>
+      <button type="button" id="ws-connect" disabled>OTWÓRZ PULPIT</button>
+      <button type="button" id="ws-end" disabled>ROZŁĄCZ</button>
+      <p role="status" aria-live="polite" id="ws-status">Gotowy do połączenia.</p>
+    </section>
+    <script>
+    (() => {
+      const installation = """ + json.dumps(str(installation_id)) + """;
+      const csrf = """ + json.dumps(csrf) + """;
+      const start = document.getElementById('ws-start');
+      const connect = document.getElementById('ws-connect');
+      const end = document.getElementById('ws-end');
+      const status = document.getElementById('ws-status');
+      let sid = null, timer = null;
+      async function api(path, method='GET') {
+        const r = await fetch('/multiguard/panel/remote-api/workshop/' + path, {
+          method, credentials:'same-origin', cache:'no-store',
+          headers: method === 'POST' ? {'X-Owner-CSRF': csrf} : {}
+        });
+        if (!r.ok) throw Error('HTTP ' + r.status + ': ' + (await r.text()).slice(0,180));
+        return r.json();
+      }
+      async function refresh() {
+        if (!sid) return;
+        try {
+          const info = await api('sessions/' + sid);
+          if (['CONSENTED','CONNECT_READY','ACTIVE'].includes(info.status)) {
+            status.textContent = 'Klient wyraził zgodę — pulpit gotowy.';
+            connect.disabled = false;
+          } else if (['DENIED','ENDED','EXPIRED','ERROR'].includes(info.status)) {
+            status.textContent = 'Sesja: ' + info.status;
+            connect.disabled = true;
+            end.disabled = true;
+            clearInterval(timer);
+          } else status.textContent = 'Oczekiwanie na zgodę klienta…';
+        } catch (e) { status.textContent = 'Błąd: ' + e.message; }
+      }
+      start.onclick = async () => {
+        start.disabled = true;
+        try {
+          const reply = await api('request/' + installation, 'POST');
+          sid = reply.sessionId;
+          end.disabled = false;
+          status.textContent = 'Wysłano prośbę o zgodę klienta.';
+          timer = setInterval(refresh, 3000);
+          await refresh();
+        } catch (e) { start.disabled=false; status.textContent=e.message; }
+      };
+      connect.onclick = async () => {
+        if (!sid) return;
+        const tab = window.open('about:blank','_blank');
+        try {
+          const reply = await api('sessions/' + sid + '/connect','POST');
+          const url = new URL(reply.url);
+          if (url.protocol !== 'https:' || url.hostname !== 'mesh.multi-servis.pl')
+            throw Error('Niezaufany adres MeshCentral.');
+          if (tab) tab.location.replace(url.href);
+          else status.textContent = 'Zezwól na nowe okno i ponów otwarcie pulpitu.';
+        } catch (e) { if(tab) tab.close(); status.textContent=e.message; }
+      };
+      end.onclick = async () => {
+        try {
+          await api('sessions/' + sid + '/end','POST');
+          clearInterval(timer); connect.disabled=true;end.disabled=true;
+          status.textContent='Sesja zakończona.';
+        } catch(e) {status.textContent=e.message;}
+      };
+    })();
+    </script>
+    """
+    return HTMLResponse(_panel_html(body),headers={"Cache-Control":"private, no-store"})
+
+
+@router.post("/panel/remote-api/workshop/request/{installation_id}")
+def panel_workshop_request(installation_id: uuid.UUID,
+                           _: None = Depends(_panel_auth),
+                           __: None = Depends(_owner_panel_csrf)):
+    from app.routers import multiguard_workshop_remote as workshop
+    return {"sessionId":str(workshop.request_for_owner(installation_id))}
+
+
+@router.get("/panel/remote-api/workshop/sessions/{session_id}")
+def panel_workshop_status(session_id: uuid.UUID, _: None = Depends(_panel_auth)):
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    with engine.connect() as db:
+        row = db.execute(text("SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid"),
+                         {"sid":session_id}).mappings().first()
+        if row is None:
+            raise HTTPException(404, "Sesja nie istnieje.")
+        if not workshop._eligible(workshop._grant(db,row["installation_id"])):
+            raise HTTPException(403, "Nieaktywny tryb serwisowy PRO.")
+    return workshop._public(row)
+
+
+@router.post("/panel/remote-api/workshop/sessions/{session_id}/connect")
+def panel_workshop_connect(session_id: uuid.UUID,
+                           _: None = Depends(_panel_auth),
+                           __: None = Depends(_owner_panel_csrf)):
+    from app.routers import multiguard_workshop_remote as workshop
+    return workshop.connect_for_owner(session_id)
+
+
+@router.post("/panel/remote-api/workshop/sessions/{session_id}/end")
+def panel_workshop_end(session_id: uuid.UUID,
+                       _: None = Depends(_panel_auth),
+                       __: None = Depends(_owner_panel_csrf)):
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop.end_for_owner(session_id)
+    return {"ended":True}
+
+
 @router.get("/panel/remote/session/{request_id}")
 def owner_remote_session_workspace(
     request_id: uuid.UUID,
