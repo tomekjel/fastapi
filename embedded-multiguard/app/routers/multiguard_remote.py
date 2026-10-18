@@ -865,6 +865,9 @@ def remote_session_connect(
                 f"Nie udało się bezpiecznie obrócić poprzedniego linku: {exc}",
             ) from exc
 
+    # Bound the advertised lease to the start of the external MeshCentral call.
+    # A slow response must not extend our local expiry beyond MeshCentral's.
+    share_expires = datetime.now(timezone.utc) + timedelta(minutes=60)
     try:
         share = meshcentral.create_share(
             node_id,
@@ -942,7 +945,7 @@ def remote_session_connect(
                 ),
                 {
                     "public_id": share.public_id,
-                    "expires_at": now + timedelta(minutes=60),
+                    "expires_at": share_expires,
                     "now": now,
                     "session_id": session_uuid,
                 },
@@ -973,7 +976,7 @@ def remote_session_connect(
     return {
         "sessionId": str(session_uuid),
         "url": share.url,
-        "expiresAt": (now + timedelta(minutes=60)).isoformat(),
+        "expiresAt": share_expires.isoformat(),
         "capabilities": granted,
     }
 
