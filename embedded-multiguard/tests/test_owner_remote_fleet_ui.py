@@ -3,6 +3,7 @@ from pathlib import Path
 import unittest
 
 PATH = Path(__file__).resolve().parents[1] / "app/routers/multiguard_remote.py"
+WORKSHOP = Path(__file__).resolve().parents[1] / "app/routers/multiguard_workshop_remote.py"
 
 class RemoteFleetPageContract(unittest.TestCase):
     @classmethod
@@ -56,6 +57,23 @@ class RemoteFleetPageContract(unittest.TestCase):
         self.assertIn('_token_valid(x_owner_csrf)', self.source)
         self.assertIn("'X-Owner-CSRF':csrf", self.source)
         self.assertIn('/panel/remote-api/sessions/', self.source)
+
+    def test_workshop_unattended_only_with_owner_enabled_pro(self):
+        workshop = WORKSHOP.read_text(encoding="utf-8")
+        mode = workshop.split("def request_for_owner(iid: uuid.UUID):", 1)[1].split("@router.post", 1)[0]
+        self.assertIn("if not _eligible(grant)", mode)
+        self.assertIn("'CONSENTED'", mode)
+        self.assertIn("OWNER_UNATTENDED_WORKSHOP_CONNECT", mode)
+        self.assertIn("request_for_owner", self.source)
+        self.assertIn("Czy na pewno połączyć się z komputerem serwisowym?", self.source)
+        self.assertIn("window.confirm", self.source)
+
+    def test_customer_still_requires_client_consent(self):
+        self.assertIn("session.status === 'CONSENTED'", self.source)
+        self.assertIn("Wysłać klientowi prośbę o zatwierdzenie połączenia?", self.source)
+        workshop = WORKSHOP.read_text(encoding="utf-8")
+        self.assertIn("if not _eligible(grant)", workshop)
+        self.assertIn("close_before_rights_change", workshop)
 
     def test_no_unconsented_remote_launch(self):
         body = self.source.split('@router.get("/panel/remote")', 1)[1]
