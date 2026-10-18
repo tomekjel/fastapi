@@ -222,11 +222,11 @@ def _open(db, iid, *, entitlement_lost=False):
         return None
     now = _now()
     timeout = (
-        active["status"] in ("REQUESTED", "CONSENTED") and active["expires_at"] < now
+        active["status"] in ("REQUESTED", "CONSENTED") and active["expires_at"] <= now
     ) or (
         active["status"] in ("CONNECT_READY", "ACTIVE")
-        and active["mesh_share_expires_at"] is not None
-        and active["mesh_share_expires_at"] < now
+        and (active["mesh_share_expires_at"] is None
+             or active["mesh_share_expires_at"] <= now)
     )
     if timeout or entitlement_lost or not _eligible(grant):
         if active["mesh_public_id"]:
