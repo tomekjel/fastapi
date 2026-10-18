@@ -195,6 +195,14 @@ class SessionTransportTests(unittest.TestCase):
         self.assertFalse(any("UPDATE guard.workshop_remote_sessions" in str(c.args[0])
                              for c in db.execute.call_args_list))
 
+    def test_mesh_creation_failure_preserves_session_state(self):
+        import inspect
+        source = inspect.getsource(paid.remote_session_connect)
+        self.assertIn("SET last_error=:error,last_activity_at=:now", source)
+        self.assertIn("AND status IN ('CONSENTED','CONNECT_READY','ACTIVE')", source)
+        self.assertIn("if updated.rowcount:", source)
+        self.assertNotIn("SET status='ERROR',last_error=:error", source)
+
     def test_paid_connect_checks_share_identity_and_consent_after_mesh_call(self):
         # Regression contract: concurrent OWNER actions must never overwrite
         # a newer public share or consent and must check actual lease validity.
