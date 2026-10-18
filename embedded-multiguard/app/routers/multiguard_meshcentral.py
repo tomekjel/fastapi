@@ -340,8 +340,7 @@ def create_workshop_share(
 
     Must be called only from the authenticated workshop OWNER path.
     """
-    return _create_share(node_id, session_label, capabilities, duration_minutes,
-                         workshop_unattended=True)
+    raise MeshCentralError("OWNER_UNATTENDED zablokowany do czasu niezależnego poświadczenia urządzenia.")
 
 
 def _share_absent_from_listing(node_id: str, public_id: str) -> bool:
