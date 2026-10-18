@@ -9,3 +9,5 @@ retry=owner-unattended-workshop-pro
 retry=unattended-workshop-contract-tests
 retry=real-owner-sidebar-route
 retry=final-view-before-release
+
+check=workshop-color-confirm-mesh-binding-20261018
