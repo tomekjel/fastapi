@@ -29,7 +29,7 @@ PUBLIC_BASE = os.getenv(
     "MULTI_GUARD_PUBLIC_BASE_URL", "https://api.multi-servis.pl"
 ).rstrip("/")
 TAG_RE = re.compile(
-    r"^v(?P<version>\d+\.\d+\.\d+(?:-beta\.\d+)?)-(?P<channel>TEST(?:-preview)?|LICENSE_TEST|PILOT|STABLE)$",
+    r"^v(?P<version>\d+\.\d+\.\d+(?:-beta\.\d+)?)-(?P<channel>TEST(?:-preview)?|LICENSE_TEST|BETA|PILOT|STABLE)$",
     re.IGNORECASE,
 )
 
