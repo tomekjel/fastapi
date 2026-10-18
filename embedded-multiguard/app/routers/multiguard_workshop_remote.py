@@ -560,11 +560,14 @@ def connect_for_owner(sid):
             meshcentral.revoke_share(node,previous)
         except meshcentral.MeshCentralError as exc:
             raise HTTPException(502,"Nie potwierdzono cofnięcia poprzedniego linku.") from exc
+    # MeshCentral starts the share lease during the external call, not when
+    # the database transaction eventually commits. Never advertise a later
+    # expiry than the remote service can guarantee.
+    share_expires = _now() + timedelta(minutes=60)
     try:
         share=meshcentral.create_share(node,f"Multi-Servis {str(sid)[:8]}",caps,60)
     except meshcentral.MeshCentralError as exc:
         raise HTTPException(502, f"MeshCentral: {exc}") from exc
-    share_expires = _now() + timedelta(minutes=60)
     try:
         with engine.begin() as db:
             row=db.execute(text("""
