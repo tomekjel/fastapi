@@ -3179,7 +3179,10 @@ def owner_remote_connect(session_id: uuid.UUID, csrf_token: str = Form(...), _: 
         _owner_remote_eligible(con,installation)
     result=remote.remote_session_connect(str(session_id),actor)
     url=urllib.parse.urlsplit(result['url'])
-    configured=urllib.parse.urlsplit(os.environ.get('MESH_CENTRAL_URL',''))
+    configured=urllib.parse.urlsplit(
+        os.environ.get('MESH_CENTRAL_URL','').strip() or
+        'wss://mesh.multi-servis.pl'
+    )
     if url.scheme!='https' or not configured.hostname or url.hostname!=configured.hostname or url.username or url.password:
         remote.remote_session_end(str(session_id),actor)
         raise HTTPException(502,'Serwer zdalny zwrócił nieprawidłowy adres pulpitu.')
