@@ -12,8 +12,9 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         cls.status = src[src.index("def panel_workshop_status("):src.index('@router.post("/panel/remote-api/workshop/sessions/', src.index("def panel_workshop_status("))]
 
     def test_confirmation_before_network_request(self):
-        self.assertLess(self.ui.index("window.confirm("), self.ui.index("start.disabled = true;"))
-        self.assertLess(self.ui.index("window.confirm("), self.ui.index("await api('request/' + installation, 'POST')"))
+        handler = self.ui[self.ui.index("start.onclick = async () => {"):]
+        self.assertLess(handler.index("window.confirm("), handler.index("start.disabled = true;"))
+        self.assertLess(handler.index("window.confirm("), handler.index("await api('request/' + installation, 'POST')"))
 
     def test_button_colors_and_disabled_gates(self):
         for needle in ("#ws-start{background:#1764b0}", "#ws-connect{background:#16834a}", "#ws-end{background:#be3030}", ".ws-controls button:disabled", 'id="ws-connect" disabled', 'id="ws-end" disabled'):
