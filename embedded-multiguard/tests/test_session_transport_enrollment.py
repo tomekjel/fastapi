@@ -60,6 +60,15 @@ class SessionTransportTests(unittest.TestCase):
                 self.verify([wrong])
         with self.assertRaises(mesh.MeshCentralError): self.verify([self.record(),self.record()])
 
+    def test_meshctrl_text_status_fallback_contract(self):
+        import inspect
+        source = inspect.getsource(mesh.verify_session_node)
+        self.assertIn("csv.reader(listing.splitlines(), skipinitialspace=True)", source)
+        self.assertIn("fields[0].strip() != local_id", source)
+        self.assertIn("fields[1].strip() != f\"MultiGuard-{session_id}\"", source)
+        self.assertIn("if len(statuses) != 1:", source)
+        self.assertIn("not (connected & 1)", source)
+
     def test_missing_group_is_not_guessed(self):
         with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID":""}), \
              patch.object(mesh, "_run") as run, self.assertRaises(mesh.MeshCentralError):
