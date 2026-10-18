@@ -186,16 +186,43 @@ def _resolve_channel(
             installation_uuid = None
 
     if installation_uuid is not None:
+        # A workshop installation can remain WAITING and has no row in
+        # guard.installations. Its OWNER-assigned grant is authoritative.
+        grant = connection.execute(
+            text("""
+                SELECT release_channel FROM guard.workshop_grants
+                WHERE installation_id=:installation_id AND enabled=TRUE
+                LIMIT 1
+            """),
+            {"installation_id": installation_uuid},
+        ).mappings().first()
+        if grant:
+            channel = _normalized_channel(grant["release_channel"])
+            if channel:
+                return channel, installation_uuid
+
+        # Customer channel changes must take effect without reinstalling.
+        link = connection.execute(
+            text("""
+                SELECT release_channel FROM guard.license_links
+                WHERE installation_id=:installation_id
+                  AND lifecycle NOT IN ('REVOKED','EXPIRED')
+                LIMIT 1
+            """),
+            {"installation_id": installation_uuid},
+        ).mappings().first()
+        if link:
+            channel = _normalized_channel(link["release_channel"])
+            if channel:
+                return channel, installation_uuid
+
         row = connection.execute(
-            text(
-                """
-                SELECT release_channel
-                FROM guard.installations
+            text("""
+                SELECT release_channel FROM guard.installations
                 WHERE installation_external_id=:installation_id
                   AND is_current=TRUE
                 LIMIT 1
-                """
-            ),
+            """),
             {"installation_id": installation_uuid},
         ).mappings().first()
         if row:
