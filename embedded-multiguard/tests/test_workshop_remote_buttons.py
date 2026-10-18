@@ -9,6 +9,7 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
     def setUpClass(cls):
         src = SOURCE.read_text(encoding="utf-8")
         cls.ui = src[src.index("def owner_workshop_workspace("):src.index('@router.post("/panel/remote-api/workshop/request/', src.index("def owner_workshop_workspace("))]
+        cls.active = src[src.index("def panel_workshop_active("):src.index('@router.get("/panel/remote/workshop/',src.index("def panel_workshop_active("))]
         cls.status = src[src.index("def panel_workshop_status("):src.index('@router.post("/panel/remote-api/workshop/sessions/', src.index("def panel_workshop_status("))]
 
     def test_confirmation_before_network_request(self):
@@ -25,6 +26,16 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn('const ready = info.meshLinked === true;', self.ui)
         self.assertIn('connect.disabled = !ready;', self.ui)
         self.assertIn('Oczekiwanie na powiązanie MeshAgenta', self.ui)
+
+    def test_refresh_recovers_server_session_without_duplicate_start(self):
+        self.assertIn("async function recover()", self.ui)
+        self.assertIn("await api('active/' + installation)", self.ui)
+        self.assertIn("sid = data.session.sessionId;", self.ui)
+        self.assertIn("start.disabled = true;", self.ui)
+        self.assertIn("recover();", self.ui)
+        self.assertIn("FROM guard.workshop_remote_sessions", self.active)
+        self.assertIn("status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')", self.active)
+        self.assertIn('result["meshLinked"]', self.active)
 
     def test_reset_on_end(self):
         self.assertIn("connect.disabled=true; end.disabled=true; start.disabled=false;", self.ui)
