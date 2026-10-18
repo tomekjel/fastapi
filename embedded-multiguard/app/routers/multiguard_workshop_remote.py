@@ -568,6 +568,7 @@ def connect_for_owner(sid):
             grant=_grant(db,iid)
             if (not row or not _eligible(grant) or not session_node_ready(grant, row)
                     or grant["mesh_node_id"]!=node or row.get("ended_at") is not None
+                    or row["mesh_public_id"] != previous
                     or row["status"] not in ("CONSENTED","CONNECT_READY","ACTIVE")
                     or "desktop" not in (row["granted_capabilities"] or [])
                     or (row["status"] == "CONSENTED" and row["expires_at"] <= _now())):
