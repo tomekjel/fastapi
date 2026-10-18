@@ -268,10 +268,10 @@ def _expire_and_find_open(connection, installation_id, *, entitlement_lost=False
               AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
               AND (
                 :entitlement_lost
-                OR (rs.status IN ('REQUESTED','CONSENTED') AND rs.expires_at<:now)
+                OR (rs.status IN ('REQUESTED','CONSENTED') AND rs.expires_at<=:now)
                 OR (rs.status IN ('CONNECT_READY','ACTIVE')
-                    AND rs.mesh_share_expires_at IS NOT NULL
-                    AND rs.mesh_share_expires_at<:now)
+                    AND (rs.mesh_share_expires_at IS NULL
+                         OR rs.mesh_share_expires_at<=:now))
               )
             ORDER BY rs.requested_at,rs.id
             FOR UPDATE OF rs
