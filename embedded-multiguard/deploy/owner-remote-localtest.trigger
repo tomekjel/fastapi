@@ -11,3 +11,4 @@ retry=real-owner-sidebar-route
 retry=final-view-before-release
 
 check=workshop-color-confirm-mesh-binding-20261018
+retry=scope-click-handler
