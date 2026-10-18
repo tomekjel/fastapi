@@ -1375,9 +1375,12 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         try {
           const info = await api('sessions/' + sid);
           if (['CONSENTED','CONNECT_READY','ACTIVE'].includes(info.status)) {
-            status.textContent = 'Sesja serwisowa gotowa — otwórz pulpit.';
-            connect.disabled = false;
             start.disabled = true;
+            const ready = info.meshLinked === true;
+            connect.disabled = !ready;
+            status.textContent = ready
+              ? 'MeshCentral powiązany — możesz otworzyć pulpit.'
+              : 'Oczekiwanie na powiązanie MeshAgenta z tym komputerem. Pulpit jeszcze niedostępny.';
           } else if (['DENIED','ENDED','EXPIRED','ERROR'].includes(info.status)) {
             status.textContent = 'Sesja: ' + info.status;
             connect.disabled = true;
@@ -1396,7 +1399,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           const reply = await api('request/' + installation, 'POST');
           sid = reply.sessionId;
           end.disabled = false;
-          status.textContent = 'Utworzono sesję serwisową. Otwórz pulpit.';
+          status.textContent = 'Utworzono sesję serwisową. Sprawdzam powiązanie MeshCentral…';
           if (timer) clearInterval(timer);
           timer = setInterval(refresh, 3000);
           await refresh();
@@ -1413,8 +1416,17 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
             throw Error('Niezaufany adres MeshCentral.');
           if (tab) tab.location.replace(url.href);
           else status.textContent = 'Zezwól na nowe okno i ponów otwarcie pulpitu.';
-        } catch (e) { if(tab) tab.close(); status.textContent=e.message; }
-        finally { if (sid) await refresh(); }
+        } catch (e) {
+          if(tab) tab.close();
+          status.textContent='Nie udało się otworzyć pulpitu: '+e.message;
+        } finally {
+          if (sid) {
+            try {
+              const info = await api('sessions/' + sid);
+              connect.disabled = !info.meshLinked || !['CONSENTED','CONNECT_READY','ACTIVE'].includes(info.status);
+            } catch (_) { connect.disabled = true; }
+          }
+        }
       };
       end.onclick = async () => {
         if (!sid) return;
@@ -1449,9 +1461,12 @@ def panel_workshop_status(session_id: uuid.UUID, _: None = Depends(_panel_auth))
                          {"sid":session_id}).mappings().first()
         if row is None:
             raise HTTPException(404, "Sesja nie istnieje.")
-        if not workshop._eligible(workshop._grant(db,row["installation_id"])):
+        grant = workshop._grant(db, row["installation_id"])
+        if not workshop._eligible(grant):
             raise HTTPException(403, "Nieaktywny tryb serwisowy PRO.")
-    return workshop._public(row)
+    result = workshop._public(row)
+    result["meshLinked"] = bool(grant["mesh_node_id"])
+    return result
 
 
 @router.post("/panel/remote-api/workshop/sessions/{session_id}/connect")
