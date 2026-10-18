@@ -51,6 +51,11 @@ class OwnerRemoteConsentFirstTests(unittest.TestCase):
         )
         self.assertNotIn("SELECT id FROM guard.remote_sessions", request)
 
+    def test_displayed_desktop_does_not_trigger_second_connect(self):
+        panel = ast.get_source_segment(self.source, self.functions["_owner_remote_workspace"])
+        self.assertIn("if ready_session and not desktop_url:", panel)
+        self.assertIn('if desktop_url else', panel)
+
     def test_consent_is_not_bypassed_by_owner_button(self):
         handler = ast.get_source_segment(
             self.source, self.functions["owner_commercial_remote_request"]
