@@ -894,10 +894,10 @@ def remote_session_connect(
                     connection,
                     session_uuid,
                     "MESH_SHARE_FAILED",
-                "MESH",
-                "MeshCentral",
-                {"error": str(exc)[:500]},
-            )
+                    "MESH",
+                    "MeshCentral",
+                    {"error": str(exc)[:500]},
+                )
         raise HTTPException(502, f"MeshCentral: {exc}") from exc
 
     try:
