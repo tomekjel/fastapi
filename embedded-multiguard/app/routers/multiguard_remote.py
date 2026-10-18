@@ -1356,7 +1356,7 @@ def owner_remote_session_workspace(
       start.onclick = async () => {
         start.disabled = true;
         try {
-          const session = await api('/multiguard/remote-sessions', 'POST',
+          const session = await api('/multiguard/panel/remote-api/sessions', 'POST',
                                     {supportRequestId, requestFiles:false});
           sessionId = session.sessionId;
           end.disabled = false;
@@ -1376,7 +1376,7 @@ def owner_remote_session_workspace(
         if (desktopTab) desktopTab.opener = null;
         connect.disabled = true;
         try {
-          const session = await api('/multiguard/remote-sessions/' + sessionId + '/connect', 'POST');
+          const session = await api('/multiguard/panel/remote-api/sessions/' + sessionId + '/connect', 'POST');
           const url = new URL(session.url);
           if (url.protocol !== 'https:') throw Error('Niebezpieczny adres sesji.');
           if (desktopTab) desktopTab.location.replace(url.href);
@@ -1390,7 +1390,7 @@ def owner_remote_session_workspace(
       end.onclick = async () => {
         if (!sessionId) return;
         try {
-          await api('/multiguard/remote-sessions/' + sessionId + '/end', 'POST');
+          await api('/multiguard/panel/remote-api/sessions/' + sessionId + '/end', 'POST');
           status.textContent = 'Sesja zakończona.';
           connect.disabled = true; end.disabled = true;
           clearInterval(poll);
