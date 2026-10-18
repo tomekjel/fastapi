@@ -821,7 +821,11 @@ def remote_session_connect(
                 409,
                 "Klient nie wyraził zgody na tę sesję.",
             )
-        expired_consent = row["status"] == "CONSENTED" and row["expires_at"] < now
+        expired_consent = row["status"] == "CONSENTED" and row["expires_at"] <= now
+        if (row["status"] in {"CONNECT_READY", "ACTIVE"}
+                and (row["mesh_share_expires_at"] is None
+                     or row["mesh_share_expires_at"] <= now)):
+            raise HTTPException(410, "Udostępnienie wygasło; rozpocznij nową sesję.")
         if expired_consent:
             connection.execute(
                 text(
@@ -897,7 +901,10 @@ def remote_session_connect(
     try:
         with engine.begin() as connection:
             current = connection.execute(text("""
-                SELECT rs.status,gi.plan_code,gi.lifecycle,gi.valid_until,
+                SELECT rs.status,rs.expires_at,rs.ended_at,
+                       rs.mesh_public_id,rs.mesh_share_expires_at,
+                       rs.granted_capabilities,
+                       gi.plan_code,gi.lifecycle,gi.valid_until,
                        gi.is_current,gi.mesh_node_id
                 FROM guard.remote_sessions rs
                 JOIN guard.installations gi ON gi.id=rs.installation_id
@@ -905,6 +912,14 @@ def remote_session_connect(
             """), {"sid": session_uuid}).mappings().first()
             if (not current or not _has_active_remote_pro(current, datetime.now(timezone.utc))
                     or current["mesh_node_id"] != node_id
+                    or current["mesh_public_id"] != existing_public_id
+                    or current["ended_at"] is not None
+                    or list(current["granted_capabilities"] or []) != granted
+                    or (current["status"] == "CONSENTED"
+                        and current["expires_at"] <= datetime.now(timezone.utc))
+                    or (current["status"] in {"CONNECT_READY", "ACTIVE"}
+                        and (current["mesh_share_expires_at"] is None
+                             or current["mesh_share_expires_at"] <= datetime.now(timezone.utc)))
                     or _plan_change_pending(connection,row["installation_id"])
                     or current["status"] not in {"CONSENTED", "CONNECT_READY", "ACTIVE"}):
                 raise HTTPException(
