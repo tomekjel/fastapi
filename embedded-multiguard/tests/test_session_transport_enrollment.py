@@ -209,6 +209,13 @@ class SessionTransportTests(unittest.TestCase):
         source = inspect.getsource(paid.agent_remote_decision)
         self.assertIn('if row["expires_at"] <= now:', source)
 
+    def test_expired_mesh_creation_cannot_publish_paid_share(self):
+        import inspect
+        source = inspect.getsource(paid.remote_session_connect)
+        self.assertIn("if share_expires <= datetime.now(timezone.utc):", source)
+        self.assertIn("Nowy link MeshCentral wygasł przed zapisem.", source)
+        self.assertIn("meshcentral.revoke_share(node_id, share.public_id)", source)
+
     def test_paid_share_expiry_is_shared_between_database_and_response(self):
         import inspect
         source = inspect.getsource(paid.remote_session_connect)
