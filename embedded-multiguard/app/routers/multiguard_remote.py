@@ -874,7 +874,7 @@ def remote_session_connect(
         )
     except meshcentral.MeshCentralError as exc:
         with engine.begin() as connection:
-            connection.execute(
+            updated = connection.execute(
                 text(
                     """
                     UPDATE guard.remote_sessions
@@ -889,10 +889,11 @@ def remote_session_connect(
                     "session_id": session_uuid,
                 },
             )
-            _audit(
-                connection,
-                session_uuid,
-                "MESH_SHARE_FAILED",
+            if updated.rowcount:
+                _audit(
+                    connection,
+                    session_uuid,
+                    "MESH_SHARE_FAILED",
                 "MESH",
                 "MeshCentral",
                 {"error": str(exc)[:500]},
