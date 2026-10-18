@@ -126,6 +126,28 @@ class SessionTransportTests(unittest.TestCase):
             with self.assertRaises(HTTPException): workshop.workshop_session_mesh_enroll(body)
             self.assertFalse(any("INSERT INTO guard.workshop_mesh_nodes" in str(c.args[0]) for c in db.execute.call_args_list))
 
+    def test_workshop_consent_refreshes_enrollment_deadline(self):
+        # Consent near the end of the original request must still allow agent enrollment.
+        body = workshop.WorkshopDecision(**self.auth(), discoveryCredential="x"*32,
+                                         allowDesktop=True)
+        old_expiry = datetime.now(timezone.utc) + timedelta(seconds=2)
+        pending = {**self.row, "status":"REQUESTED", "expires_at":old_expiry}
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.return_value = pending
+        db.execute.return_value.mappings.return_value.one.return_value = {
+            **pending, "status":"CONSENTED"}
+        with patch.object(workshop, "_schema"), patch.object(workshop, "_authenticate"), \
+             patch.object(workshop, "_grant", return_value={"edition":"PRO","enabled":True,"status":"NEW"}), \
+             patch.object(workshop, "engine") as engine, patch.object(workshop, "_event"):
+            engine.begin.return_value.__enter__.return_value = db
+            workshop.workshop_remote_decision(body)
+        writes = [c for c in db.execute.call_args_list
+                  if "SET status='CONSENTED'" in str(c.args[0])]
+        self.assertEqual(len(writes), 1)
+        params = writes[0].args[1]
+        self.assertIn("expires_at=:consent_expires", str(writes[0].args[0]))
+        self.assertGreater(params["consent_expires"], old_expiry + timedelta(minutes=4))
+
     def test_active_snapshot_uses_actual_share_expiry(self):
         row={**self.row,"status":"CONNECT_READY", "support_request_id":self.sid,
              "requested_by_name":"OWNER","subject":"Test", "requested_capabilities":["desktop"],
