@@ -200,6 +200,7 @@ class SessionTransportTests(unittest.TestCase):
         source = inspect.getsource(paid.remote_session_connect)
         self.assertIn("SET last_error=:error,last_activity_at=:now", source)
         self.assertIn("AND status IN ('CONSENTED','CONNECT_READY','ACTIVE')", source)
+        self.assertIn("AND mesh_public_id IS NOT DISTINCT FROM :expected_public_id", source)
         self.assertIn("if updated.rowcount:", source)
         self.assertNotIn("SET status='ERROR',last_error=:error", source)
 
