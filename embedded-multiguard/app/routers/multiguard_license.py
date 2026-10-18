@@ -499,7 +499,7 @@ CREATE TABLE IF NOT EXISTS guard.license_links (
     plan_code TEXT NOT NULL CHECK (plan_code IN ('multi_guard','multi_guard_pro')),
     duration_months INTEGER NOT NULL CHECK (duration_months IN (3,6,12)),
     release_channel TEXT NOT NULL DEFAULT 'STABLE'
-        CHECK (release_channel IN ('STABLE','PILOT')),
+        CHECK (release_channel IN ('STABLE','PILOT','BETA')),
     lifecycle TEXT NOT NULL DEFAULT 'UNASSIGNED'
         CHECK (lifecycle IN ('UNASSIGNED','SERVICE_TEST','PENDING_ACCEPTANCE','ACTIVE','EXPIRED','REVOKED')),
     installation_id UUID UNIQUE,
@@ -659,7 +659,7 @@ CREATE TABLE IF NOT EXISTS guard.workshop_grants (
         REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
     edition TEXT NOT NULL CHECK (edition IN ('STANDARD','PRO')),
     release_channel TEXT NOT NULL DEFAULT 'STABLE'
-        CHECK (release_channel IN ('STABLE','PILOT')),
+        CHECK (release_channel IN ('STABLE','PILOT','BETA')),
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     monitoring_profile TEXT NOT NULL DEFAULT 'OFF',
     associated_reception_id UUID REFERENCES service.service_orders(id) ON DELETE SET NULL,
@@ -707,7 +707,7 @@ CREATE TABLE IF NOT EXISTS guard.installations (
     accepted_at TIMESTAMPTZ,
     app_version TEXT,
     release_channel TEXT NOT NULL DEFAULT 'STABLE'
-        CHECK (release_channel IN ('STABLE','PILOT')),
+        CHECK (release_channel IN ('STABLE','PILOT','BETA')),
     health_level TEXT NOT NULL DEFAULT 'GREEN'
         CHECK (health_level IN ('GREEN','YELLOW','ORANGE','RED')),
     last_seen_at TIMESTAMPTZ,
@@ -742,6 +742,22 @@ ALTER TABLE guard.license_links
     ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
 ALTER TABLE guard.installations
     ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
+-- Expand existing release channel CHECK constraints without changing any assigned ring.
+ALTER TABLE guard.license_links
+    DROP CONSTRAINT IF EXISTS license_links_release_channel_check;
+ALTER TABLE guard.license_links
+    ADD CONSTRAINT license_links_release_channel_check
+    CHECK (release_channel IN ('STABLE','PILOT','BETA'));
+ALTER TABLE guard.workshop_grants
+    DROP CONSTRAINT IF EXISTS workshop_grants_release_channel_check;
+ALTER TABLE guard.workshop_grants
+    ADD CONSTRAINT workshop_grants_release_channel_check
+    CHECK (release_channel IN ('STABLE','PILOT','BETA'));
+ALTER TABLE guard.installations
+    DROP CONSTRAINT IF EXISTS installations_release_channel_check;
+ALTER TABLE guard.installations
+    ADD CONSTRAINT installations_release_channel_check
+    CHECK (release_channel IN ('STABLE','PILOT','BETA'));
 -- Migrate the CHECK constraint on existing PostgreSQL installations.
 ALTER TABLE guard.pending_installations
     DROP CONSTRAINT IF EXISTS pending_installations_status_check;
@@ -901,7 +917,7 @@ def _set_workshop_grant(
     channel = channel.strip().upper()
     if edition not in {"STANDARD", "PRO"}:
         raise HTTPException(400, "Edycja musi być Standard albo Pro.")
-    if channel not in {"STABLE", "PILOT"}:
+    if channel not in {"STABLE", "PILOT", "BETA"}:
         raise HTTPException(400, "Kanał musi być stabilny albo Beta.")
     with engine.begin() as con:
         pending = con.execute(text("""
@@ -1004,8 +1020,8 @@ def _assign_pending_to_reception(
         raise HTTPException(400, "Edycja musi być STANDARD albo PRO.")
     if months not in {3, 6, 12}:
         raise HTTPException(400, "Okres musi wynosić 3, 6 albo 12 miesięcy.")
-    if release_channel not in {"STABLE", "PILOT"}:
-        raise HTTPException(400, "Kanał aktualizacji musi być STABLE albo PILOT.")
+    if release_channel not in {"STABLE", "PILOT", "BETA"}:
+        raise HTTPException(400, "Kanał aktualizacji musi być STABLE, PILOT albo BETA.")
 
     if existing:
         existing_edition = (
@@ -1081,8 +1097,8 @@ def _assign_direct_customer_license(
     channel = channel.strip().upper()
     if edition not in {"STANDARD", "PRO"} or months not in {3, 6, 12}:
         raise HTTPException(400, "Wybierz Standard/Pro i okres 3, 6 lub 12 miesięcy.")
-    if channel not in {"STABLE", "PILOT"}:
-        raise HTTPException(400, "Kanał musi być Stabilna albo Beta.")
+    if channel not in {"STABLE", "PILOT", "BETA"}:
+        raise HTTPException(400, "Kanał musi być STABLE, PILOT albo BETA.")
     _ensure_schema()
     with engine.begin() as con:
         pending = con.execute(text("""
@@ -2338,8 +2354,8 @@ def _generate_license_link(
         raise HTTPException(400, "Edycja musi być STANDARD albo PRO.")
     if months not in {3, 6, 12}:
         raise HTTPException(400, "Okres musi wynosić 3, 6 albo 12 miesięcy.")
-    if release_channel not in {"STABLE", "PILOT"}:
-        raise HTTPException(400, "Kanał aktualizacji musi być STABLE albo PILOT.")
+    if release_channel not in {"STABLE", "PILOT", "BETA"}:
+        raise HTTPException(400, "Kanał aktualizacji musi być STABLE, PILOT albo BETA.")
 
     _ensure_schema()
     reception = _reception(reception_id)
@@ -2756,7 +2772,8 @@ def multiguard_panel_pending(
               </select></label>
               <label>Kanał<select name="release_channel">
                 <option value="STABLE">Stabilna</option>
-                <option value="PILOT">Beta</option>
+                <option value="PILOT">Pilot (dotychczasowy)</option>
+                <option value="BETA">Beta</option>
               </select></label>
               <p class="muted">„Brak licencji” pozostawia komputer w kolejce. Nie cofa już wydanych uprawnień.</p>
               <button type="submit" data-owner-service-submit>PRZYPISZ LICENCJĘ KLIENTA</button>
@@ -2833,7 +2850,8 @@ def multiguard_panel_pending(
               <label>Kanał
                 <select name="release_channel">
                   <option value="STABLE" selected>Stabilna</option>
-                  <option value="PILOT">Beta</option>
+                  <option value="PILOT">Pilot (dotychczasowy)</option>
+                <option value="BETA">Beta</option>
                 </select>
               </label>
             </div>
@@ -3361,7 +3379,8 @@ def multiguard_panel(
               <label>Kanał
                 <select name="release_channel">
                   <option value="STABLE" selected>Stabilna</option>
-                  <option value="PILOT">Beta</option>
+                  <option value="PILOT">Pilot (dotychczasowy)</option>
+                <option value="BETA">Beta</option>
                 </select>
               </label>
               <label>&nbsp;<button type="submit">GENERUJ KLUCZ</button></label>
@@ -3488,8 +3507,8 @@ def set_reception_release_channel(
         raise HTTPException(400, "Nieprawidłowe ID zlecenia.") from exc
 
     channel = body.release_channel.strip().upper()
-    if channel not in {"STABLE", "PILOT"}:
-        raise HTTPException(400, "Kanał aktualizacji musi być STABLE albo PILOT.")
+    if channel not in {"STABLE", "PILOT", "BETA"}:
+        raise HTTPException(400, "Kanał aktualizacji musi być STABLE, PILOT albo BETA.")
 
     link = _link_by_reception_id(rid)
     if not link:

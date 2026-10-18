@@ -6,13 +6,17 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.database import engine
 from app.security import CurrentUser, require_owner
+from app.routers.multiguard_license import _panel_auth, _panel_html
+from app.routers.multiguard_panel_settings import _csrf_token, _token_valid
+from types import SimpleNamespace
+import time
 from app.routers.multiguard_runtime import (
     _ensure_schema as _ensure_runtime_schema,
     _require_agent,
@@ -264,10 +268,10 @@ def _expire_and_find_open(connection, installation_id, *, entitlement_lost=False
               AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
               AND (
                 :entitlement_lost
-                OR (rs.status IN ('REQUESTED','CONSENTED') AND rs.expires_at<:now)
+                OR (rs.status IN ('REQUESTED','CONSENTED') AND rs.expires_at<=:now)
                 OR (rs.status IN ('CONNECT_READY','ACTIVE')
-                    AND rs.mesh_share_expires_at IS NOT NULL
-                    AND rs.mesh_share_expires_at<:now)
+                    AND (rs.mesh_share_expires_at IS NULL
+                         OR rs.mesh_share_expires_at<=:now))
               )
             ORDER BY rs.requested_at,rs.id
             FOR UPDATE OF rs
@@ -462,7 +466,7 @@ def agent_remote_decision(body: AgentRemoteDecisionBody):
                 409,
                 "To żądanie zdalnej pomocy nie oczekuje już na decyzję.",
             )
-        if row["expires_at"] < now:
+        if row["expires_at"] <= now:
             connection.execute(
                 text(
                     """
@@ -817,7 +821,11 @@ def remote_session_connect(
                 409,
                 "Klient nie wyraził zgody na tę sesję.",
             )
-        expired_consent = row["status"] == "CONSENTED" and row["expires_at"] < now
+        expired_consent = row["status"] == "CONSENTED" and row["expires_at"] <= now
+        if (row["status"] in {"CONNECT_READY", "ACTIVE"}
+                and (row["mesh_share_expires_at"] is None
+                     or row["mesh_share_expires_at"] <= now)):
+            raise HTTPException(410, "Udostępnienie wygasło; rozpocznij nową sesję.")
         if expired_consent:
             connection.execute(
                 text(
@@ -857,6 +865,9 @@ def remote_session_connect(
                 f"Nie udało się bezpiecznie obrócić poprzedniego linku: {exc}",
             ) from exc
 
+    # Bound the advertised lease to the start of the external MeshCentral call.
+    # A slow response must not extend our local expiry beyond MeshCentral's.
+    share_expires = datetime.now(timezone.utc) + timedelta(minutes=60)
     try:
         share = meshcentral.create_share(
             node_id,
@@ -866,41 +877,61 @@ def remote_session_connect(
         )
     except meshcentral.MeshCentralError as exc:
         with engine.begin() as connection:
-            connection.execute(
+            updated = connection.execute(
                 text(
                     """
                     UPDATE guard.remote_sessions
-                    SET status='ERROR',last_error=:error,last_activity_at=:now
+                    SET last_error=:error,last_activity_at=:now
                     WHERE id=:session_id
+                      AND status IN ('CONSENTED','CONNECT_READY','ACTIVE')
+                      AND mesh_public_id IS NOT DISTINCT FROM :expected_public_id
                     """
                 ),
                 {
                     "error": str(exc)[:1000],
-                    "now": now,
+                    "now": datetime.now(timezone.utc),
                     "session_id": session_uuid,
+                    "expected_public_id": existing_public_id,
                 },
             )
-            _audit(
-                connection,
-                session_uuid,
-                "MESH_SHARE_FAILED",
-                "MESH",
-                "MeshCentral",
-                {"error": str(exc)[:500]},
-            )
+            if updated.rowcount:
+                _audit(
+                    connection,
+                    session_uuid,
+                    "MESH_SHARE_FAILED",
+                    "MESH",
+                    "MeshCentral",
+                    {"error": str(exc)[:500]},
+                )
         raise HTTPException(502, f"MeshCentral: {exc}") from exc
 
     try:
         with engine.begin() as connection:
             current = connection.execute(text("""
-                SELECT rs.status,gi.plan_code,gi.lifecycle,gi.valid_until,
+                SELECT rs.status,rs.expires_at,rs.ended_at,
+                       rs.mesh_public_id,rs.mesh_share_expires_at,
+                       rs.granted_capabilities,
+                       gi.plan_code,gi.lifecycle,gi.valid_until,
                        gi.is_current,gi.mesh_node_id
                 FROM guard.remote_sessions rs
                 JOIN guard.installations gi ON gi.id=rs.installation_id
                 WHERE rs.id=:sid FOR UPDATE OF rs,gi
             """), {"sid": session_uuid}).mappings().first()
+            # If MeshCentral was slow enough for the new lease to expire,
+            # revoke it through the existing rollback path rather than
+            # publishing an already-expired remote-control URL.
+            if share_expires <= datetime.now(timezone.utc):
+                raise HTTPException(410, "Nowy link MeshCentral wygasł przed zapisem.")
             if (not current or not _has_active_remote_pro(current, datetime.now(timezone.utc))
                     or current["mesh_node_id"] != node_id
+                    or current["mesh_public_id"] != existing_public_id
+                    or current["ended_at"] is not None
+                    or list(current["granted_capabilities"] or []) != granted
+                    or (current["status"] == "CONSENTED"
+                        and current["expires_at"] <= datetime.now(timezone.utc))
+                    or (current["status"] in {"CONNECT_READY", "ACTIVE"}
+                        and (current["mesh_share_expires_at"] is None
+                             or current["mesh_share_expires_at"] <= datetime.now(timezone.utc)))
                     or _plan_change_pending(connection,row["installation_id"])
                     or current["status"] not in {"CONSENTED", "CONNECT_READY", "ACTIVE"}):
                 raise HTTPException(
@@ -921,7 +952,7 @@ def remote_session_connect(
                 ),
                 {
                     "public_id": share.public_id,
-                    "expires_at": now + timedelta(minutes=60),
+                    "expires_at": share_expires,
                     "now": now,
                     "session_id": session_uuid,
                 },
@@ -952,7 +983,7 @@ def remote_session_connect(
     return {
         "sessionId": str(session_uuid),
         "url": share.url,
-        "expiresAt": (now + timedelta(minutes=60)).isoformat(),
+        "expiresAt": share_expires.isoformat(),
         "capabilities": granted,
     }
 
@@ -1090,3 +1121,579 @@ def bind_mesh_node(
 
     return {"status": "ok", "meshNodeId": node_id}
 
+
+
+
+def _owner_panel_csrf(x_owner_csrf: str = Header(default="")) -> None:
+    if not _token_valid(x_owner_csrf):
+        raise HTTPException(403, "Wygasły lub nieprawidłowy token panelu.")
+
+
+def _panel_owner_identity():
+    # Panel-only identity, never accepted by the separate bearer API.
+    return SimpleNamespace(id=None, display_name="OWNER")
+
+
+@router.post("/panel/remote-api/sessions")
+def panel_create_remote_session(
+    body: OwnerRemoteCreateBody,
+    _: None = Depends(_panel_auth),
+    __: None = Depends(_owner_panel_csrf),
+):
+    return create_remote_session(body, user=_panel_owner_identity())
+
+
+@router.get("/panel/remote-api/sessions/{session_id}")
+def panel_remote_session_detail(session_id: str, _: None = Depends(_panel_auth)):
+    return remote_session_detail(session_id, user=_panel_owner_identity())
+
+
+@router.post("/panel/remote-api/sessions/{session_id}/connect")
+def panel_remote_session_connect(
+    session_id: str,
+    _: None = Depends(_panel_auth),
+    __: None = Depends(_owner_panel_csrf),
+):
+    return remote_session_connect(session_id, user=_panel_owner_identity())
+
+
+@router.post("/panel/remote-api/sessions/{session_id}/end")
+def panel_remote_session_end(
+    session_id: str,
+    _: None = Depends(_panel_auth),
+    __: None = Depends(_owner_panel_csrf),
+):
+    return remote_session_end(session_id, user=_panel_owner_identity())
+
+
+@router.get("/panel/remote")
+def owner_remote_overview(_: None = Depends(_panel_auth)):
+    """Compact full-width PRO fleet and support history; never render finances.
+
+    This view does not grant remote access: session creation still requires
+    OWNER API authorization and a fresh, verified customer consent.
+    """
+    from fastapi.responses import HTMLResponse
+    from html import escape
+
+    with engine.connect() as db:
+        rows = db.execute(text("""
+            SELECT gi.id, gi.installation_external_id,
+                   gi.plan_code, gi.lifecycle, gi.valid_until, gi.is_current,
+                   p.hostname, COALESCE(d.manufacturer,p.manufacturer) AS manufacturer,
+                   COALESCE(d.model,p.model) AS model,
+                   sr.id AS request_id, sr.subject AS request_subject,
+                   sr.status AS request_status, sr.created_at AS request_created
+            FROM guard.installations gi
+            LEFT JOIN core.devices d ON d.id=gi.service_device_id
+            LEFT JOIN guard.pending_installations p ON p.installation_id=gi.installation_external_id
+            LEFT JOIN guard.support_requests sr ON sr.installation_id=gi.id
+            WHERE gi.is_current=TRUE AND UPPER(gi.plan_code)='PRO'
+            ORDER BY (CASE WHEN sr.status NOT IN ('RESOLVED','CANCELLED') THEN 0 ELSE 1 END), sr.created_at DESC NULLS LAST, gi.id
+            LIMIT 1500
+        """)).mappings().all()
+
+    # Device identity comes only from the internal core.devices foreign key,
+    # never from hostname, client name, or model similarity.
+    with engine.connect() as db:
+        linked_orders = db.execute(text("""
+            SELECT gi.id AS installation_internal_id, so.id AS order_id,
+                   so.reception_number, so.received_at,
+                   (SELECT count(*) FROM service.service_order_media m
+                    JOIN core.storage_objects o ON o.id=m.storage_object_id
+                    WHERE m.service_order_id=so.id
+                      AND m.deleted_at IS NULL AND o.deleted_at IS NULL) AS photo_count
+            FROM guard.installations gi
+            JOIN service.service_orders so ON so.device_id=gi.service_device_id
+            WHERE gi.is_current=TRUE AND gi.service_device_id IS NOT NULL
+            ORDER BY so.received_at DESC
+            LIMIT 3000
+        """)).mappings().all()
+    orders_by_installation = {}
+    for service_row in linked_orders:
+        orders_by_installation.setdefault(
+            str(service_row["installation_internal_id"]), []
+        ).append(service_row)
+
+    devices = {}
+    for row in rows:
+        key = str(row["id"])
+        if key not in devices:
+            devices[key] = {"info": row, "requests": []}
+        if row["request_id"] is not None:
+            devices[key]["requests"].append(row)
+
+    def safe(value):
+        return escape(str(value if value is not None else ""), quote=True)
+
+    # Show every active PRO installation; requested help sorts before idle devices.
+    output = []
+    for device in sorted(devices.values(), key=lambda dev: (
+        0 if any(str(req['request_status']) not in ('RESOLVED', 'CANCELLED') for req in dev['requests']) else 1,
+        -max((req['request_created'].timestamp() if req['request_created'] else 0)
+             for req in dev['requests']) if dev['requests'] else 0
+    )):
+        item = device["info"]
+        external = str(item["installation_external_id"])
+        machine = " ".join(str(item[k] or "").strip() for k in ("manufacturer", "model")).strip()
+        machine = machine or str(item["hostname"] or "Komputer bez nazwy")
+        valid = item["valid_until"]
+        expiry = valid.strftime("%d.%m.%Y") if valid else "Bez daty"
+        requests = device["requests"]
+        history = "".join(
+            '<li><span>' + safe((r["request_created"].strftime("%d.%m.%Y") if r["request_created"] else "")) +
+            '</span> ' + safe(r["request_subject"]) + ' · ' + safe(r["request_status"]) + '</li>'
+            for r in requests
+        )
+        disclosure = (
+            '<details><summary>' + str(len(requests)) + ' zgłoszeń</summary><ul>' +
+            history + '</ul></details>'
+            if requests else '<span class="muted">Brak zgłoszeń</span>'
+        )
+        details_url = '/multiguard/panel/device/' + safe(item["id"])
+        associated = orders_by_installation.get(str(item["id"]), [])
+        repairs = (
+            '<details><summary>' + str(len(associated)) + ' napraw</summary><ul>' +
+            ''.join(
+                '<li><a href="/multiguard/panel/service/' + safe(o["order_id"]) + '">' +
+                safe(o["reception_number"]) + '</a></li>' for o in associated
+            ) + '</ul></details>'
+            if associated else '<span class="muted">Brak powiązanych napraw</span>'
+        )
+        total_photos = sum(int(o["photo_count"] or 0) for o in associated)
+        photos = (
+            '<details><summary>' + str(total_photos) + ' zdjęć/plików</summary><ul>' +
+            ''.join(
+                '<li><a href="/multiguard/panel/service/' + safe(o["order_id"]) + '">' +
+                safe(o["reception_number"]) + ': ' + str(int(o["photo_count"] or 0)) + '</a></li>'
+                for o in associated if int(o["photo_count"] or 0) > 0
+            ) + '</ul></details>'
+            if total_photos else '<span class="muted">Brak zdjęć</span>'
+        )
+        ready_request = next(
+            (req for req in requests if str(req["request_status"]) not in ("RESOLVED", "CANCELLED")),
+            None,
+        )
+        connect_target = (
+            '/multiguard/panel/remote/session/' + safe(ready_request["request_id"])
+            if ready_request else '/multiguard/panel/remote/device/' + safe(item["id"])
+        )
+        connect_action = (
+            '<a class="button-link compact" target="_blank" rel="noopener" '
+            'onclick="return confirm(\'Czy na pewno rozpocząć procedurę połączenia z tym komputerem?\')" '
+            'href="' + connect_target + '">POŁĄCZ</a> '
+            if str(item["lifecycle"]) == "ACTIVE"
+            else '<span class="muted">Licencja nieaktywna</span> '
+        )
+        output.append(
+            '<tr><td><code>' + safe(external[:12]) + '</code></td>'
+            '<td><a href="' + details_url + '">' + safe(machine) + '</a>'
+            '<small style="display:block">' + safe(item["hostname"]) + '</small></td>'
+            '<td>PRO · ' + safe(item["lifecycle"]) + '</td>'
+            '<td>' + safe(expiry) + '</td>'
+            '<td>' + disclosure + '</td>'
+            '<td>' + repairs + '</td><td>' + photos + '</td>'
+            '<td>' + connect_action + '<a class="button-link compact" href="' + details_url + '">SZCZEGÓŁY</a></td></tr>'
+        )
+    # Workshop Pro and customer support are separate authorization modes.
+    # Never treat a workshop grant as an ordinary paid licence.
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    with engine.connect() as db:
+        workshop_rows = db.execute(text('''
+            SELECT p.installation_id, p.status, g.edition,
+                   p.hostname,p.manufacturer,p.model,
+                   p.first_seen_at AS registered_at,
+                   COUNT(wsr.id) AS request_count
+            FROM guard.pending_installations p
+            JOIN guard.workshop_grants g ON g.installation_id=p.installation_id
+            LEFT JOIN guard.workshop_support_requests wsr
+                ON wsr.installation_id=p.installation_id
+            WHERE g.enabled=TRUE AND g.edition='PRO'
+              AND p.status NOT IN ('ASSIGNED','PROVISIONED','ARCHIVED','UNINSTALLED','IGNORED')
+            GROUP BY p.installation_id,p.status,g.edition,p.hostname,p.manufacturer,p.model,p.first_seen_at
+            ORDER BY p.first_seen_at DESC
+            LIMIT 500
+        ''')).mappings().all()
+    workshop_output = []
+    for item in workshop_rows:
+        iid = safe(item['installation_id'])
+        workshop_output.append(
+            '<tr><td><code>' + iid[:12] + '</code></td>'
+            '<td>' + safe(item['hostname'] or (str(item['manufacturer'] or '') + ' ' + str(item['model'] or '')).strip() or 'Komputer serwisowy') + '</td><td>PRO · TRYB SERWISOWY</td>'
+            '<td>Bezterminowo</td><td>' + str(int(item['request_count'])) + ' zgłoszeń</td>'
+            '<td>—</td><td>—</td>'
+            '<td><a class="button-link compact" target="_blank" rel="noopener" '
+            'href="/multiguard/panel/remote/workshop/' + iid + '">POŁĄCZ</a></td></tr>'
+        )
+    body = (
+        '<section class="card"><div class="eyebrow">MULTI-SERVIS / ZDALNA POMOC</div>'
+        '<h1>Komputery PRO</h1><p>Lista urządzeń i zgłoszeń. Kwoty napraw '
+        'nie są pokazywane na tym ekranie. Zdalny pulpit wymaga zgody '
+        'klienta na każdą sesję.</p>'
+        '<h2>1. PRO · tryb serwisowy</h2>'
+        '<div class="table-wrap"><table><thead><tr>'
+        '<th>ID komputera</th><th>Komputer</th><th>Licencja</th>'
+        '<th>Ważna do</th><th>Zgłoszenia</th><th>Naprawy</th><th>Zdjęcia</th><th>Akcje</th>'
+        '</tr></thead><tbody>' +
+        ("".join(workshop_output) if workshop_output else '<tr><td colspan="8">Brak komputerów PRO w trybie serwisowym.</td></tr>') +
+        '</tbody></table></div><h2>2. Zgłoszenia klientów PRO</h2>'
+        '<div class="table-wrap"><table><thead><tr>'
+        '<th>ID komputera</th><th>Komputer</th><th>Licencja</th>'
+        '<th>Ważna do</th><th>Zgłoszenia</th><th>Naprawy</th><th>Zdjęcia</th><th>Akcje</th>'
+        '</tr></thead><tbody>' +
+        ("".join(output) if output else '<tr><td colspan="8">Brak aktywnych instalacji klientów PRO.</td></tr>') +
+        '</tbody></table></div></section>'
+    )
+    return HTMLResponse(_panel_html(body), headers={"Cache-Control": "private, no-store"})
+
+
+
+@router.get("/panel/remote-api/workshop/active/{installation_id}")
+def panel_workshop_active(installation_id: uuid.UUID, _: None = Depends(_panel_auth)):
+    """Resume a workshop session from server state, never from browser storage."""
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    with engine.connect() as db:
+        grant = workshop._grant(db, installation_id)
+        if not workshop._eligible(grant):
+            raise HTTPException(403, "Nieaktywny tryb serwisowy PRO.")
+        row = db.execute(text("""
+            SELECT * FROM guard.workshop_remote_sessions
+            WHERE installation_id=:iid
+              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            ORDER BY requested_at DESC LIMIT 1
+        """), {"iid": installation_id}).mappings().first()
+    if not row:
+        return {"session": None}
+    result = workshop._public(row)
+    result["meshLinked"] = workshop.session_node_ready(grant, row)
+    return {"session": result}
+
+
+@router.get("/panel/remote/workshop/{installation_id}")
+def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_panel_auth)):
+    """Workshop PRO control room: audited unattended OWNER access, new browser tab."""
+    from fastapi.responses import HTMLResponse
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    with engine.connect() as db:
+        grant = workshop._grant(db, installation_id)
+    if not workshop._eligible(grant):
+        raise HTTPException(403, "Wymagany aktywny tryb serwisowy PRO.")
+    csrf = _csrf_token(int(time.time() // 3600))
+    body = """
+    <section class="card" style="max-width:none;min-height:65vh">
+      <h1>Zdalny pulpit · PRO / tryb serwisowy</h1>
+      <p>Tryb serwisowy PRO umożliwia połączenie bez obecności obsługi w warsztacie. Potwierdzasz połączenie wyłącznie w swoim panelu.</p>
+      <style>
+        .ws-controls{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}
+        .ws-controls button{border:0;border-radius:9px;padding:13px 18px;color:#fff;font-size:15px;font-weight:500;cursor:pointer;min-height:46px}
+        #ws-start{background:#1764b0}
+        #ws-connect{background:#16834a}
+        #ws-end{background:#be3030}
+        .ws-controls button:disabled{background:#737b87!important;color:#fff;cursor:not-allowed;opacity:.65}
+        .ws-controls button:focus-visible{outline:3px solid #72baff;outline-offset:3px}
+      </style>
+      <div class="ws-controls">
+        <button type="button" id="ws-start">POŁĄCZ Z KOMPUTEREM</button>
+        <button type="button" id="ws-connect" disabled>OTWÓRZ PULPIT</button>
+        <button type="button" id="ws-end" disabled>ROZŁĄCZ</button>
+      </div>
+      <p role="status" aria-live="polite" id="ws-status">Gotowy do połączenia.</p>
+    </section>
+    <script>
+    (() => {
+      const installation = """ + json.dumps(str(installation_id)) + """;
+      const csrf = """ + json.dumps(csrf) + """;
+      const start = document.getElementById('ws-start');
+      const connect = document.getElementById('ws-connect');
+      const end = document.getElementById('ws-end');
+      const status = document.getElementById('ws-status');
+      let sid = null, timer = null;
+      async function recover() {
+        start.disabled = true;
+        connect.disabled = true;
+        end.disabled = true;
+        status.textContent = 'Sprawdzam, czy istnieje otwarta sesja…';
+        try {
+          const data = await api('active/' + installation);
+          if (data.session) {
+            sid = data.session.sessionId;
+            end.disabled = false;
+            timer = setInterval(refresh, 3000);
+            await refresh();
+          } else {
+            sid = null;
+            start.disabled = false;
+            status.textContent = 'Gotowy do połączenia.';
+          }
+        } catch(e) {
+          status.textContent = 'Nie można sprawdzić otwartych sesji: ' + e.message;
+          // Never offer a duplicate connection until server confirms no open session.
+          start.disabled = true;
+        }
+      }
+      async function api(path, method='GET') {
+        const r = await fetch('/multiguard/panel/remote-api/workshop/' + path, {
+          method, credentials:'same-origin', cache:'no-store',
+          headers: method === 'POST' ? {'X-Owner-CSRF': csrf} : {}
+        });
+        if (!r.ok) throw Error('HTTP ' + r.status + ': ' + (await r.text()).slice(0,180));
+        return r.json();
+      }
+      async function refresh() {
+        if (!sid) return;
+        try {
+          const info = await api('sessions/' + sid);
+          if (['CONSENTED','CONNECT_READY','ACTIVE'].includes(info.status)) {
+            start.disabled = true;
+            const ready = info.meshLinked === true;
+            connect.disabled = !ready;
+            status.textContent = ready
+              ? 'MeshCentral powiązany — możesz otworzyć pulpit.'
+              : 'Oczekiwanie na powiązanie MeshAgenta z tym komputerem. Pulpit jeszcze niedostępny.';
+          } else if (['DENIED','ENDED','EXPIRED','ERROR'].includes(info.status)) {
+            status.textContent = 'Sesja: ' + info.status;
+            connect.disabled = true;
+            end.disabled = true;
+            start.disabled = false;
+            sid = null;
+            clearInterval(timer);
+            timer = null;
+          } else status.textContent = 'Przygotowywanie sesji serwisowej…';
+        } catch (e) {
+          connect.disabled = true;
+          status.textContent = 'Utracono potwierdzenie stanu MeshCentral: ' + e.message;
+        }
+      }
+      start.onclick = async () => {
+        if (!window.confirm('Czy na pewno połączyć się z komputerem serwisowym?')) return;
+        start.disabled = true;
+        try {
+          const reply = await api('request/' + installation, 'POST');
+          sid = reply.sessionId;
+          end.disabled = false;
+          status.textContent = 'Utworzono sesję serwisową. Sprawdzam powiązanie MeshCentral…';
+          if (timer) clearInterval(timer);
+          timer = setInterval(refresh, 3000);
+          await refresh();
+        } catch (e) { start.disabled=false; connect.disabled=true; end.disabled=true; status.textContent='Nie udało się rozpocząć sesji: '+e.message; }
+      };
+      connect.onclick = async () => {
+        if (!sid) return;
+        const tab = window.open('about:blank','_blank');
+        try {
+          connect.disabled = true;
+          const reply = await api('sessions/' + sid + '/connect','POST');
+          const url = new URL(reply.url);
+          if (url.protocol !== 'https:' || url.hostname !== 'mesh.multi-servis.pl')
+            throw Error('Niezaufany adres MeshCentral.');
+          if (tab) tab.location.replace(url.href);
+          else status.textContent = 'Zezwól na nowe okno i ponów otwarcie pulpitu.';
+        } catch (e) {
+          if(tab) tab.close();
+          status.textContent='Nie udało się otworzyć pulpitu: '+e.message;
+        } finally {
+          if (sid) {
+            try {
+              const info = await api('sessions/' + sid);
+              connect.disabled = !info.meshLinked || !['CONSENTED','CONNECT_READY','ACTIVE'].includes(info.status);
+            } catch (_) { connect.disabled = true; }
+          }
+        }
+      };
+      end.onclick = async () => {
+        if (!sid) return;
+        end.disabled = true;
+        try {
+          await api('sessions/' + sid + '/end','POST');
+          clearInterval(timer); timer=null; sid=null;
+          connect.disabled=true; end.disabled=true; start.disabled=false;
+          status.textContent='Sesja zakończona. Możesz rozpocząć kolejne połączenie.';
+        } catch(e) {end.disabled=false;status.textContent=e.message;}
+      };
+      recover();
+    })();
+    </script>
+    """
+    return HTMLResponse(_panel_html(body),headers={"Cache-Control":"private, no-store"})
+
+
+@router.post("/panel/remote-api/workshop/request/{installation_id}")
+def panel_workshop_request(installation_id: uuid.UUID,
+                           _: None = Depends(_panel_auth),
+                           __: None = Depends(_owner_panel_csrf)):
+    from app.routers import multiguard_workshop_remote as workshop
+    return {"sessionId":str(workshop.request_for_owner(installation_id))}
+
+
+@router.get("/panel/remote-api/workshop/sessions/{session_id}")
+def panel_workshop_status(session_id: uuid.UUID, _: None = Depends(_panel_auth)):
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    with engine.connect() as db:
+        row = db.execute(text("SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid"),
+                         {"sid":session_id}).mappings().first()
+        if row is None:
+            raise HTTPException(404, "Sesja nie istnieje.")
+        grant = workshop._grant(db, row["installation_id"])
+        if not workshop._eligible(grant):
+            raise HTTPException(403, "Nieaktywny tryb serwisowy PRO.")
+    result = workshop._public(row)
+    result["meshLinked"] = workshop.session_node_ready(grant, row)
+    return result
+
+
+@router.post("/panel/remote-api/workshop/sessions/{session_id}/connect")
+def panel_workshop_connect(session_id: uuid.UUID,
+                           _: None = Depends(_panel_auth),
+                           __: None = Depends(_owner_panel_csrf)):
+    from app.routers import multiguard_workshop_remote as workshop
+    return workshop.connect_for_owner(session_id)
+
+
+@router.post("/panel/remote-api/workshop/sessions/{session_id}/end")
+def panel_workshop_end(session_id: uuid.UUID,
+                       _: None = Depends(_panel_auth),
+                       __: None = Depends(_owner_panel_csrf)):
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop.end_for_owner(session_id)
+    return {"ended":True}
+
+
+@router.get("/panel/remote/session/{request_id}")
+def owner_remote_session_workspace(
+    request_id: uuid.UUID,
+    _: None = Depends(_panel_auth),
+):
+    """New-tab owner control room; every session requires fresh client consent."""
+    from fastapi.responses import HTMLResponse
+    from html import escape
+
+    with engine.connect() as connection:
+        row = connection.execute(text("""
+            SELECT sr.subject, sr.status, gi.plan_code, gi.lifecycle, gi.valid_until
+            FROM guard.support_requests sr
+            JOIN guard.installations gi ON gi.id=sr.installation_id
+            WHERE sr.id=:request_id AND gi.is_current=TRUE
+        """), {"request_id": request_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Nie znaleziono zgłoszenia.")
+    if row["plan_code"] != "PRO" or row["lifecycle"] != "ACTIVE" or (
+        row["valid_until"] is not None and row["valid_until"] <= datetime.now(timezone.utc)
+    ):
+        raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji PRO.")
+    if row["status"] in {"RESOLVED", "CANCELLED"}:
+        raise HTTPException(409, "Zgłoszenie zostało zamknięte.")
+
+    subject = escape(str(row["subject"] or "Pomoc zdalna"), quote=True)
+    csrf = _csrf_token(int(time.time() // 3600))
+    html_body = """
+    <section class="card">
+      <div class="eyebrow">MULTI-GUARD PRO / ZDALNA POMOC</div>
+      <h1>""" + subject + """</h1>
+      <p>Klient musi wyrazić zgodę na każdą nową sesję. Samo otwarcie strony
+      nie łączy się z komputerem ani nie uruchamia MeshAgenta.</p>
+      <button type="button" id="request-connect">WYŚLIJ PROŚBĘ O POŁĄCZENIE</button>
+      <button type="button" id="connect-desktop" disabled>OTWÓRZ PULPIT</button>
+      <button type="button" id="end-remote" disabled>ROZŁĄCZ</button>
+      <p id="remote-status" role="status" aria-live="polite">Oczekiwanie na rozpoczęcie.</p>
+    </section>
+    <script>
+    (() => {
+      const supportRequestId = """ + json.dumps(str(request_id)) + """;
+      const csrf = """ + json.dumps(csrf) + """;
+      const status = document.getElementById('remote-status');
+      const start = document.getElementById('request-connect');
+      const connect = document.getElementById('connect-desktop');
+      const end = document.getElementById('end-remote');
+      let sessionId = null;
+      let poll = null;
+      async function api(url, method='GET', body=null) {
+        const response = await fetch(url, {
+          method,
+          credentials: 'same-origin',
+          headers: method === 'POST' ? {'Content-Type':'application/json', 'X-Owner-CSRF':csrf} : {},
+          body: body ? JSON.stringify(body) : undefined,
+          cache: 'no-store'
+        });
+        if (!response.ok) {
+          const message = await response.text();
+          throw Error('HTTP ' + response.status + ': ' + message.slice(0,250));
+        }
+        return response.json();
+      }
+      async function refresh() {
+        if (!sessionId) return;
+        try {
+          const session = await api('/multiguard/panel/remote-api/sessions/' + sessionId);
+          if (session.status === 'CONSENTED' || session.status === 'CONNECT_READY') {
+            status.textContent = 'Klient wyraził zgodę. Możesz otworzyć pulpit.';
+            connect.disabled = false;
+          } else if (['DENIED','ENDED','EXPIRED','ERROR'].includes(session.status)) {
+            status.textContent = 'Sesja zakończona: ' + session.status;
+            connect.disabled = true;
+            end.disabled = true;
+            clearInterval(poll);
+          } else if (session.status === 'ACTIVE') {
+            status.textContent = 'Sesja aktywna.';
+            connect.disabled = false;
+          } else {
+            status.textContent = 'Oczekiwanie na zgodę klienta...';
+          }
+        } catch (error) { status.textContent = 'Błąd sprawdzenia: ' + error.message; }
+      }
+      start.onclick = async () => {
+        if (!window.confirm('Wysłać klientowi prośbę o zatwierdzenie połączenia?')) return;
+        start.disabled = true;
+        try {
+          const session = await api('/multiguard/panel/remote-api/sessions', 'POST',
+                                    {supportRequestId, requestFiles:false});
+          sessionId = session.sessionId;
+          end.disabled = false;
+          status.textContent = 'Prośba wysłana. Oczekiwanie na zgodę klienta.';
+          await refresh();
+          poll = setInterval(refresh, 3000);
+        } catch (error) {
+          status.textContent = 'Nie udało się wysłać prośby: ' + error.message;
+          start.disabled = false;
+        }
+      };
+      connect.onclick = async () => {
+        if (!sessionId) return;
+        // Reserve tab synchronously so browser popup blockers do not discard
+        // the session after the asynchronous OWNER authorization step.
+        const desktopTab = window.open('about:blank', '_blank');
+        if (desktopTab) desktopTab.opener = null;
+        connect.disabled = true;
+        try {
+          const session = await api('/multiguard/panel/remote-api/sessions/' + sessionId + '/connect', 'POST');
+          const url = new URL(session.url);
+          if (url.protocol !== 'https:') throw Error('Niebezpieczny adres sesji.');
+          if (desktopTab) desktopTab.location.replace(url.href);
+          else status.textContent = 'Przeglądarka zablokowała nową kartę. Zezwól na wyskakujące okna.';
+          if (desktopTab) status.textContent = 'Otworzono zabezpieczony pulpit MeshCentral.';
+        } catch (error) {
+          if (desktopTab) desktopTab.close();
+          status.textContent = 'Połączenie nieudane: ' + error.message;
+        } finally { connect.disabled = false; }
+      };
+      end.onclick = async () => {
+        if (!sessionId) return;
+        try {
+          await api('/multiguard/panel/remote-api/sessions/' + sessionId + '/end', 'POST');
+          status.textContent = 'Sesja zakończona.';
+          connect.disabled = true; end.disabled = true;
+          clearInterval(poll);
+        } catch (error) { status.textContent = 'Nie udało się rozłączyć: ' + error.message; }
+      };
+      window.addEventListener('pagehide', () => clearInterval(poll));
+    })();
+    </script>
+    """
+    return HTMLResponse(_panel_html(html_body), headers={
+        "Cache-Control": "private, no-store",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": "frame-ancestors 'none'",
+    })

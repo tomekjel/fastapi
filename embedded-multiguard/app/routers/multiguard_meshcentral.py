@@ -215,19 +215,43 @@ def verify_session_node(local_id: str, session_id: str) -> str:
     if len(matches) != 1:
         raise MeshCentralError("Agent sesji nie jest jednoznacznie widoczny.")
     record = matches[0]
-    connected = record.get("conn")
+    # MeshCtrl --json can omit the transient 'conn' field even while the
+    # text listing includes it. Check identity/group/name in JSON first;
+    # absent connectivity requires an independent, exact-ID text check.
     if (record.get("meshid") != group
-            or record.get("name") != f"MultiGuard-{session_id}"
-            or type(connected) is not int or not (connected & 1)):
-        raise MeshCentralError("Agent nie potwierdził grupy, sesji lub połączenia.")
+            or record.get("name") != f"MultiGuard-{session_id}"):
+        raise MeshCentralError("Agent nie potwierdził grupy lub sesji.")
+    connected = record.get("conn")
+    if connected is None:
+        import csv
+        listing = _run(command)
+        if len(listing) > 2_000_000:
+            raise MeshCentralError("Zbyt duży tekstowy spis agentów.")
+        statuses = []
+        for fields in csv.reader(listing.splitlines(), skipinitialspace=True):
+            if len(fields) != 5 or fields[0].strip() != local_id:
+                continue
+            if fields[1].strip() != f"MultiGuard-{session_id}":
+                raise MeshCentralError("Niespójna tożsamość agenta MeshCentral.")
+            value = fields[3].strip()
+            if not re.fullmatch(r"[0-9]+", value):
+                raise MeshCentralError("Nieznany status połączenia agenta.")
+            statuses.append(int(value))
+        if len(statuses) != 1:
+            raise MeshCentralError("Nie można jednoznacznie sprawdzić statusu agenta.")
+        connected = statuses[0]
+    if type(connected) is not int or not (connected & 1):
+        raise MeshCentralError("Agent nie jest potwierdzony jako online.")
     return node
 
 
-def create_share(
+def _create_share(
     node_id: str,
     session_label: str,
     capabilities: Iterable[str],
     duration_minutes: int = 60,
+    *,
+    workshop_unattended: bool = False,
 ) -> MeshShare:
     node_id = node_id.strip()
     if not node_id:
@@ -242,19 +266,16 @@ def create_share(
 
     share_type = "desktop,files" if "files" in granted else "desktop"
     duration = max(5, min(int(duration_minutes), 120))
-    # Every commercial/temporary workshop client share MUST require both
-    # a fresh prompt on the endpoint and the visible privacy toolbar.
-    # Previous versions accepted notify-only MESH_CENTRAL_SHARE_CONSENT,
-    # which could silently bypass client choice despite application consent.
-    # OWNER_UNATTENDED must use a separate, independently authorized method.
-    configured_consent = os.getenv(
-        "MESH_CENTRAL_SHARE_CONSENT", "prompt,bar"
-    ).strip() or "prompt,bar"
-    if configured_consent != "prompt,bar":
-        raise MeshCentralError(
-            "Połączenie z klientem wymaga MeshCentral: prompt,bar."
-        )
-    consent = "prompt,bar"
+    # Commercial links must always prompt for fresh consent. The separate
+    # OWNER workshop path is allowed only after an explicit PRO workshop grant
+    # was checked by request_for_owner/connect_for_owner.
+    if workshop_unattended:
+        consent = "bar"
+    else:
+        configured = os.getenv("MESH_CENTRAL_SHARE_CONSENT", "prompt,bar").strip() or "prompt,bar"
+        if configured != "prompt,bar":
+            raise MeshCentralError("Połączenie z klientem wymaga MeshCentral: prompt,bar.")
+        consent = "prompt,bar"
 
     cmd = _base_command() + [
         "--id", node_id,
@@ -275,7 +296,10 @@ def create_share(
     share_url = url_match.group(1)
     try:
         returned = urlsplit(share_url)
-        configured = urlsplit(_required("MESH_CENTRAL_URL"))
+        configured = urlsplit(
+            os.getenv("MESH_CENTRAL_URL", "").strip() or
+            "wss://mesh.multi-servis.pl"
+        )
         if (returned.scheme != "https"
                 or not returned.hostname
                 or not configured.hostname
@@ -294,6 +318,29 @@ def create_share(
     except ValueError as exc:
         raise MeshCentralError("MeshCentral zwrócił niebezpieczny adres sesji.") from exc
     return MeshShare(public_match.group(1), share_url)
+
+
+def create_share(
+    node_id: str,
+    session_label: str,
+    capabilities: Iterable[str],
+    duration_minutes: int = 60,
+) -> MeshShare:
+    """Commercial client share: always prompt for each connection."""
+    return _create_share(node_id, session_label, capabilities, duration_minutes)
+
+
+def create_workshop_share(
+    node_id: str,
+    session_label: str,
+    capabilities: Iterable[str],
+    duration_minutes: int = 60,
+) -> MeshShare:
+    """OWNER-only workshop grant: visible privacy bar, no per-session prompt.
+
+    Must be called only from the authenticated workshop OWNER path.
+    """
+    raise MeshCentralError("OWNER_UNATTENDED zablokowany do czasu niezależnego poświadczenia urządzenia.")
 
 
 def _share_absent_from_listing(node_id: str, public_id: str) -> bool:

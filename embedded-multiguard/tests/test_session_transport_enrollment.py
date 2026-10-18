@@ -20,6 +20,9 @@ for name in ("app.database", "app.security", "app.routers.multiguard_runtime", "
     if name.endswith("runtime"):
         module._ensure_schema = lambda: None
         module._require_agent = MagicMock()
+    if name.endswith("license"):
+        module._panel_auth = lambda: None
+        module._panel_html = lambda *args, **kwargs: ""
     sys.modules.setdefault(name, module)
 from fastapi import HTTPException
 from app.routers import multiguard_remote as paid
@@ -56,6 +59,51 @@ class SessionTransportTests(unittest.TestCase):
             with self.subTest(wrong=wrong), self.assertRaises(mesh.MeshCentralError):
                 self.verify([wrong])
         with self.assertRaises(mesh.MeshCentralError): self.verify([self.record(),self.record()])
+
+    def test_meshctrl_text_status_fallback_contract(self):
+        import inspect
+        source = inspect.getsource(mesh.verify_session_node)
+        self.assertIn("csv.reader(listing.splitlines(), skipinitialspace=True)", source)
+        self.assertIn("fields[0].strip() != local_id", source)
+        self.assertIn("fields[1].strip() != f\"MultiGuard-{session_id}\"", source)
+        self.assertIn("if len(statuses) != 1:", source)
+        self.assertIn("not (connected & 1)", source)
+
+    def test_meshctrl_fallback_real_behavior(self):
+        record = self.record()
+        del record["conn"]
+        label = f"MultiGuard-{self.sid}"
+        def check(lines):
+            with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": self.group}), \
+                 patch.object(mesh, "_base_command", return_value=["meshctrl", "DeviceSharing"]), \
+                 patch.object(mesh, "_run", side_effect=[json.dumps([record]), lines]):
+                return mesh.verify_session_node("A"*64, str(self.sid))
+        live = f'A'*64 + f', "{label}", 2, 1, 0\n'
+        self.assertEqual(check(live), self.node)
+        for lines in (
+            f'A'*64 + f', "{label}", 2, 0, 0\n',
+            f'A'*64 + f', "{label}", 2, 2, 0\n',
+            f'B'*64 + f', "{label}", 2, 1, 0\n',
+            f'A'*64 + ', "Foreign", 2, 1, 0\n',
+            live + live,
+            "",
+        ):
+            with self.subTest(lines=lines[:16]), self.assertRaises(mesh.MeshCentralError):
+                check(lines)
+
+    def test_unattended_blocked_without_independent_owner_attestation(self):
+        with self.assertRaises(mesh.MeshCentralError):
+            mesh.create_workshop_share(self.node, "Workshop", ["desktop"])
+        with self.assertRaises(HTTPException) as caught:
+            workshop.request_for_owner(self.iid)
+        self.assertEqual(caught.exception.status_code, 503)
+
+    def test_commercial_share_remains_prompt_and_bar(self):
+        with patch.object(mesh, "_base_command", return_value=["meshctrl", "DeviceSharing"]), \
+             patch.object(mesh, "_run", return_value="ID: share\nURL: https://mesh.multi-servis.pl/guest\n") as run:
+            mesh.create_share(self.node, "Commercial", ["desktop"])
+        args = run.call_args.args[0]
+        self.assertEqual(args[args.index("--consent") + 1], "prompt,bar")
 
     def test_missing_group_is_not_guessed(self):
         with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID":""}), \
@@ -123,6 +171,171 @@ class SessionTransportTests(unittest.TestCase):
             with self.assertRaises(HTTPException): workshop.workshop_session_mesh_enroll(body)
             self.assertFalse(any("INSERT INTO guard.workshop_mesh_nodes" in str(c.args[0]) for c in db.execute.call_args_list))
 
+    def test_workshop_consent_refreshes_enrollment_deadline(self):
+        # Consent near the end of the original request must still allow agent enrollment.
+        body = workshop.WorkshopDecision(**self.auth(), discoveryCredential="x"*32,
+                                         allowDesktop=True)
+        old_expiry = datetime.now(timezone.utc) + timedelta(seconds=2)
+        pending = {**self.row, "status":"REQUESTED", "expires_at":old_expiry,
+                   "requested_by_name":"OWNER", "subject":"Test",
+                   "requested_capabilities":["desktop"], "requested_at":datetime.now(timezone.utc),
+                   "connected_at":None, "reconnect_until":None,
+                   "mesh_share_expires_at":None, "last_error":None}
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.return_value = pending
+        db.execute.return_value.mappings.return_value.one.return_value = {
+            **pending, "status":"CONSENTED"}
+        with patch.object(workshop, "_schema"), patch.object(workshop, "_authenticate"), \
+             patch.object(workshop, "_grant", return_value={"edition":"PRO","enabled":True,"status":"NEW"}), \
+             patch.object(workshop, "engine") as engine, patch.object(workshop, "_event"):
+            engine.begin.return_value.__enter__.return_value = db
+            workshop.workshop_remote_decision(body)
+        writes = [c for c in db.execute.call_args_list
+                  if "SET status='CONSENTED'" in str(c.args[0])]
+        self.assertEqual(len(writes), 1)
+        params = writes[0].args[1]
+        self.assertIn("expires_at=:consent_expires", str(writes[0].args[0]))
+        self.assertGreater(params["consent_expires"], old_expiry + timedelta(minutes=4))
+
+    def test_concurrent_owner_connect_does_not_overwrite_newer_share(self):
+        from types import SimpleNamespace
+        row = {**self.row, "requested_by_name":"OWNER"}
+        changed = {**row, "status":"CONNECT_READY", "mesh_public_id":"share-winner"}
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.side_effect = [row, changed]
+        grant = {"mesh_node_id":self.node, "mesh_session_id":self.sid}
+        with patch.object(workshop, "_schema"), \
+             patch.object(workshop, "engine") as engine, \
+             patch.object(workshop, "_grant", return_value=grant), \
+             patch.object(workshop, "_eligible", return_value=True), \
+             patch.object(mesh, "create_share",
+                          return_value=SimpleNamespace(public_id="share-loser",url="https://example.test")) as create, \
+             patch.object(mesh, "revoke_share") as revoke:
+            engine.begin.return_value.__enter__.return_value = db
+            with self.assertRaises(HTTPException):
+                workshop.connect_for_owner(self.sid)
+        create.assert_called_once()
+        revoke.assert_called_once_with(self.node, "share-loser")
+        self.assertFalse(any("UPDATE guard.workshop_remote_sessions" in str(c.args[0])
+                             for c in db.execute.call_args_list))
+
+    def test_share_expiring_during_create_is_rejected_and_new_share_revoked(self):
+        from types import SimpleNamespace
+        live = {**self.row, "status":"CONNECT_READY", "mesh_public_id":"old-share",
+                "mesh_share_expires_at":datetime.now(timezone.utc)+timedelta(minutes=10)}
+        expired = {**live, "mesh_share_expires_at":
+                   datetime.now(timezone.utc)-timedelta(seconds=1)}
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.side_effect = [live, expired]
+        grant = {"mesh_node_id":self.node, "mesh_session_id":self.sid}
+        with patch.object(workshop, "_schema"), \
+             patch.object(workshop, "engine") as engine, \
+             patch.object(workshop, "_grant", return_value=grant), \
+             patch.object(workshop, "_eligible", return_value=True), \
+             patch.object(mesh, "create_share",
+                          return_value=SimpleNamespace(public_id="new-share",url="https://example.test")), \
+             patch.object(mesh, "revoke_share") as revoke:
+            engine.begin.return_value.__enter__.return_value = db
+            with self.assertRaises(HTTPException):
+                workshop.connect_for_owner(self.sid)
+        self.assertEqual(revoke.call_count, 2)
+        revoke.assert_any_call(self.node, "old-share")
+        revoke.assert_any_call(self.node, "new-share")
+        self.assertFalse(any("UPDATE guard.workshop_remote_sessions" in str(c.args[0])
+                             for c in db.execute.call_args_list))
+
+    def test_mesh_creation_failure_preserves_session_state(self):
+        import inspect
+        source = inspect.getsource(paid.remote_session_connect)
+        self.assertIn("SET last_error=:error,last_activity_at=:now", source)
+        self.assertIn("AND status IN ('CONSENTED','CONNECT_READY','ACTIVE')", source)
+        self.assertIn("AND mesh_public_id IS NOT DISTINCT FROM :expected_public_id", source)
+        self.assertIn("if updated.rowcount:", source)
+        self.assertNotIn("SET status='ERROR',last_error=:error", source)
+
+    def test_paid_consent_rejects_exact_expiry_boundary(self):
+        import inspect
+        source = inspect.getsource(paid.agent_remote_decision)
+        self.assertIn('if row["expires_at"] <= now:', source)
+
+    def test_expired_mesh_creation_cannot_publish_workshop_share(self):
+        import inspect
+        source = inspect.getsource(workshop.connect_for_owner)
+        self.assertIn("if share_expires <= _now():", source)
+        self.assertIn("Nowy link MeshCentral wygasł przed zapisem.", source)
+        self.assertIn("meshcentral.revoke_share(node,share.public_id)", source)
+
+    def test_expired_mesh_creation_cannot_publish_paid_share(self):
+        import inspect
+        source = inspect.getsource(paid.remote_session_connect)
+        self.assertIn("if share_expires <= datetime.now(timezone.utc):", source)
+        self.assertIn("Nowy link MeshCentral wygasł przed zapisem.", source)
+        self.assertIn("meshcentral.revoke_share(node_id, share.public_id)", source)
+
+    def test_paid_share_expiry_is_shared_between_database_and_response(self):
+        import inspect
+        source = inspect.getsource(paid.remote_session_connect)
+        self.assertIn('share_expires = datetime.now(timezone.utc) + timedelta(minutes=60)', source)
+        self.assertIn('"expires_at": share_expires', source)
+        self.assertIn('"expiresAt": share_expires.isoformat()', source)
+
+    def test_paid_connect_checks_share_identity_and_consent_after_mesh_call(self):
+        # Regression contract: concurrent OWNER actions must never overwrite
+        # a newer public share or consent and must check actual lease validity.
+        import inspect
+        source = inspect.getsource(paid.remote_session_connect)
+        self.assertIn('current["mesh_public_id"] != existing_public_id', source)
+        self.assertIn('list(current["granted_capabilities"] or []) != granted', source)
+        self.assertIn('current["ended_at"] is not None', source)
+        self.assertIn('current["mesh_share_expires_at"] <= datetime.now(timezone.utc)', source)
+        self.assertIn('current["expires_at"] <= datetime.now(timezone.utc)', source)
+
+    def test_paid_expiry_query_includes_missing_share_lease(self):
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.all.return_value = []
+        db.execute.return_value.mappings.return_value.first.return_value = None
+        paid._expire_and_find_open(db, self.iid)
+        query = str(db.execute.call_args_list[0].args[0])
+        self.assertIn("rs.mesh_share_expires_at IS NULL", query)
+        self.assertIn("rs.mesh_share_expires_at<=:now", query)
+        self.assertIn("rs.expires_at<=:now", query)
+
+    def test_missing_share_lease_is_expired_and_revoked(self):
+        active = {**self.row, "status":"CONNECT_READY", "mesh_public_id":"orphan-share",
+                  "mesh_share_expires_at":None}
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.return_value = active
+        grant = {"edition":"PRO", "enabled":True, "status":"NEW",
+                 "mesh_node_id":self.node, "mesh_session_id":self.sid}
+        with patch.object(workshop, "_grant", return_value=grant), \
+             patch.object(mesh, "revoke_share") as revoke, \
+             patch.object(workshop, "_event") as event:
+            self.assertIsNone(workshop._open(db, self.iid))
+        revoke.assert_called_once_with(self.node, "orphan-share")
+        self.assertTrue(any("SET status='EXPIRED'" in str(c.args[0])
+                            for c in db.execute.call_args_list))
+        event.assert_called_once()
+
+    def test_owner_reconnect_rejects_expired_share_without_mesh_call(self):
+        expired = {**self.row, "status":"CONNECT_READY",
+                   "mesh_public_id":"old-share",
+                   "mesh_share_expires_at":datetime.now(timezone.utc)-timedelta(seconds=1)}
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.return_value = expired
+        grant = {"mesh_node_id":self.node, "mesh_session_id":self.sid}
+        with patch.object(workshop, "_schema"), \
+             patch.object(workshop, "engine") as engine, \
+             patch.object(workshop, "_grant", return_value=grant), \
+             patch.object(workshop, "_eligible", return_value=True), \
+             patch.object(mesh, "create_share") as create, \
+             patch.object(mesh, "revoke_share") as revoke:
+            engine.begin.return_value.__enter__.return_value = db
+            with self.assertRaises(HTTPException) as caught:
+                workshop.connect_for_owner(self.sid)
+        self.assertEqual(caught.exception.status_code, 410)
+        create.assert_not_called()
+        revoke.assert_not_called()
+
     def test_active_snapshot_uses_actual_share_expiry(self):
         row={**self.row,"status":"CONNECT_READY", "support_request_id":self.sid,
              "requested_by_name":"OWNER","subject":"Test", "requested_capabilities":["desktop"],
@@ -130,5 +343,44 @@ class SessionTransportTests(unittest.TestCase):
              "mesh_share_expires_at":datetime.now(timezone.utc)+timedelta(minutes=60),"last_error":None}
         for renderer in (paid._remote_public,workshop._public):
             self.assertEqual(renderer(row)["expiresAt"],row["mesh_share_expires_at"].isoformat())
+
+    def test_old_online_agent_never_satisfies_new_session(self):
+        old = self.record(name=f"MultiGuard-{uuid.uuid4()}")
+        for connected in (0, 1):
+            with self.assertRaises(mesh.MeshCentralError):
+                self.verify([{**old, "conn": connected}])
+        self.assertEqual(self.verify([self.record()]), self.node)
+
+    def test_readiness_is_bound_to_current_session(self):
+        grant = {"mesh_node_id": self.node, "mesh_session_id": uuid.uuid4()}
+        self.assertFalse(workshop.session_node_ready(grant, self.row))
+        grant["mesh_session_id"] = self.sid
+        self.assertTrue(workshop.session_node_ready(grant, self.row))
+        grant["mesh_node_id"] = None
+        self.assertFalse(workshop.session_node_ready(grant, self.row))
+
+    def test_rotation_requires_ended_owned_session_without_share(self):
+        ended = {**self.row, "status": "ENDED", "ended_at": datetime.now(timezone.utc)}
+        self.assertTrue(workshop._can_replace_session_node(ended, self.iid))
+        for previous in (None, self.row, {**ended, "ended_at": None},
+                         {**ended, "mesh_public_id": "still-live"},
+                         {**ended, "installation_id": uuid.uuid4()}):
+            self.assertFalse(workshop._can_replace_session_node(previous, self.iid))
+
+    def test_workshop_end_during_mesh_verification_prevents_binding(self):
+        body = workshop.WorkshopSessionMeshEnrollment(**self.auth(), discoveryCredential="x"*32)
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.side_effect = [
+            self.row, {**self.row, "status": "ENDED", "ended_at": datetime.now(timezone.utc)}]
+        with patch.object(workshop, "_schema"), patch.object(workshop, "_authenticate"), \
+             patch.object(workshop, "engine") as engine, \
+             patch.object(workshop, "_eligible", return_value=True), \
+             patch.object(workshop, "_grant", return_value={"mesh_node_id": None}), \
+             patch.object(mesh, "verify_session_node", return_value=self.node):
+            engine.connect.return_value.__enter__.return_value = db
+            engine.begin.return_value.__enter__.return_value = db
+            with self.assertRaises(HTTPException): workshop.workshop_session_mesh_enroll(body)
+        self.assertFalse(any("INSERT INTO guard.workshop_mesh_nodes" in str(c.args[0])
+                             for c in db.execute.call_args_list))
 
 if __name__ == "__main__": unittest.main()

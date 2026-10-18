@@ -29,7 +29,7 @@ PUBLIC_BASE = os.getenv(
     "MULTI_GUARD_PUBLIC_BASE_URL", "https://api.multi-servis.pl"
 ).rstrip("/")
 TAG_RE = re.compile(
-    r"^v(?P<version>\d+\.\d+\.\d+)-(?P<channel>TEST(?:-preview)?|LICENSE_TEST|PILOT|STABLE)$",
+    r"^v(?P<version>\d+\.\d+\.\d+(?:-beta\.\d+)?)-(?P<channel>TEST(?:-preview)?|LICENSE_TEST|BETA|PILOT|STABLE)$",
     re.IGNORECASE,
 )
 
@@ -54,8 +54,10 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def semver_key(value: str) -> tuple[int, int, int]:
-    return tuple(int(part) for part in value.split("."))
+def semver_key(value: str) -> tuple[int, int, int, int, int]:
+    base, _, suffix = value.partition("-beta.")
+    major, minor, patch = (int(part) for part in base.split("."))
+    return (major, minor, patch, 0 if suffix else 1, int(suffix) if suffix else 0)
 
 
 def release_channel(raw: str) -> str:
@@ -215,7 +217,7 @@ def main() -> int:
 
     RELEASE_ROOT.mkdir(parents=True, exist_ok=True)
     releases = load_releases()
-    candidates: list[tuple[tuple[int, int, int], dict, str, str, dict, dict]] = []
+    candidates: list[tuple[tuple[int, int, int, int, int], dict, str, str, dict, dict]] = []
 
     for release in releases:
         if release.get("draft"):

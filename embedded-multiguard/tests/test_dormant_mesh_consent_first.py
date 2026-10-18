@@ -31,6 +31,8 @@ mesh.create_share=MagicMock()
 mesh.revoke_share=MagicMock()
 mesh.verify_registered_node=MagicMock()
 license=ModuleType("app.routers.multiguard_license")
+license._panel_auth=lambda: None
+license._panel_html=lambda *args,**kwargs: ""
 for name,mod in (
     ("app.database",database), ("app.security",security),
     ("app.routers.multiguard_runtime",runtime),
