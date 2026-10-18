@@ -19,3 +19,5 @@ check=isolated-beta-channel
 check=license-beta-channel-20261018
 
 check=beta-dynamic-final
+
+retry=after-rog-manual-restart
