@@ -25,6 +25,8 @@ jobs:
           if errorlevel 1 exit /b 1
           python -m unittest discover -s embedded-multiguard\tests -p test_owner_remote_fleet_ui.py -v
           if errorlevel 1 exit /b 1
+          python -m unittest discover -s embedded-multiguard\tests -p test_workshop_remote_buttons.py -v
+          if errorlevel 1 exit /b 1
           python -m unittest discover -s embedded-multiguard\tests -p test_beta_release_contract.py -v
           if errorlevel 1 exit /b 1
           python -m unittest discover -s embedded-multiguard\tests -p test_owner_financial_discretion.py -v
