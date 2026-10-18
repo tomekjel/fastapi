@@ -170,6 +170,26 @@ class SessionTransportTests(unittest.TestCase):
         self.assertFalse(any("UPDATE guard.workshop_remote_sessions" in str(c.args[0])
                              for c in db.execute.call_args_list))
 
+    def test_owner_reconnect_rejects_expired_share_without_mesh_call(self):
+        expired = {**self.row, "status":"CONNECT_READY",
+                   "mesh_public_id":"old-share",
+                   "mesh_share_expires_at":datetime.now(timezone.utc)-timedelta(seconds=1)}
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.return_value = expired
+        grant = {"mesh_node_id":self.node, "mesh_session_id":self.sid}
+        with patch.object(workshop, "_schema"), \
+             patch.object(workshop, "engine") as engine, \
+             patch.object(workshop, "_grant", return_value=grant), \
+             patch.object(workshop, "_eligible", return_value=True), \
+             patch.object(mesh, "create_share") as create, \
+             patch.object(mesh, "revoke_share") as revoke:
+            engine.begin.return_value.__enter__.return_value = db
+            with self.assertRaises(HTTPException) as caught:
+                workshop.connect_for_owner(self.sid)
+        self.assertEqual(caught.exception.status_code, 410)
+        create.assert_not_called()
+        revoke.assert_not_called()
+
     def test_active_snapshot_uses_actual_share_expiry(self):
         row={**self.row,"status":"CONNECT_READY", "support_request_id":self.sid,
              "requested_by_name":"OWNER","subject":"Test", "requested_capabilities":["desktop"],
