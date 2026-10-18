@@ -35,6 +35,18 @@ class RemoteFleetPageContract(unittest.TestCase):
         self.assertNotIn("LIKE", body)
         self.assertNotIn("owner_finances", body)
 
+    def test_control_room_requires_explicit_pro_consent(self):
+        section = self.source.split('@router.get("/panel/remote/session/{request_id}")', 1)[1]
+        self.assertIn('Depends(_panel_auth)', section)
+        self.assertIn('row["plan_code"] != "PRO"', section)
+        self.assertIn("row[\"lifecycle\"] != \"ACTIVE\"", section)
+        self.assertIn('request-connect', section)
+        self.assertIn('session.status === \'CONSENTED\'', section)
+        self.assertIn("remote-sessions/' + sessionId + '/connect", section)
+        self.assertIn("remote-sessions/' + sessionId + '/end", section)
+        self.assertIn("window.open('about:blank', '_blank')", section)
+        self.assertIn("url.protocol !== 'https:'", section)
+
     def test_no_unconsented_remote_launch(self):
         body = self.source.split('@router.get("/panel/remote")', 1)[1]
         self.assertNotIn('remote_session_connect(', body)
