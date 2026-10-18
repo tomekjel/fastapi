@@ -275,7 +275,10 @@ def create_share(
     share_url = url_match.group(1)
     try:
         returned = urlsplit(share_url)
-        configured = urlsplit(_required("MESH_CENTRAL_URL"))
+        configured = urlsplit(
+            os.getenv("MESH_CENTRAL_URL", "").strip() or
+            "wss://mesh.multi-servis.pl"
+        )
         if (returned.scheme != "https"
                 or not returned.hostname
                 or not configured.hostname
