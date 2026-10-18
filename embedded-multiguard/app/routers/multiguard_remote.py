@@ -466,7 +466,7 @@ def agent_remote_decision(body: AgentRemoteDecisionBody):
                 409,
                 "To żądanie zdalnej pomocy nie oczekuje już na decyzję.",
             )
-        if row["expires_at"] < now:
+        if row["expires_at"] <= now:
             connection.execute(
                 text(
                     """
