@@ -1275,7 +1275,7 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
     with engine.connect() as db:
         workshop_rows = db.execute(text('''
             SELECT p.installation_id, p.status, g.edition,
-                   p.created_at AS registered_at,
+                   p.first_seen_at AS registered_at,
                    COUNT(wsr.id) AS request_count
             FROM guard.pending_installations p
             JOIN guard.workshop_grants g ON g.installation_id=p.installation_id
@@ -1283,8 +1283,8 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
                 ON wsr.installation_id=p.installation_id
             WHERE g.enabled=TRUE AND g.edition='PRO'
               AND p.status NOT IN ('ASSIGNED','PROVISIONED','ARCHIVED','UNINSTALLED','IGNORED')
-            GROUP BY p.installation_id,p.status,g.edition,p.created_at
-            ORDER BY p.created_at DESC
+            GROUP BY p.installation_id,p.status,g.edition,p.first_seen_at
+            ORDER BY p.first_seen_at DESC
             LIMIT 500
         ''')).mappings().all()
     workshop_output = []
