@@ -69,6 +69,28 @@ class SessionTransportTests(unittest.TestCase):
         self.assertIn("if len(statuses) != 1:", source)
         self.assertIn("not (connected & 1)", source)
 
+    def test_meshctrl_fallback_real_behavior(self):
+        record = self.record()
+        del record["conn"]
+        label = f"MultiGuard-{self.sid}"
+        def check(lines):
+            with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": self.group}), \
+                 patch.object(mesh, "_base_command", return_value=["meshctrl", "DeviceSharing"]), \
+                 patch.object(mesh, "_run", side_effect=[json.dumps([record]), lines]):
+                return mesh.verify_session_node("A"*64, str(self.sid))
+        live = f'A'*64 + f', "{label}", 2, 1, 0\n'
+        self.assertEqual(check(live), self.node)
+        for lines in (
+            f'A'*64 + f', "{label}", 2, 0, 0\n',
+            f'A'*64 + f', "{label}", 2, 2, 0\n',
+            f'B'*64 + f', "{label}", 2, 1, 0\n',
+            f'A'*64 + ', "Foreign", 2, 1, 0\n',
+            live + live,
+            "",
+        ):
+            with self.subTest(lines=lines[:16]), self.assertRaises(mesh.MeshCentralError):
+                check(lines)
+
     def test_missing_group_is_not_guessed(self):
         with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID":""}), \
              patch.object(mesh, "_run") as run, self.assertRaises(mesh.MeshCentralError):
