@@ -100,6 +100,22 @@ class SessionTransportTests(unittest.TestCase):
             mesh.create_workshop_share(self.node, "Service", ["desktop"])
             self.assertEqual(run.call_args.args[0][run.call_args.args[0].index("--consent")+1], "bar")
 
+    def test_customer_consent_cannot_be_downgraded_by_configuration(self):
+        with patch.dict(os.environ, {"MESH_CENTRAL_SHARE_CONSENT": "bar"}), \
+             patch.object(mesh, "_base_command") as cmd, \
+             self.assertRaises(mesh.MeshCentralError):
+            mesh.create_share(self.node, "Customer", ["desktop"])
+        cmd.assert_not_called()
+
+    def test_workshop_share_uses_privacy_bar_not_client_prompt(self):
+        with patch.dict(os.environ, {"MESH_CENTRAL_SHARE_CONSENT": "prompt,bar"}), \
+             patch.object(mesh, "_base_command", return_value=["meshctrl", "DeviceSharing"]), \
+             patch.object(mesh, "_run", return_value="ID: share\nURL: https://mesh.multi-servis.pl/guest\n") as run:
+            mesh.create_workshop_share(self.node, "Workshop", ["desktop"])
+        args = run.call_args.args[0]
+        self.assertEqual(args[args.index("--consent") + 1], "bar")
+        self.assertNotIn("prompt,bar", args)
+
     def test_missing_group_is_not_guessed(self):
         with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID":""}), \
              patch.object(mesh, "_run") as run, self.assertRaises(mesh.MeshCentralError):
