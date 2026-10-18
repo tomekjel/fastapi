@@ -241,24 +241,29 @@ def close_before_rights_change(db, iid: uuid.UUID):
 
 
 def request_for_owner(iid: uuid.UUID):
-    """Called only from authenticated OWNER web form; no public route."""
+    """OWNER-approved unattended workshop PRO desktop; no client prompt.
+
+    Only an existing, explicitly enabled PRO workshop grant may be used.
+    Customer PRO installations are handled by a separate consent-gated API.
+    """
     _schema()
     with engine.begin() as db:
         grant = _grant(db, iid)
         if not _eligible(grant):
-            raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
-        # Request the customer's consent even before a transient MeshAgent
-        # exists. Desktop connection remains impossible until consent and
-        # a verified agent identity are BOTH present.
+            raise HTTPException(403, "Zdalna pomoc wymaga aktywnego serwisowego PRO.")
         if _open(db, iid):
             raise HTTPException(409, "Dla komputera istnieje już otwarta sesja.")
         sid = uuid.uuid4()
+        now = _now()
         db.execute(text("""
             INSERT INTO guard.workshop_remote_sessions(
-                id,installation_id,status,expires_at,last_activity_at)
-            VALUES (:sid,:iid,'REQUESTED',:expires,:now)
-        """), {"sid":sid,"iid":iid,"expires":_now()+timedelta(minutes=5),"now":_now()})
-        _event(db,sid,"OWNER_REQUESTED","TECHNICIAN")
+                id,installation_id,status,requested_capabilities,
+                granted_capabilities,consented_at,expires_at,last_activity_at)
+            VALUES (:sid,:iid,'CONSENTED','["desktop"]'::jsonb,
+                    '["desktop"]'::jsonb,:now,:expires,:now)
+        """), {"sid": sid, "iid": iid, "now": now,
+                 "expires": now + timedelta(minutes=5)})
+        _event(db, sid, "OWNER_UNATTENDED_WORKSHOP_CONNECT", "TECHNICIAN")
         return sid
 
 
