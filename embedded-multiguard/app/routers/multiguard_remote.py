@@ -1153,10 +1153,13 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
         rows = db.execute(text("""
             SELECT gi.id, gi.installation_external_id,
                    gi.plan_code, gi.lifecycle, gi.valid_until, gi.is_current,
-                   gi.hostname, gi.manufacturer, gi.model,
+                   p.hostname, COALESCE(d.manufacturer,p.manufacturer) AS manufacturer,
+                   COALESCE(d.model,p.model) AS model,
                    sr.id AS request_id, sr.subject AS request_subject,
                    sr.status AS request_status, sr.created_at AS request_created
             FROM guard.installations gi
+            LEFT JOIN core.devices d ON d.id=gi.service_device_id
+            LEFT JOIN guard.pending_installations p ON p.installation_id=gi.installation_external_id
             LEFT JOIN guard.support_requests sr ON sr.installation_id=gi.id
             WHERE gi.is_current=TRUE AND UPPER(gi.plan_code)='PRO'
             ORDER BY (CASE WHEN sr.status NOT IN ('RESOLVED','CANCELLED') THEN 0 ELSE 1 END), sr.created_at DESC NULLS LAST, gi.id
