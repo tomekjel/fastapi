@@ -1337,9 +1337,20 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
     <section class="card" style="max-width:none;min-height:65vh">
       <h1>Zdalny pulpit · PRO / tryb serwisowy</h1>
       <p>Tryb serwisowy PRO umożliwia połączenie bez obecności obsługi w warsztacie. Potwierdzasz połączenie wyłącznie w swoim panelu.</p>
-      <button type="button" id="ws-start">POŁĄCZ Z KOMPUTEREM</button>
-      <button type="button" id="ws-connect" disabled>OTWÓRZ PULPIT</button>
-      <button type="button" id="ws-end" disabled>ROZŁĄCZ</button>
+      <style>
+        .ws-controls{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}
+        .ws-controls button{border:0;border-radius:9px;padding:13px 18px;color:#fff;font-size:15px;font-weight:500;cursor:pointer;min-height:46px}
+        #ws-start{background:#1764b0}
+        #ws-connect{background:#16834a}
+        #ws-end{background:#be3030}
+        .ws-controls button:disabled{background:#737b87!important;color:#fff;cursor:not-allowed;opacity:.65}
+        .ws-controls button:focus-visible{outline:3px solid #72baff;outline-offset:3px}
+      </style>
+      <div class="ws-controls">
+        <button type="button" id="ws-start">POŁĄCZ Z KOMPUTEREM</button>
+        <button type="button" id="ws-connect" disabled>OTWÓRZ PULPIT</button>
+        <button type="button" id="ws-end" disabled>ROZŁĄCZ</button>
+      </div>
       <p role="status" aria-live="polite" id="ws-status">Gotowy do połączenia.</p>
     </section>
     <script>
@@ -1366,11 +1377,15 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           if (['CONSENTED','CONNECT_READY','ACTIVE'].includes(info.status)) {
             status.textContent = 'Sesja serwisowa gotowa — otwórz pulpit.';
             connect.disabled = false;
+            start.disabled = true;
           } else if (['DENIED','ENDED','EXPIRED','ERROR'].includes(info.status)) {
             status.textContent = 'Sesja: ' + info.status;
             connect.disabled = true;
             end.disabled = true;
+            start.disabled = false;
+            sid = null;
             clearInterval(timer);
+            timer = null;
           } else status.textContent = 'Przygotowywanie sesji serwisowej…';
         } catch (e) { status.textContent = 'Błąd: ' + e.message; }
       }
@@ -1382,14 +1397,16 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           sid = reply.sessionId;
           end.disabled = false;
           status.textContent = 'Utworzono sesję serwisową. Otwórz pulpit.';
+          if (timer) clearInterval(timer);
           timer = setInterval(refresh, 3000);
           await refresh();
-        } catch (e) { start.disabled=false; status.textContent=e.message; }
+        } catch (e) { start.disabled=false; connect.disabled=true; end.disabled=true; status.textContent='Nie udało się rozpocząć sesji: '+e.message; }
       };
       connect.onclick = async () => {
         if (!sid) return;
         const tab = window.open('about:blank','_blank');
         try {
+          connect.disabled = true;
           const reply = await api('sessions/' + sid + '/connect','POST');
           const url = new URL(reply.url);
           if (url.protocol !== 'https:' || url.hostname !== 'mesh.multi-servis.pl')
@@ -1397,13 +1414,17 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           if (tab) tab.location.replace(url.href);
           else status.textContent = 'Zezwól na nowe okno i ponów otwarcie pulpitu.';
         } catch (e) { if(tab) tab.close(); status.textContent=e.message; }
+        finally { if (sid) await refresh(); }
       };
       end.onclick = async () => {
+        if (!sid) return;
+        end.disabled = true;
         try {
           await api('sessions/' + sid + '/end','POST');
-          clearInterval(timer); connect.disabled=true;end.disabled=true;
-          status.textContent='Sesja zakończona.';
-        } catch(e) {status.textContent=e.message;}
+          clearInterval(timer); timer=null; sid=null;
+          connect.disabled=true; end.disabled=true; start.disabled=false;
+          status.textContent='Sesja zakończona. Możesz rozpocząć kolejne połączenie.';
+        } catch(e) {end.disabled=false;status.textContent=e.message;}
       };
     })();
     </script>
