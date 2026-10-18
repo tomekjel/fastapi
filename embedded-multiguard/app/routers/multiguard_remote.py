@@ -884,12 +884,14 @@ def remote_session_connect(
                     SET last_error=:error,last_activity_at=:now
                     WHERE id=:session_id
                       AND status IN ('CONSENTED','CONNECT_READY','ACTIVE')
+                      AND mesh_public_id IS NOT DISTINCT FROM :expected_public_id
                     """
                 ),
                 {
                     "error": str(exc)[:1000],
-                    "now": now,
+                    "now": datetime.now(timezone.utc),
                     "session_id": session_uuid,
+                    "expected_public_id": existing_public_id,
                 },
             )
             if updated.rowcount:
