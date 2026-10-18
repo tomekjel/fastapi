@@ -25,7 +25,7 @@ _RELEASE_ROOT = Path(
 ).resolve()
 _SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?(?:\+[0-9A-Za-z.-]+)?$")
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9._-]+$")
-_VALID_CHANNELS = {"TEST", "LICENSE_TEST", "PILOT", "STABLE"}
+_VALID_CHANNELS = {"TEST", "LICENSE_TEST", "BETA", "PILOT", "STABLE"}
 
 _SCHEMA_SQL = """
 CREATE SCHEMA IF NOT EXISTS guard;
@@ -126,7 +126,7 @@ def _ensure_schema() -> None:
                     """
                     ALTER TABLE guard.release_versions
                     ADD CONSTRAINT release_versions_channel_check
-                    CHECK (channel IN ('TEST','LICENSE_TEST','PILOT','STABLE'))
+                    CHECK (channel IN ('TEST','LICENSE_TEST','BETA','PILOT','STABLE'))
                     """
                 )
             )
@@ -143,7 +143,7 @@ def _ensure_schema() -> None:
                     """
                     ALTER TABLE guard.release_blocks
                     ADD CONSTRAINT release_blocks_channel_check
-                    CHECK (channel IN ('TEST','LICENSE_TEST','PILOT','STABLE'))
+                    CHECK (channel IN ('TEST','LICENSE_TEST','BETA','PILOT','STABLE'))
                     """
                 )
             )
