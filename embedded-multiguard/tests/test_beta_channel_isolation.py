@@ -24,6 +24,14 @@ class BetaChannelIsolation(unittest.TestCase):
         self.assertEqual(pattern.fullmatch("v0.3.45-beta.1-TEST").group("channel").upper(), "TEST")
         self.assertIsNone(pattern.fullmatch("v0.3.45-beta.1-STABLE-EXTRA"))
 
+
+    def test_dynamic_channel_for_any_installation(self):
+        resolver = UPDATES.split("def _resolve_channel(", 1)[1].split('@router.get("/releases/', 1)[0]
+        self.assertIn("guard.workshop_grants", resolver)
+        self.assertIn("guard.license_links", resolver)
+        self.assertIn("guard.installations", resolver)
+        self.assertLess(resolver.index("guard.workshop_grants"), resolver.index("guard.installations"))
+
     def test_unpublished_draft_releases_remain_excluded(self):
         self.assertIn('if release.get("draft"):', SYNC)
         self.assertIn('continue', SYNC[SYNC.index('if release.get("draft"):'):][:60])
