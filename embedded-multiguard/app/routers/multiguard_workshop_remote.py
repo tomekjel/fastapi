@@ -87,6 +87,8 @@ def _schema():
                      REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
                    mesh_node_id TEXT NOT NULL UNIQUE,
                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
+                """ALTER TABLE guard.workshop_mesh_nodes
+                   ADD COLUMN IF NOT EXISTS session_id UUID""",
                 """CREATE TABLE IF NOT EXISTS guard.workshop_support_requests (
                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                    local_request_id UUID NOT NULL UNIQUE,
@@ -131,7 +133,7 @@ def _schema():
 
 def _grant(db, iid):
     return db.execute(text("""
-        SELECT g.edition,g.enabled,p.status,p.installation_id,m.mesh_node_id
+        SELECT g.edition,g.enabled,p.status,p.installation_id,m.mesh_node_id,m.session_id AS mesh_session_id
         FROM guard.pending_installations p
         LEFT JOIN guard.workshop_grants g ON g.installation_id=p.installation_id
         LEFT JOIN guard.workshop_mesh_nodes m ON m.installation_id=p.installation_id
@@ -144,6 +146,20 @@ def _eligible(grant):
         grant and grant["edition"] == "PRO" and grant["enabled"]
         and grant["status"] not in ("ASSIGNED", "PROVISIONED", "ARCHIVED", "UNINSTALLED", "IGNORED")
     )
+
+
+def session_node_ready(grant, row):
+    return bool(grant and row and grant.get("mesh_node_id")
+                and grant.get("mesh_session_id") == row["id"])
+
+
+def _can_replace_session_node(previous, installation_id):
+    # Only retire a binding whose verified session has actually ended and
+    # whose share was revoked. Legacy/manual/foreign bindings fail closed.
+    return bool(previous and previous["installation_id"] == installation_id
+                and previous["status"] in ("ENDED", "EXPIRED", "DENIED")
+                and previous.get("ended_at") is not None
+                and not previous.get("mesh_public_id"))
 
 
 def _authenticate(request: WorkshopAuth):
@@ -290,15 +306,25 @@ def workshop_session_mesh_enroll(request: WorkshopSessionMeshEnrollment):
         db.execute(text("SELECT installation_id FROM guard.workshop_grants WHERE installation_id=:iid FOR UPDATE"),
                    {"iid":request.installationId})
         grant = validate(db, True)
-        if grant.get("mesh_node_id") not in (None, "", node):
-            raise HTTPException(409, "Instalacja ma już innego agenta; wymagana kontrola OWNER.")
+        if grant.get("mesh_node_id") and grant.get("mesh_session_id") != request.sessionId:
+            previous = db.execute(text("""SELECT * FROM guard.workshop_remote_sessions
+                WHERE id=:sid FOR UPDATE"""),
+                {"sid": grant.get("mesh_session_id")}).mappings().first()
+            if not _can_replace_session_node(previous, request.installationId):
+                raise HTTPException(409, "Poprzednie powiązanie agenta nie zostało bezpiecznie zakończone.")
+        elif grant.get("mesh_node_id") not in (None, "", node):
+            raise HTTPException(409, "Bieżąca sesja ma już innego agenta.")
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:node))"), {"node":node})
         if db.execute(text("SELECT 1 FROM guard.installations WHERE mesh_node_id=:node"), {"node":node}).first():
             raise HTTPException(409, "Agent jest przypisany do innej instalacji.")
-        db.execute(text("""INSERT INTO guard.workshop_mesh_nodes(installation_id,mesh_node_id)
-            VALUES (:iid,:node) ON CONFLICT(installation_id) DO UPDATE
-            SET mesh_node_id=EXCLUDED.mesh_node_id,updated_at=now()"""),
-            {"iid":request.installationId,"node":node})
+        if db.execute(text("""SELECT 1 FROM guard.workshop_mesh_nodes
+                WHERE mesh_node_id=:node AND installation_id<>:iid"""),
+                {"node":node,"iid":request.installationId}).first():
+            raise HTTPException(409, "Agent jest przypisany do innej instalacji serwisowej.")
+        db.execute(text("""INSERT INTO guard.workshop_mesh_nodes(installation_id,mesh_node_id,session_id)
+            VALUES (:iid,:node,:sid) ON CONFLICT(installation_id) DO UPDATE
+            SET mesh_node_id=EXCLUDED.mesh_node_id,session_id=EXCLUDED.session_id,updated_at=now()"""),
+            {"iid":request.installationId,"node":node,"sid":request.sessionId})
         _event(db, request.sessionId, "SESSION_AGENT_VERIFIED", "CLIENT")
     return {"requestId":request.requestId,"sessionId":str(request.sessionId),"accepted":True}
 
@@ -362,7 +388,7 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
             INSERT INTO guard.workshop_mesh_nodes (installation_id,mesh_node_id)
             VALUES (:iid,:node)
             ON CONFLICT (installation_id) DO UPDATE
-            SET mesh_node_id=EXCLUDED.mesh_node_id,updated_at=now()
+            SET mesh_node_id=EXCLUDED.mesh_node_id,session_id=NULL,updated_at=now()
         """), {"iid":request.installationId, "node":node})
     return {"requestId":request.requestId,"accepted":True,
             "meshReady":True,"serverTime":_now().isoformat()}
@@ -513,7 +539,7 @@ def connect_for_owner(sid):
         if row["status"]=="CONSENTED" and row["expires_at"]<_now():
             # Leave state unchanged for retryable expiration reconciliation.
             raise HTTPException(410,"Zgoda na sesję wygasła.")
-        if not grant["mesh_node_id"]:
+        if not session_node_ready(grant, row):
             raise HTTPException(409,"Brak powiązania MeshCentral.")
         if "desktop" not in (row["granted_capabilities"] or []):
             raise HTTPException(409,"Nie udzielono zgody na pulpit.")
@@ -536,8 +562,11 @@ def connect_for_owner(sid):
                 SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid FOR UPDATE
             """),{"sid":sid}).mappings().first()
             grant=_grant(db,iid)
-            if (not row or not _eligible(grant) or grant["mesh_node_id"]!=node
-                    or row["status"] not in ("CONSENTED","CONNECT_READY","ACTIVE")):
+            if (not row or not _eligible(grant) or not session_node_ready(grant, row)
+                    or grant["mesh_node_id"]!=node or row.get("ended_at") is not None
+                    or row["status"] not in ("CONSENTED","CONNECT_READY","ACTIVE")
+                    or "desktop" not in (row["granted_capabilities"] or [])
+                    or (row["status"] == "CONSENTED" and row["expires_at"] <= _now())):
                 raise HTTPException(403,"Uprawnienie, węzeł lub zgoda zmieniły się.")
             db.execute(text("""
                 UPDATE guard.workshop_remote_sessions
@@ -584,7 +613,7 @@ def bind_for_owner(iid, node_id):
             INSERT INTO guard.workshop_mesh_nodes(installation_id,mesh_node_id)
             VALUES (:iid,:node)
             ON CONFLICT (installation_id) DO UPDATE SET
-               mesh_node_id=EXCLUDED.mesh_node_id,updated_at=now()
+               mesh_node_id=EXCLUDED.mesh_node_id,session_id=NULL,updated_at=now()
         """),{"iid":iid,"node":node_id})
     return {"meshNodeId":node_id}
 

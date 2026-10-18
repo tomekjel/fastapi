@@ -1340,7 +1340,7 @@ def panel_workshop_active(installation_id: uuid.UUID, _: None = Depends(_panel_a
     if not row:
         return {"session": None}
     result = workshop._public(row)
-    result["meshLinked"] = bool(grant["mesh_node_id"])
+    result["meshLinked"] = workshop.session_node_ready(grant, row)
     return {"session": result}
 
 
@@ -1514,7 +1514,7 @@ def panel_workshop_status(session_id: uuid.UUID, _: None = Depends(_panel_auth))
         if not workshop._eligible(grant):
             raise HTTPException(403, "Nieaktywny tryb serwisowy PRO.")
     result = workshop._public(row)
-    result["meshLinked"] = bool(grant["mesh_node_id"])
+    result["meshLinked"] = workshop.session_node_ready(grant, row)
     return result
 
 

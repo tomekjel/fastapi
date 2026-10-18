@@ -20,6 +20,9 @@ for name in ("app.database", "app.security", "app.routers.multiguard_runtime", "
     if name.endswith("runtime"):
         module._ensure_schema = lambda: None
         module._require_agent = MagicMock()
+    if name.endswith("license"):
+        module._panel_auth = lambda: None
+        module._panel_html = lambda *args, **kwargs: ""
     sys.modules.setdefault(name, module)
 from fastapi import HTTPException
 from app.routers import multiguard_remote as paid
@@ -130,5 +133,44 @@ class SessionTransportTests(unittest.TestCase):
              "mesh_share_expires_at":datetime.now(timezone.utc)+timedelta(minutes=60),"last_error":None}
         for renderer in (paid._remote_public,workshop._public):
             self.assertEqual(renderer(row)["expiresAt"],row["mesh_share_expires_at"].isoformat())
+
+    def test_old_online_agent_never_satisfies_new_session(self):
+        old = self.record(name=f"MultiGuard-{uuid.uuid4()}")
+        for connected in (0, 1):
+            with self.assertRaises(mesh.MeshCentralError):
+                self.verify([{**old, "conn": connected}])
+        self.assertEqual(self.verify([self.record()]), self.node)
+
+    def test_readiness_is_bound_to_current_session(self):
+        grant = {"mesh_node_id": self.node, "mesh_session_id": uuid.uuid4()}
+        self.assertFalse(workshop.session_node_ready(grant, self.row))
+        grant["mesh_session_id"] = self.sid
+        self.assertTrue(workshop.session_node_ready(grant, self.row))
+        grant["mesh_node_id"] = None
+        self.assertFalse(workshop.session_node_ready(grant, self.row))
+
+    def test_rotation_requires_ended_owned_session_without_share(self):
+        ended = {**self.row, "status": "ENDED", "ended_at": datetime.now(timezone.utc)}
+        self.assertTrue(workshop._can_replace_session_node(ended, self.iid))
+        for previous in (None, self.row, {**ended, "ended_at": None},
+                         {**ended, "mesh_public_id": "still-live"},
+                         {**ended, "installation_id": uuid.uuid4()}):
+            self.assertFalse(workshop._can_replace_session_node(previous, self.iid))
+
+    def test_workshop_end_during_mesh_verification_prevents_binding(self):
+        body = workshop.WorkshopSessionMeshEnrollment(**self.auth(), discoveryCredential="x"*32)
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.side_effect = [
+            self.row, {**self.row, "status": "ENDED", "ended_at": datetime.now(timezone.utc)}]
+        with patch.object(workshop, "_schema"), patch.object(workshop, "_authenticate"), \
+             patch.object(workshop, "engine") as engine, \
+             patch.object(workshop, "_eligible", return_value=True), \
+             patch.object(workshop, "_grant", return_value={"mesh_node_id": None}), \
+             patch.object(mesh, "verify_session_node", return_value=self.node):
+            engine.connect.return_value.__enter__.return_value = db
+            engine.begin.return_value.__enter__.return_value = db
+            with self.assertRaises(HTTPException): workshop.workshop_session_mesh_enroll(body)
+        self.assertFalse(any("INSERT INTO guard.workshop_mesh_nodes" in str(c.args[0])
+                             for c in db.execute.call_args_list))
 
 if __name__ == "__main__": unittest.main()

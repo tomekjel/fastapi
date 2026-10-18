@@ -22,7 +22,7 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
             with self.subTest(needle=needle): self.assertIn(needle, self.ui)
 
     def test_no_green_desktop_before_binding(self):
-        self.assertIn('result["meshLinked"] = bool(grant["mesh_node_id"])', self.status)
+        self.assertIn('result["meshLinked"] = workshop.session_node_ready(grant, row)', self.status)
         self.assertIn('const ready = info.meshLinked === true;', self.ui)
         self.assertIn('connect.disabled = !ready;', self.ui)
         self.assertIn('Oczekiwanie na powiązanie MeshAgenta', self.ui)
