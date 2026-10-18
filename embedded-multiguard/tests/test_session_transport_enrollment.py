@@ -195,6 +195,22 @@ class SessionTransportTests(unittest.TestCase):
         self.assertFalse(any("UPDATE guard.workshop_remote_sessions" in str(c.args[0])
                              for c in db.execute.call_args_list))
 
+    def test_missing_share_lease_is_expired_and_revoked(self):
+        active = {**self.row, "status":"CONNECT_READY", "mesh_public_id":"orphan-share",
+                  "mesh_share_expires_at":None}
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.return_value = active
+        grant = {"edition":"PRO", "enabled":True, "status":"NEW",
+                 "mesh_node_id":self.node, "mesh_session_id":self.sid}
+        with patch.object(workshop, "_grant", return_value=grant), \
+             patch.object(mesh, "revoke_share") as revoke, \
+             patch.object(workshop, "_event") as event:
+            self.assertIsNone(workshop._open(db, self.iid))
+        revoke.assert_called_once_with(self.node, "orphan-share")
+        self.assertTrue(any("SET status='EXPIRED'" in str(c.args[0])
+                            for c in db.execute.call_args_list))
+        event.assert_called_once()
+
     def test_owner_reconnect_rejects_expired_share_without_mesh_call(self):
         expired = {**self.row, "status":"CONNECT_READY",
                    "mesh_public_id":"old-share",
