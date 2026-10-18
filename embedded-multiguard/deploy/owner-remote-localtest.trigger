@@ -8,3 +8,4 @@ retry=workshop-pro-consent-control-room
 retry=owner-unattended-workshop-pro
 retry=unattended-workshop-contract-tests
 retry=real-owner-sidebar-route
+retry=final-view-before-release
