@@ -1159,7 +1159,7 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
             FROM guard.installations gi
             LEFT JOIN guard.support_requests sr ON sr.installation_id=gi.id
             WHERE gi.is_current=TRUE AND UPPER(gi.plan_code)='PRO'
-            ORDER BY gi.valid_until DESC NULLS LAST, gi.id, sr.created_at DESC
+            ORDER BY sr.created_at DESC NULLS LAST, gi.id
             LIMIT 1500
         """)).mappings().all()
 
@@ -1196,8 +1196,11 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
     def safe(value):
         return escape(str(value if value is not None else ""), quote=True)
 
+    # Only actionable customer reports belong in the remote queue.
     output = []
     for device in devices.values():
+        if not any(str(req['request_status']) not in ('RESOLVED', 'CANCELLED') for req in device['requests']):
+            continue
         item = device["info"]
         external = str(item["installation_external_id"])
         machine = " ".join(str(item[k] or "").strip() for k in ("manufacturer", "model")).strip()
@@ -1256,16 +1259,53 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
             '<td>' + repairs + '</td><td>' + photos + '</td>'
             '<td>' + connect_action + '<a class="button-link compact" href="' + details_url + '">SZCZEGÓŁY</a></td></tr>'
         )
+    # Workshop Pro and customer support are separate authorization modes.
+    # Never treat a workshop grant as an ordinary paid licence.
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    with engine.connect() as db:
+        workshop_rows = db.execute(text('''
+            SELECT p.installation_id, p.status, g.edition,
+                   p.created_at AS registered_at,
+                   COUNT(wsr.id) AS request_count
+            FROM guard.pending_installations p
+            JOIN guard.workshop_grants g ON g.installation_id=p.installation_id
+            LEFT JOIN guard.workshop_support_requests wsr
+                ON wsr.installation_id=p.installation_id
+            WHERE g.enabled=TRUE AND g.edition='PRO'
+              AND p.status NOT IN ('ASSIGNED','PROVISIONED','ARCHIVED','UNINSTALLED','IGNORED')
+            GROUP BY p.installation_id,p.status,g.edition,p.created_at
+            ORDER BY p.created_at DESC
+            LIMIT 500
+        ''')).mappings().all()
+    workshop_output = []
+    for item in workshop_rows:
+        iid = safe(item['installation_id'])
+        workshop_output.append(
+            '<tr><td><code>' + iid[:12] + '</code></td>'
+            '<td>Komputer serwisowy</td><td>PRO · TRYB SERWISOWY</td>'
+            '<td>Bezterminowo</td><td>' + str(int(item['request_count'])) + ' zgłoszeń</td>'
+            '<td>—</td><td>—</td>'
+            '<td><a class="button-link compact" target="_blank" rel="noopener" '
+            'href="/multiguard/panel/remote/workshop/' + iid + '">POŁĄCZ</a></td></tr>'
+        )
     body = (
         '<section class="card"><div class="eyebrow">MULTI-SERVIS / ZDALNA POMOC</div>'
         '<h1>Komputery PRO</h1><p>Lista urządzeń i zgłoszeń. Kwoty napraw '
         'nie są pokazywane na tym ekranie. Zdalny pulpit wymaga zgody '
         'klienta na każdą sesję.</p>'
+        '<h2>1. PRO · tryb serwisowy</h2>'
         '<div class="table-wrap"><table><thead><tr>'
         '<th>ID komputera</th><th>Komputer</th><th>Licencja</th>'
         '<th>Ważna do</th><th>Zgłoszenia</th><th>Naprawy</th><th>Zdjęcia</th><th>Akcje</th>'
         '</tr></thead><tbody>' +
-        ("".join(output) if output else '<tr><td colspan="8">Brak komputerów PRO.</td></tr>') +
+        ("".join(workshop_output) if workshop_output else '<tr><td colspan="8">Brak komputerów PRO w trybie serwisowym.</td></tr>') +
+        '</tbody></table></div><h2>2. Zgłoszenia klientów PRO</h2>'
+        '<div class="table-wrap"><table><thead><tr>'
+        '<th>ID komputera</th><th>Komputer</th><th>Licencja</th>'
+        '<th>Ważna do</th><th>Zgłoszenia</th><th>Naprawy</th><th>Zdjęcia</th><th>Akcje</th>'
+        '</tr></thead><tbody>' +
+        ("".join(output) if output else '<tr><td colspan="8">Brak otwartych zgłoszeń klientów PRO.</td></tr>') +
         '</tbody></table></div></section>'
     )
     return HTMLResponse(_panel_html(body), headers={"Cache-Control": "private, no-store"})
