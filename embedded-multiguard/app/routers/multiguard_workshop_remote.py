@@ -583,6 +583,7 @@ def connect_for_owner(sid):
                              or row["mesh_share_expires_at"] <= _now()))
                     or row["status"] not in ("CONSENTED","CONNECT_READY","ACTIVE")
                     or "desktop" not in (row["granted_capabilities"] or [])
+                    or list(row["granted_capabilities"] or []) != caps
                     or (row["status"] == "CONSENTED" and row["expires_at"] <= _now())):
                 raise HTTPException(403,"Uprawnienie, węzeł lub zgoda zmieniły się.")
             db.execute(text("""
