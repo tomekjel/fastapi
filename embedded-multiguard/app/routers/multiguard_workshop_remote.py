@@ -540,6 +540,10 @@ def connect_for_owner(sid):
             raise HTTPException(403,"Tryb serwisowy Pro jest nieaktywny.")
         if row["status"] not in ("CONSENTED","CONNECT_READY","ACTIVE"):
             raise HTTPException(409,"Klient nie wyraził zgody na pulpit.")
+        if (row["status"] in ("CONNECT_READY", "ACTIVE")
+                and (row["mesh_share_expires_at"] is None
+                     or row["mesh_share_expires_at"] <= _now())):
+            raise HTTPException(410, "Udostępnienie wygasło; rozpocznij nową sesję.")
         if row["status"]=="CONSENTED" and row["expires_at"]<_now():
             # Leave state unchanged for retryable expiration reconciliation.
             raise HTTPException(410,"Zgoda na sesję wygasła.")
@@ -569,6 +573,9 @@ def connect_for_owner(sid):
             if (not row or not _eligible(grant) or not session_node_ready(grant, row)
                     or grant["mesh_node_id"]!=node or row.get("ended_at") is not None
                     or row["mesh_public_id"] != previous
+                    or (row["status"] in ("CONNECT_READY", "ACTIVE")
+                        and (row["mesh_share_expires_at"] is None
+                             or row["mesh_share_expires_at"] <= _now()))
                     or row["status"] not in ("CONSENTED","CONNECT_READY","ACTIVE")
                     or "desktop" not in (row["granted_capabilities"] or [])
                     or (row["status"] == "CONSENTED" and row["expires_at"] <= _now())):
