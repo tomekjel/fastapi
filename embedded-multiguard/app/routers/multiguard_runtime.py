@@ -2972,7 +2972,7 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
         )
         if can_connect and pending_or_active(session):
             buttons += action(endpoint+'/connect','OTWÓRZ PULPIT')
-        if session["status"] in {"REQUESTED","CONSENTED","CONNECT_READY","ACTIVE"}:
+        if pending_or_active(session):
             buttons += action(endpoint+'/end','ZAKOŃCZ SESJĘ')
         history.append(f'<tr><td>{_panel_dt(session["requested_at"])}</td>'
                        f'<td>{statuses.get(session["status"],session["status"])}</td>'
@@ -2983,8 +2983,8 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
     remote_pending = bool(chosen and any(
         pending_or_active(s) and s["status"] in {"REQUESTED", "CONSENTED"} for s in sessions))
     ready_session = next((s for s in sessions if (
-        chosen and chosen["mesh_node_id"]
-        and pending_or_active(s) and s["status"] == "CONSENTED"
+        chosen and chosen["mesh_node_id"] and pending_or_active(s)
+        and s["status"] == "CONSENTED"
     )), None)
     auto_script = (
         '<script>setTimeout(function(){window.location.reload()},2500)</script>'
