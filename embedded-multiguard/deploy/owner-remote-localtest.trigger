@@ -12,3 +12,4 @@ retry=final-view-before-release
 
 check=workshop-color-confirm-mesh-binding-20261018
 retry=scope-click-handler
+check=resume-session-server-state-20261018
