@@ -45,8 +45,10 @@ class OwnerRemoteConsentFirstTests(unittest.TestCase):
         self.assertIn("'/multiguard/panel/remote/commercial/{selected}/request'", panel)
         self.assertIn("f'/multiguard/panel/remote/workshop/{selected}/request'", panel)
         self.assertNotIn("komponent zdalnego pulpitu nie został zarejestrowany", panel)
-        self.assertIn('s["status"] in {"REQUESTED", "CONSENTED"}', panel)
+        self.assertIn('pending_or_active(s) and s["status"] in {"REQUESTED", "CONSENTED"}', panel)
         self.assertIn("connect_path", panel)
+        self.assertIn("expires_at,mesh_share_expires_at", panel)
+        self.assertIn("def pending_or_active(session):", panel)
         self.assertIn("bool(chosen[\"mesh_node_id\"])", panel)
 
 
