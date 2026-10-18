@@ -575,6 +575,8 @@ def connect_for_owner(sid):
                 SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid FOR UPDATE
             """),{"sid":sid}).mappings().first()
             grant=_grant(db,iid)
+            if share_expires <= _now():
+                raise HTTPException(410, "Nowy link MeshCentral wygasł przed zapisem.")
             if (not row or not _eligible(grant) or not session_node_ready(grant, row)
                     or grant["mesh_node_id"]!=node or row.get("ended_at") is not None
                     or row["mesh_public_id"] != previous
