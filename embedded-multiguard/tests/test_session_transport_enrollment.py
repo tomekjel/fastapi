@@ -203,6 +203,13 @@ class SessionTransportTests(unittest.TestCase):
         self.assertIn("if updated.rowcount:", source)
         self.assertNotIn("SET status='ERROR',last_error=:error", source)
 
+    def test_paid_share_expiry_is_shared_between_database_and_response(self):
+        import inspect
+        source = inspect.getsource(paid.remote_session_connect)
+        self.assertIn('share_expires = datetime.now(timezone.utc) + timedelta(minutes=60)', source)
+        self.assertIn('"expires_at": share_expires', source)
+        self.assertIn('"expiresAt": share_expires.isoformat()', source)
+
     def test_paid_connect_checks_share_identity_and_consent_after_mesh_call(self):
         # Regression contract: concurrent OWNER actions must never overwrite
         # a newer public share or consent and must check actual lease validity.
