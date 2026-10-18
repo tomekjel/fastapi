@@ -131,7 +131,11 @@ class SessionTransportTests(unittest.TestCase):
         body = workshop.WorkshopDecision(**self.auth(), discoveryCredential="x"*32,
                                          allowDesktop=True)
         old_expiry = datetime.now(timezone.utc) + timedelta(seconds=2)
-        pending = {**self.row, "status":"REQUESTED", "expires_at":old_expiry}
+        pending = {**self.row, "status":"REQUESTED", "expires_at":old_expiry,
+                   "requested_by_name":"OWNER", "subject":"Test",
+                   "requested_capabilities":["desktop"], "requested_at":datetime.now(timezone.utc),
+                   "connected_at":None, "reconnect_until":None,
+                   "mesh_share_expires_at":None, "last_error":None}
         db = MagicMock()
         db.execute.return_value.mappings.return_value.first.return_value = pending
         db.execute.return_value.mappings.return_value.one.return_value = {
