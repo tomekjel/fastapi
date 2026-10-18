@@ -1320,7 +1320,7 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
 
 @router.get("/panel/remote/workshop/{installation_id}")
 def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_panel_auth)):
-    """Workshop PRO control room: fresh per-session consent, new browser tab."""
+    """Workshop PRO control room: audited unattended OWNER access, new browser tab."""
     from fastapi.responses import HTMLResponse
     from app.routers import multiguard_workshop_remote as workshop
     workshop._schema()
@@ -1332,8 +1332,8 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
     body = """
     <section class="card" style="max-width:none;min-height:65vh">
       <h1>Zdalny pulpit · PRO / tryb serwisowy</h1>
-      <p>Każda nowa sesja wymaga potwierdzenia na komputerze klienta.</p>
-      <button type="button" id="ws-start">POŁĄCZ · POPROŚ O ZGODĘ</button>
+      <p>Tryb serwisowy PRO umożliwia połączenie bez obecności obsługi w warsztacie. Potwierdzasz połączenie wyłącznie w swoim panelu.</p>
+      <button type="button" id="ws-start">POŁĄCZ Z KOMPUTEREM</button>
       <button type="button" id="ws-connect" disabled>OTWÓRZ PULPIT</button>
       <button type="button" id="ws-end" disabled>ROZŁĄCZ</button>
       <p role="status" aria-live="polite" id="ws-status">Gotowy do połączenia.</p>
@@ -1360,24 +1360,24 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         try {
           const info = await api('sessions/' + sid);
           if (['CONSENTED','CONNECT_READY','ACTIVE'].includes(info.status)) {
-            status.textContent = 'Klient wyraził zgodę — pulpit gotowy.';
+            status.textContent = 'Sesja serwisowa gotowa — otwórz pulpit.';
             connect.disabled = false;
           } else if (['DENIED','ENDED','EXPIRED','ERROR'].includes(info.status)) {
             status.textContent = 'Sesja: ' + info.status;
             connect.disabled = true;
             end.disabled = true;
             clearInterval(timer);
-          } else status.textContent = 'Oczekiwanie na zgodę klienta…';
+          } else status.textContent = 'Przygotowywanie sesji serwisowej…';
         } catch (e) { status.textContent = 'Błąd: ' + e.message; }
       }
       start.onclick = async () => {
-        if (!window.confirm('Czy na pewno rozpocząć sesję serwisową na tym komputerze?')) return;
+        if (!window.confirm('Czy na pewno połączyć się z komputerem serwisowym?')) return;
         start.disabled = true;
         try {
           const reply = await api('request/' + installation, 'POST');
           sid = reply.sessionId;
           end.disabled = false;
-          status.textContent = 'Wysłano prośbę o zgodę klienta.';
+          status.textContent = 'Utworzono sesję serwisową. Otwórz pulpit.';
           timer = setInterval(refresh, 3000);
           await refresh();
         } catch (e) { start.disabled=false; status.textContent=e.message; }
