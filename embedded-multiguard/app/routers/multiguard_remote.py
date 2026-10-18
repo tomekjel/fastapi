@@ -1275,6 +1275,7 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
     with engine.connect() as db:
         workshop_rows = db.execute(text('''
             SELECT p.installation_id, p.status, g.edition,
+                   p.hostname,p.manufacturer,p.model,
                    p.first_seen_at AS registered_at,
                    COUNT(wsr.id) AS request_count
             FROM guard.pending_installations p
@@ -1283,7 +1284,7 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
                 ON wsr.installation_id=p.installation_id
             WHERE g.enabled=TRUE AND g.edition='PRO'
               AND p.status NOT IN ('ASSIGNED','PROVISIONED','ARCHIVED','UNINSTALLED','IGNORED')
-            GROUP BY p.installation_id,p.status,g.edition,p.first_seen_at
+            GROUP BY p.installation_id,p.status,g.edition,p.hostname,p.manufacturer,p.model,p.first_seen_at
             ORDER BY p.first_seen_at DESC
             LIMIT 500
         ''')).mappings().all()
@@ -1292,7 +1293,7 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
         iid = safe(item['installation_id'])
         workshop_output.append(
             '<tr><td><code>' + iid[:12] + '</code></td>'
-            '<td>Komputer serwisowy</td><td>PRO · TRYB SERWISOWY</td>'
+            '<td>' + safe(item['hostname'] or (str(item['manufacturer'] or '') + ' ' + str(item['model'] or '')).strip() or 'Komputer serwisowy') + '</td><td>PRO · TRYB SERWISOWY</td>'
             '<td>Bezterminowo</td><td>' + str(int(item['request_count'])) + ' zgłoszeń</td>'
             '<td>—</td><td>—</td>'
             '<td><a class="button-link compact" target="_blank" rel="noopener" '
