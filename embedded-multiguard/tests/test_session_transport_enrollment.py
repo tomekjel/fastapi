@@ -170,6 +170,31 @@ class SessionTransportTests(unittest.TestCase):
         self.assertFalse(any("UPDATE guard.workshop_remote_sessions" in str(c.args[0])
                              for c in db.execute.call_args_list))
 
+    def test_share_expiring_during_create_is_rejected_and_new_share_revoked(self):
+        from types import SimpleNamespace
+        live = {**self.row, "status":"CONNECT_READY", "mesh_public_id":"old-share",
+                "mesh_share_expires_at":datetime.now(timezone.utc)+timedelta(minutes=10)}
+        expired = {**live, "mesh_share_expires_at":
+                   datetime.now(timezone.utc)-timedelta(seconds=1)}
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.side_effect = [live, expired]
+        grant = {"mesh_node_id":self.node, "mesh_session_id":self.sid}
+        with patch.object(workshop, "_schema"), \
+             patch.object(workshop, "engine") as engine, \
+             patch.object(workshop, "_grant", return_value=grant), \
+             patch.object(workshop, "_eligible", return_value=True), \
+             patch.object(mesh, "create_share",
+                          return_value=SimpleNamespace(public_id="new-share",url="https://example.test")), \
+             patch.object(mesh, "revoke_share") as revoke:
+            engine.begin.return_value.__enter__.return_value = db
+            with self.assertRaises(HTTPException):
+                workshop.connect_for_owner(self.sid)
+        self.assertEqual(revoke.call_count, 2)
+        revoke.assert_any_call(self.node, "old-share")
+        revoke.assert_any_call(self.node, "new-share")
+        self.assertFalse(any("UPDATE guard.workshop_remote_sessions" in str(c.args[0])
+                             for c in db.execute.call_args_list))
+
     def test_owner_reconnect_rejects_expired_share_without_mesh_call(self):
         expired = {**self.row, "status":"CONNECT_READY",
                    "mesh_public_id":"old-share",
