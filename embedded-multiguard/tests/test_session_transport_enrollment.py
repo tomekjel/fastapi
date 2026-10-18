@@ -148,6 +148,28 @@ class SessionTransportTests(unittest.TestCase):
         self.assertIn("expires_at=:consent_expires", str(writes[0].args[0]))
         self.assertGreater(params["consent_expires"], old_expiry + timedelta(minutes=4))
 
+    def test_concurrent_owner_connect_does_not_overwrite_newer_share(self):
+        from types import SimpleNamespace
+        row = {**self.row, "requested_by_name":"OWNER"}
+        changed = {**row, "status":"CONNECT_READY", "mesh_public_id":"share-winner"}
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.first.side_effect = [row, changed]
+        grant = {"mesh_node_id":self.node, "mesh_session_id":self.sid}
+        with patch.object(workshop, "_schema"), \
+             patch.object(workshop, "engine") as engine, \
+             patch.object(workshop, "_grant", return_value=grant), \
+             patch.object(workshop, "_eligible", return_value=True), \
+             patch.object(mesh, "create_share",
+                          return_value=SimpleNamespace(public_id="share-loser",url="https://example.test")) as create, \
+             patch.object(mesh, "revoke_share") as revoke:
+            engine.begin.return_value.__enter__.return_value = db
+            with self.assertRaises(HTTPException):
+                workshop.connect_for_owner(self.sid)
+        create.assert_called_once()
+        revoke.assert_called_once_with(self.node, "share-loser")
+        self.assertFalse(any("UPDATE guard.workshop_remote_sessions" in str(c.args[0])
+                             for c in db.execute.call_args_list))
+
     def test_active_snapshot_uses_actual_share_expiry(self):
         row={**self.row,"status":"CONNECT_READY", "support_request_id":self.sid,
              "requested_by_name":"OWNER","subject":"Test", "requested_capabilities":["desktop"],
