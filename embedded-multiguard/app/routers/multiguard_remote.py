@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from app.database import engine
 from app.security import CurrentUser, require_owner
+from app.routers.multiguard_license import _panel_auth, _panel_html
 from app.routers.multiguard_runtime import (
     _ensure_schema as _ensure_runtime_schema,
     _require_agent,
@@ -1094,16 +1095,14 @@ def bind_mesh_node(
 
 
 @router.get("/panel/remote")
-def owner_remote_overview(_: None = Depends(__import__("app.routers.multiguard_license", fromlist=["_panel_auth"])._panel_auth)):
+def owner_remote_overview(_: None = Depends(_panel_auth)):
     """Compact full-width PRO fleet and support history; never render finances.
 
     This view does not grant remote access: session creation still requires
     OWNER API authorization and a fresh, verified customer consent.
     """
     from fastapi.responses import HTMLResponse
-    from app.routers.multiguard_license import _panel_html
     from html import escape
-    from collections import defaultdict
 
     with engine.connect() as db:
         rows = db.execute(text("""
