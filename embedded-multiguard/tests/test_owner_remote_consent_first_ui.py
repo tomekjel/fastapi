@@ -40,6 +40,25 @@ class OwnerRemoteConsentFirstTests(unittest.TestCase):
         self.assertIn("remote.remote_session_connect(str(session_id),actor)", runtime)
         self.assertIn("if url.scheme!='https' or not configured.hostname", runtime)
 
+    def test_expired_requests_do_not_hide_new_connect_button(self):
+        panel = ast.get_source_segment(self.source, self.functions["_owner_remote_workspace"])
+        self.assertIn('deadline > datetime.now(timezone.utc)', panel)
+        self.assertIn('pending_or_active(s) for s in sessions', panel)
+        self.assertIn('and pending_or_active(s) and s["status"] == "CONSENTED"', panel)
+        # Backend still decides whether an old session must be closed before retry.
+        request = ast.get_source_segment(
+            self.source, self.functions["owner_commercial_remote_request"]
+        )
+        self.assertNotIn("SELECT id FROM guard.remote_sessions", request)
+
+    def test_consent_is_not_bypassed_by_owner_button(self):
+        handler = ast.get_source_segment(
+            self.source, self.functions["owner_commercial_remote_request"]
+        )
+        self.assertNotIn("meshcentral.create_share", handler)
+        self.assertNotIn("mesh_node_id", handler)
+        self.assertIn("remote.create_remote_session", handler)
+
     def test_panel_does_not_gate_initial_request_on_mesh_agent(self):
         panel = ast.get_source_segment(self.source, self.functions["_owner_remote_workspace"])
         self.assertIn("'/multiguard/panel/remote/commercial/{selected}/request'", panel)
