@@ -23,7 +23,7 @@ _SCHEMA_READY = False
 _RELEASE_ROOT = Path(
     os.getenv("MULTI_GUARD_RELEASE_ROOT", "/opt/multiservis/releases/multiguard")
 ).resolve()
-_SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
+_SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?(?:\+[0-9A-Za-z.-]+)?$")
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9._-]+$")
 _VALID_CHANNELS = {"TEST", "LICENSE_TEST", "PILOT", "STABLE"}
 
@@ -150,11 +150,14 @@ def _ensure_schema() -> None:
         _SCHEMA_READY = True
 
 
-def _semver(value: str) -> tuple[int, int, int]:
-    match = _SEMVER.match((value or "").strip())
+def _semver(value: str) -> tuple[int, int, int, int, int]:
+    """Sort prereleases before the same stable version; beta.N increases correctly."""
+    match = _SEMVER.fullmatch((value or "").strip())
     if not match:
         raise HTTPException(400, f"Nieprawidłowa wersja SemVer: {value}")
-    return tuple(int(part) for part in match.groups())
+    major, minor, patch = (int(part) for part in match.groups()[:3])
+    beta = match.group(4)
+    return (major, minor, patch, 0 if beta is not None else 1, int(beta) if beta is not None else 0)
 
 
 def _rollout_bucket(installation_id: uuid.UUID, release_id: uuid.UUID) -> int:
