@@ -4,3 +4,4 @@ production_deploy=false
 retry=backend-runner-label-fix
 retry=actual-runner-ROG
 retry=repair-remote-api-js-paths
+retry=workshop-pro-consent-control-room
