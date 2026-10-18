@@ -257,32 +257,16 @@ def close_before_rights_change(db, iid: uuid.UUID):
 
 
 def request_for_owner(iid: uuid.UUID):
-    """OWNER-approved unattended workshop PRO desktop; no client prompt.
+    """Unattended OWNER access requires independent ownership attestation.
 
-    Only an existing, explicitly enabled PRO workshop grant may be used.
-    Customer PRO installations are handled by a separate consent-gated API.
+    Workshop PRO entitlement alone does not prove a device belongs to the
+    service. No automatic consent rows may be created through this path.
     """
-    # Fail closed until OWNED, local opt-in, dedicated MeshCentral group and audit are verified.
-    raise HTTPException(503, "Zdalny dostęp bez pytania wymaga osobnego zatwierdzenia urządzenia i grupy MeshCentral.")
-    _schema()
-    with engine.begin() as db:
-        grant = _grant(db, iid)
-        if not _eligible(grant):
-            raise HTTPException(403, "Zdalna pomoc wymaga aktywnego serwisowego PRO.")
-        if _open(db, iid):
-            raise HTTPException(409, "Dla komputera istnieje już otwarta sesja.")
-        sid = uuid.uuid4()
-        now = _now()
-        db.execute(text("""
-            INSERT INTO guard.workshop_remote_sessions(
-                id,installation_id,status,requested_capabilities,
-                granted_capabilities,consented_at,expires_at,last_activity_at)
-            VALUES (:sid,:iid,'CONSENTED','["desktop"]'::jsonb,
-                    '["desktop"]'::jsonb,:now,:expires,:now)
-        """), {"sid": sid, "iid": iid, "now": now,
-                 "expires": now + timedelta(minutes=5)})
-        _event(db, sid, "OWNER_UNATTENDED_WORKSHOP_CONNECT", "TECHNICIAN")
-        return sid
+    raise HTTPException(
+        503,
+        "Zdalny dostęp bez pytania wymaga osobnego zatwierdzenia urządzenia "
+        "i grupy MeshCentral.",
+    )
 
 
 @router.post("/agent/workshop/remote/mesh-enroll")
