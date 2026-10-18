@@ -42,10 +42,20 @@ class RemoteFleetPageContract(unittest.TestCase):
         self.assertIn("row[\"lifecycle\"] != \"ACTIVE\"", section)
         self.assertIn('request-connect', section)
         self.assertIn('session.status === \'CONSENTED\'', section)
-        self.assertIn("remote-sessions/' + sessionId + '/connect", section)
-        self.assertIn("remote-sessions/' + sessionId + '/end", section)
+        self.assertIn("remote-api/sessions/' + sessionId + '/connect", section)
+        self.assertIn("remote-api/sessions/' + sessionId + '/end", section)
         self.assertIn("window.open('about:blank', '_blank')", section)
         self.assertIn("url.protocol !== 'https:'", section)
+
+    def test_panel_basic_bridge_and_csrf(self):
+        self.assertIn('def panel_create_remote_session(', self.source)
+        self.assertIn('def panel_remote_session_connect(', self.source)
+        self.assertIn('def panel_remote_session_end(', self.source)
+        self.assertIn('Depends(_panel_auth)', self.source)
+        self.assertIn('Depends(_owner_panel_csrf)', self.source)
+        self.assertIn('_token_valid(x_owner_csrf)', self.source)
+        self.assertIn("'X-Owner-CSRF':csrf", self.source)
+        self.assertIn('/panel/remote-api/sessions/', self.source)
 
     def test_no_unconsented_remote_launch(self):
         body = self.source.split('@router.get("/panel/remote")', 1)[1]
