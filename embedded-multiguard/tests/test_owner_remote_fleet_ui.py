@@ -23,6 +23,16 @@ class RemoteFleetPageContract(unittest.TestCase):
         self.assertNotIn('service_amount', body)
         self.assertNotIn('material_cost', body)
 
+    def test_service_history_requires_explicit_device_link(self):
+        body = self.source.split('@router.get("/panel/remote")', 1)[1]
+        self.assertIn("ll.installation_id", body)
+        self.assertIn("ll.reception_id", body)
+        self.assertIn("orders_by_installation.get(external)", body)
+        self.assertIn("/multiguard/panel/service/", body)
+        self.assertIn("<th>Naprawy</th><th>Zdjęcia</th>", body)
+        self.assertNotIn("LIKE", body)
+        self.assertNotIn("owner_finances", body)
+
     def test_no_unconsented_remote_launch(self):
         body = self.source.split('@router.get("/panel/remote")', 1)[1]
         self.assertNotIn('remote_session_connect(', body)
