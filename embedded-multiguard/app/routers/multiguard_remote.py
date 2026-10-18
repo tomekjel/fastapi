@@ -1118,6 +1118,22 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
             LIMIT 1500
         """)).mappings().all()
 
+    # Only explicit license-to-order associations are trusted. Never infer a
+    # physical device from mutable hostname, model or customer name.
+    with engine.connect() as db:
+        linked_orders = db.execute(text("""
+            SELECT ll.installation_id, ll.reception_id,
+                   so.reception_number,
+                   (SELECT count(*) FROM service.service_order_media m
+                    WHERE m.service_order_id=ll.reception_id
+                      AND m.deleted_at IS NULL) AS photo_count
+            FROM guard.license_links ll
+            JOIN service.service_orders so ON so.id=ll.reception_id
+            WHERE ll.installation_id IS NOT NULL
+              AND ll.reception_id IS NOT NULL
+        """)).mappings().all()
+    orders_by_installation = {str(x["installation_id"]): x for x in linked_orders}
+
     devices = {}
     for row in rows:
         key = str(row["id"])
@@ -1149,6 +1165,14 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
             if requests else '<span class="muted">Brak zgłoszeń</span>'
         )
         details_url = '/multiguard/panel/device/' + safe(item["id"])
+        associated = orders_by_installation.get(external)
+        if associated:
+            order_url = '/multiguard/panel/service/' + safe(associated["reception_id"])
+            repairs = '<a href="' + order_url + '">Zlecenie ' + safe(associated["reception_number"]) + '</a>'
+            photos = '<a href="' + order_url + '">Zdjęcia: ' + str(int(associated["photo_count"] or 0)) + '</a>'
+        else:
+            repairs = '<span class="muted">Brak powiązanego zlecenia</span>'
+            photos = '<span class="muted">—</span>'
         output.append(
             '<tr><td><code>' + safe(external[:12]) + '</code></td>'
             '<td><a href="' + details_url + '">' + safe(machine) + '</a>'
@@ -1156,6 +1180,7 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
             '<td>PRO · ' + safe(item["lifecycle"]) + '</td>'
             '<td>' + safe(expiry) + '</td>'
             '<td>' + disclosure + '</td>'
+            '<td>' + repairs + '</td><td>' + photos + '</td>'
             '<td><a class="button-link compact" href="' + details_url + '">SZCZEGÓŁY</a></td></tr>'
         )
     body = (
@@ -1165,9 +1190,9 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
         'klienta na każdą sesję.</p>'
         '<div class="table-wrap"><table><thead><tr>'
         '<th>ID komputera</th><th>Komputer</th><th>Licencja</th>'
-        '<th>Ważna do</th><th>Zgłoszenia</th><th>Akcje</th>'
+        '<th>Ważna do</th><th>Zgłoszenia</th><th>Naprawy</th><th>Zdjęcia</th><th>Akcje</th>'
         '</tr></thead><tbody>' +
-        ("".join(output) if output else '<tr><td colspan="6">Brak komputerów PRO.</td></tr>') +
+        ("".join(output) if output else '<tr><td colspan="8">Brak komputerów PRO.</td></tr>') +
         '</tbody></table></div></section>'
     )
     return HTMLResponse(_panel_html(body), headers={"Cache-Control": "private, no-store"})
