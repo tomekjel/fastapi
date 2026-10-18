@@ -42,8 +42,8 @@ class RemoteFleetPageContract(unittest.TestCase):
         self.assertIn("row[\"lifecycle\"] != \"ACTIVE\"", section)
         self.assertIn('request-connect', section)
         self.assertIn('session.status === \'CONSENTED\'', section)
-        self.assertIn("remote-api/sessions/' + sessionId + '/connect", section)
-        self.assertIn("remote-api/sessions/' + sessionId + '/end", section)
+        self.assertIn("panel/remote-api/sessions/' + sessionId + '/connect", section)
+        self.assertIn("panel/remote-api/sessions/' + sessionId + '/end", section)
         self.assertIn("window.open('about:blank', '_blank')", section)
         self.assertIn("url.protocol !== 'https:'", section)
 
