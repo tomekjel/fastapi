@@ -2923,23 +2923,17 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
         if chosen["workshop"]:
             # Node IDs are internal transport details. The user must never
             # copy MeshCentral IDs into the owner console.
-            if chosen["mesh_node_id"]:
-                if not any(s["status"] in {"REQUESTED","CONSENTED","CONNECT_READY","ACTIVE"} for s in sessions):
-                    controls += action(
-                        f'/multiguard/panel/remote/workshop/{selected}/request',
-                        "POŁĄCZ")
-                else:
-                    controls += '<p role="status">Sesja w toku. Czekamy na zgodę klienta lub połączenie.</p>'
+            # An agent is enrolled only after consent for a specific session.
+            if not any(s["status"] in {"REQUESTED","CONSENTED","CONNECT_READY","ACTIVE"} for s in sessions):
+                controls += action(
+                    f'/multiguard/panel/remote/workshop/{selected}/request',
+                    "POŁĄCZ")
             else:
-                controls += ('<p role="status">Połączenie nie jest jeszcze dostępne: '
-                             'komponent zdalnego pulpitu nie został zarejestrowany. '
-                             'Konfiguracja techniczna nie jest wymagana w tym formularzu.</p>')
+                controls += '<p role="status">Sesja w toku. Czekamy na zgodę klienta i rejestrację agenta.</p>'
             if requests:
                 controls += '<p>Ostatnie zgłoszenia klienta:</p>'
                 for request in requests[:5]:
                     controls += f'<p>{_panel_h(request["subject"])}</p>'
-        elif not chosen["mesh_node_id"]:
-            controls += '<p>Komputer nie ma jeszcze skonfigurowanego połączenia zdalnego.</p>'
         elif chosen["lifecycle"] != "ACTIVE" or (
             chosen["valid_until"] and chosen["valid_until"] <= datetime.now(timezone.utc)
         ):
@@ -2947,12 +2941,12 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
         elif chosen["plan_change_pending"]:
             controls += '<p>Trwa zmiana edycji licencji. Najpierw dokończ ją w zakładce Licencje.</p>'
         else:
-            for request in requests:
-                controls += action('/multiguard/panel/remote/request','POPROŚ O ZGODĘ NA SESJĘ',
-                    f'<input type="hidden" name="support_id" value="{request["id"]}">'
-                    f'<span>{_panel_h(request["subject"])}</span>')
-            if not requests:
-                controls += '<p>Brak otwartego zgłoszenia pomocy z tego komputera.</p>'
+            if not any(s["status"] in {"REQUESTED","CONSENTED","CONNECT_READY","ACTIVE"} for s in sessions):
+                controls += action(
+                    f'/multiguard/panel/remote/commercial/{selected}/request',
+                    'POŁĄCZ')
+            else:
+                controls += '<p role="status">Sesja w toku. Czekamy na zgodę klienta i rejestrację agenta.</p>'
     history = []
     statuses = {'REQUESTED':'Oczekuje na zgodę','CONSENTED':'Zgoda udzielona',
                 'CONNECT_READY':'Gotowa do połączenia','ACTIVE':'Aktywna',
@@ -2963,7 +2957,7 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
         endpoint = (f'/multiguard/panel/remote/workshop/session/{session["id"]}'
                     if is_workshop else f'/multiguard/panel/remote/{session["id"]}')
         can_connect = (
-            chosen and chosen["lifecycle"]=="ACTIVE"
+            chosen and bool(chosen["mesh_node_id"]) and chosen["lifecycle"]=="ACTIVE"
             and (not chosen["valid_until"] or chosen["valid_until"]>datetime.now(timezone.utc))
             and not chosen["plan_change_pending"]
             and session["status"] in {"CONSENTED","CONNECT_READY","ACTIVE"}
@@ -3093,6 +3087,62 @@ def owner_workshop_remote_end(
     _owner_remote_actor(csrf_token)
     iid=workshop.end_for_owner(session_id)
     return RedirectResponse(f'/multiguard/panel/remote?selected={iid}',status_code=303)
+
+
+@router.post('/panel/remote/commercial/{installation_id}/request')
+def owner_commercial_remote_request(
+    installation_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """One click for every active commercial PRO installation; consent first."""
+    from fastapi.responses import RedirectResponse
+    from app.routers import multiguard_remote as remote
+    actor = _owner_remote_actor(csrf_token)
+    remote._ensure_schema()
+    now = datetime.now(timezone.utc)
+    with engine.begin() as con:
+        _owner_remote_eligible(con, installation_id)
+        installation = con.execute(text("""
+            SELECT id,service_device_id
+            FROM guard.installations
+            WHERE id=:id AND is_current=TRUE AND plan_code='PRO'
+            FOR UPDATE
+        """), {"id": installation_id}).mappings().first()
+        if not installation or not installation["service_device_id"]:
+            raise HTTPException(409, "Komputer nie ma powiązanego urządzenia serwisowego.")
+        existing = con.execute(text("""
+            SELECT id FROM guard.remote_sessions
+            WHERE installation_id=:id
+              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            LIMIT 1
+        """), {"id": installation_id}).first()
+        if existing:
+            raise HTTPException(409, "Dla komputera trwa już sesja zdalna.")
+        support = con.execute(text("""
+            SELECT id FROM guard.support_requests
+            WHERE installation_id=:id AND status NOT IN ('RESOLVED','CANCELLED')
+            ORDER BY created_at DESC LIMIT 1
+        """), {"id": installation_id}).scalar_one_or_none()
+        if support is None:
+            support = uuid.uuid4()
+            con.execute(text("""
+                INSERT INTO guard.support_requests (
+                    id,local_request_id,installation_id,service_device_id,
+                    priority,subject,description,diagnostics_included,created_at
+                ) VALUES (
+                    :id,:local_id,:installation_id,:device_id,
+                    'NORMAL','Zdalna pomoc OWNER',
+                    'Żądanie pomocy zainicjowane przez OWNER; wymaga zgody klienta.',
+                    FALSE,:now
+                )
+            """), {"id": support,"local_id":uuid.uuid4(),
+                   "installation_id":installation_id,
+                   "device_id":installation["service_device_id"],"now":now})
+    remote.create_remote_session(remote.OwnerRemoteCreateBody(supportRequestId=support), actor)
+    return RedirectResponse(
+        f'/multiguard/panel/remote?selected={installation_id}', status_code=303
+    )
 
 
 @router.post('/panel/remote/request')
