@@ -215,11 +215,33 @@ def verify_session_node(local_id: str, session_id: str) -> str:
     if len(matches) != 1:
         raise MeshCentralError("Agent sesji nie jest jednoznacznie widoczny.")
     record = matches[0]
-    connected = record.get("conn")
+    # MeshCtrl --json can omit the transient 'conn' field even while the
+    # text listing includes it. Check identity/group/name in JSON first;
+    # absent connectivity requires an independent, exact-ID text check.
     if (record.get("meshid") != group
-            or record.get("name") != f"MultiGuard-{session_id}"
-            or type(connected) is not int or not (connected & 1)):
-        raise MeshCentralError("Agent nie potwierdził grupy, sesji lub połączenia.")
+            or record.get("name") != f"MultiGuard-{session_id}"):
+        raise MeshCentralError("Agent nie potwierdził grupy lub sesji.")
+    connected = record.get("conn")
+    if connected is None:
+        import csv
+        listing = _run(command)
+        if len(listing) > 2_000_000:
+            raise MeshCentralError("Zbyt duży tekstowy spis agentów.")
+        statuses = []
+        for fields in csv.reader(listing.splitlines(), skipinitialspace=True):
+            if len(fields) != 5 or fields[0].strip() != local_id:
+                continue
+            if fields[1].strip() != f"MultiGuard-{session_id}":
+                raise MeshCentralError("Niespójna tożsamość agenta MeshCentral.")
+            value = fields[3].strip()
+            if not re.fullmatch(r"[0-9]+", value):
+                raise MeshCentralError("Nieznany status połączenia agenta.")
+            statuses.append(int(value))
+        if len(statuses) != 1:
+            raise MeshCentralError("Nie można jednoznacznie sprawdzić statusu agenta.")
+        connected = statuses[0]
+    if type(connected) is not int or not (connected & 1):
+        raise MeshCentralError("Agent nie jest potwierdzony jako online.")
     return node
 
 
