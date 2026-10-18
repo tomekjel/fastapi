@@ -564,6 +564,7 @@ def connect_for_owner(sid):
         share=meshcentral.create_share(node,f"Multi-Servis {str(sid)[:8]}",caps,60)
     except meshcentral.MeshCentralError as exc:
         raise HTTPException(502, f"MeshCentral: {exc}") from exc
+    share_expires = _now() + timedelta(minutes=60)
     try:
         with engine.begin() as db:
             row=db.execute(text("""
@@ -586,7 +587,7 @@ def connect_for_owner(sid):
                     mesh_share_expires_at=:expires,last_error=NULL,
                     last_activity_at=:now WHERE id=:sid
             """),{"sid":sid,"public":share.public_id,
-                 "expires":_now()+timedelta(minutes=60),"now":_now()})
+                 "expires":share_expires,"now":_now()})
             _event(db,sid,"MESH_CREATED","MESH")
     except Exception:
         try:
@@ -595,7 +596,7 @@ def connect_for_owner(sid):
             pass
         raise
     return {"sessionId":str(sid),"url":share.url,
-            "expiresAt":(_now()+timedelta(minutes=60)).isoformat(),
+            "expiresAt":share_expires.isoformat(),
             "capabilities":caps}
 
 
