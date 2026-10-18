@@ -566,7 +566,7 @@ def connect_for_owner(sid):
     # expiry than the remote service can guarantee.
     share_expires = _now() + timedelta(minutes=60)
     try:
-        share=meshcentral.create_share(node,f"Multi-Servis {str(sid)[:8]}",caps,60)
+        share=meshcentral.create_workshop_share(node,f"Multi-Servis {str(sid)[:8]}",caps,60)
     except meshcentral.MeshCentralError as exc:
         raise HTTPException(502, f"MeshCentral: {exc}") from exc
     try:
