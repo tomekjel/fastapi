@@ -37,7 +37,7 @@ r=owner_remote_overview()
 h=r.body.decode('utf-8')
 assert r.status_code==200, r.status_code
 assert '<h2>1. PRO' in h, 'Missing workshop group'
-assert '<h2>2. Komputery klientów PRO' in h, 'Missing customer group'
+assert '<h2>2. Zgłoszenia klientów PRO' in h, 'Missing customer group'
 assert '<table' in h, 'Missing table'
 assert 'Internal Server Error' not in h
 print('PASS: live DB and actual rendered OWNER HTML',len(h))
