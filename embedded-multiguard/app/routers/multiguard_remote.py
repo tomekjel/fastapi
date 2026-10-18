@@ -1323,15 +1323,22 @@ def owner_remote_session_workspace(
       };
       connect.onclick = async () => {
         if (!sessionId) return;
+        // Reserve tab synchronously so browser popup blockers do not discard
+        // the session after the asynchronous OWNER authorization step.
+        const desktopTab = window.open('about:blank', '_blank');
+        if (desktopTab) desktopTab.opener = null;
         connect.disabled = true;
         try {
           const session = await api('/multiguard/remote-sessions/' + sessionId + '/connect', 'POST');
           const url = new URL(session.url);
           if (url.protocol !== 'https:') throw Error('Niebezpieczny adres sesji.');
-          window.open(url.href, '_blank', 'noopener,noreferrer');
-          status.textContent = 'Otworzono zabezpieczony pulpit MeshCentral w nowej karcie.';
-        } catch (error) { status.textContent = 'Połączenie nieudane: ' + error.message; }
-        finally { connect.disabled = false; }
+          if (desktopTab) desktopTab.location.replace(url.href);
+          else status.textContent = 'Przeglądarka zablokowała nową kartę. Zezwól na wyskakujące okna.';
+          if (desktopTab) status.textContent = 'Otworzono zabezpieczony pulpit MeshCentral.';
+        } catch (error) {
+          if (desktopTab) desktopTab.close();
+          status.textContent = 'Połączenie nieudane: ' + error.message;
+        } finally { connect.disabled = false; }
       };
       end.onclick = async () => {
         if (!sessionId) return;
