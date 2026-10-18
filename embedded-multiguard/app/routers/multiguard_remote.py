@@ -1190,6 +1190,17 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
             ) + '</ul></details>'
             if total_photos else '<span class="muted">Brak zdjęć</span>'
         )
+        ready_request = next(
+            (req for req in requests if str(req["request_status"]) not in ("RESOLVED", "CANCELLED")),
+            None,
+        )
+        connect_action = (
+            '<a class="button-link compact" target="_blank" rel="noopener" '
+            'href="/multiguard/panel/remote/session/' + safe(ready_request["request_id"]) +
+            '">POŁĄCZ</a> '
+            if ready_request and str(item["lifecycle"]) == "ACTIVE"
+            else '<span class="muted">Brak otwartego zgłoszenia</span> '
+        )
         output.append(
             '<tr><td><code>' + safe(external[:12]) + '</code></td>'
             '<td><a href="' + details_url + '">' + safe(machine) + '</a>'
@@ -1198,7 +1209,7 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
             '<td>' + safe(expiry) + '</td>'
             '<td>' + disclosure + '</td>'
             '<td>' + repairs + '</td><td>' + photos + '</td>'
-            '<td><a class="button-link compact" href="' + details_url + '">SZCZEGÓŁY</a></td></tr>'
+            '<td>' + connect_action + '<a class="button-link compact" href="' + details_url + '">SZCZEGÓŁY</a></td></tr>'
         )
     body = (
         '<section class="card"><div class="eyebrow">MULTI-SERVIS / ZDALNA POMOC</div>'
@@ -1213,3 +1224,130 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
         '</tbody></table></div></section>'
     )
     return HTMLResponse(_panel_html(body), headers={"Cache-Control": "private, no-store"})
+
+
+@router.get("/panel/remote/session/{request_id}")
+def owner_remote_session_workspace(
+    request_id: uuid.UUID,
+    _: None = Depends(_panel_auth),
+):
+    """New-tab owner control room; every session requires fresh client consent."""
+    from fastapi.responses import HTMLResponse
+    from html import escape
+
+    with engine.connect() as connection:
+        row = connection.execute(text("""
+            SELECT sr.subject, sr.status, gi.plan_code, gi.lifecycle, gi.valid_until
+            FROM guard.support_requests sr
+            JOIN guard.installations gi ON gi.id=sr.installation_id
+            WHERE sr.id=:request_id AND gi.is_current=TRUE
+        """), {"request_id": request_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Nie znaleziono zgłoszenia.")
+    if row["plan_code"] != "PRO" or row["lifecycle"] != "ACTIVE" or (
+        row["valid_until"] is not None and row["valid_until"] <= datetime.now(timezone.utc)
+    ):
+        raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji PRO.")
+    if row["status"] in {"RESOLVED", "CANCELLED"}:
+        raise HTTPException(409, "Zgłoszenie zostało zamknięte.")
+
+    subject = escape(str(row["subject"] or "Pomoc zdalna"), quote=True)
+    html_body = """
+    <section class="card">
+      <div class="eyebrow">MULTI-GUARD PRO / ZDALNA POMOC</div>
+      <h1>""" + subject + """</h1>
+      <p>Klient musi wyrazić zgodę na każdą nową sesję. Samo otwarcie strony
+      nie łączy się z komputerem ani nie uruchamia MeshAgenta.</p>
+      <button type="button" id="request-connect">WYŚLIJ PROŚBĘ O POŁĄCZENIE</button>
+      <button type="button" id="connect-desktop" disabled>OTWÓRZ PULPIT</button>
+      <button type="button" id="end-remote" disabled>ROZŁĄCZ</button>
+      <p id="remote-status" role="status" aria-live="polite">Oczekiwanie na rozpoczęcie.</p>
+    </section>
+    <script>
+    (() => {
+      const supportRequestId = """ + json.dumps(str(request_id)) + """;
+      const status = document.getElementById('remote-status');
+      const start = document.getElementById('request-connect');
+      const connect = document.getElementById('connect-desktop');
+      const end = document.getElementById('end-remote');
+      let sessionId = null;
+      let poll = null;
+      async function api(url, method='GET', body=null) {
+        const response = await fetch(url, {
+          method,
+          credentials: 'same-origin',
+          headers: body ? {'Content-Type':'application/json'} : {},
+          body: body ? JSON.stringify(body) : undefined,
+          cache: 'no-store'
+        });
+        if (!response.ok) {
+          const message = await response.text();
+          throw Error('HTTP ' + response.status + ': ' + message.slice(0,250));
+        }
+        return response.json();
+      }
+      async function refresh() {
+        if (!sessionId) return;
+        try {
+          const session = await api('/multiguard/remote-sessions/' + sessionId);
+          if (session.status === 'CONSENTED' || session.status === 'CONNECT_READY') {
+            status.textContent = 'Klient wyraził zgodę. Możesz otworzyć pulpit.';
+            connect.disabled = false;
+          } else if (['DENIED','ENDED','EXPIRED','ERROR'].includes(session.status)) {
+            status.textContent = 'Sesja zakończona: ' + session.status;
+            connect.disabled = true;
+            end.disabled = true;
+            clearInterval(poll);
+          } else if (session.status === 'ACTIVE') {
+            status.textContent = 'Sesja aktywna.';
+            connect.disabled = false;
+          } else {
+            status.textContent = 'Oczekiwanie na zgodę klienta...';
+          }
+        } catch (error) { status.textContent = 'Błąd sprawdzenia: ' + error.message; }
+      }
+      start.onclick = async () => {
+        start.disabled = true;
+        try {
+          const session = await api('/multiguard/remote-sessions', 'POST',
+                                    {supportRequestId, requestFiles:false});
+          sessionId = session.sessionId;
+          end.disabled = false;
+          status.textContent = 'Prośba wysłana. Oczekiwanie na zgodę klienta.';
+          await refresh();
+          poll = setInterval(refresh, 3000);
+        } catch (error) {
+          status.textContent = 'Nie udało się wysłać prośby: ' + error.message;
+          start.disabled = false;
+        }
+      };
+      connect.onclick = async () => {
+        if (!sessionId) return;
+        connect.disabled = true;
+        try {
+          const session = await api('/multiguard/remote-sessions/' + sessionId + '/connect', 'POST');
+          const url = new URL(session.url);
+          if (url.protocol !== 'https:') throw Error('Niebezpieczny adres sesji.');
+          window.open(url.href, '_blank', 'noopener,noreferrer');
+          status.textContent = 'Otworzono zabezpieczony pulpit MeshCentral w nowej karcie.';
+        } catch (error) { status.textContent = 'Połączenie nieudane: ' + error.message; }
+        finally { connect.disabled = false; }
+      };
+      end.onclick = async () => {
+        if (!sessionId) return;
+        try {
+          await api('/multiguard/remote-sessions/' + sessionId + '/end', 'POST');
+          status.textContent = 'Sesja zakończona.';
+          connect.disabled = true; end.disabled = true;
+          clearInterval(poll);
+        } catch (error) { status.textContent = 'Nie udało się rozłączyć: ' + error.message; }
+      };
+      window.addEventListener('pagehide', () => clearInterval(poll));
+    })();
+    </script>
+    """
+    return HTMLResponse(_panel_html(html_body), headers={
+        "Cache-Control": "private, no-store",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": "frame-ancestors 'none'",
+    })
