@@ -2990,7 +2990,9 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
         '<script>setTimeout(function(){window.location.reload()},2500)</script>'
         if remote_pending else ''
     )
-    if ready_session:
+    # A rendered desktop is already connected: never auto-submit another
+    # POST on reload, which would rotate/revoke a working MeshCentral share.
+    if ready_session and not desktop_url:
         connect_path = (
             f'/multiguard/panel/remote/workshop/session/{ready_session["id"]}/connect'
             if chosen["workshop"] else
