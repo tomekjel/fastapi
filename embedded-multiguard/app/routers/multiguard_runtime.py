@@ -2972,10 +2972,10 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
     # A single click starts a request. After a per-session client consent,
     # refresh the waiting view and submit the CSRF-protected connect action.
     # No share is created before consent, and denial ends the polling loop.
-    remote_pending = bool(chosen and chosen["workshop"] and any(
-        s["status"] == "REQUESTED" for s in sessions))
+    remote_pending = bool(chosen and any(
+        s["status"] in {"REQUESTED", "CONSENTED"} for s in sessions))
     ready_session = next((s for s in sessions if (
-        chosen and chosen["workshop"] and chosen["mesh_node_id"]
+        chosen and chosen["mesh_node_id"]
         and s["status"] == "CONSENTED"
     )), None)
     auto_script = (
@@ -2983,9 +2983,14 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
         if remote_pending else ''
     )
     if ready_session:
+        connect_path = (
+            f'/multiguard/panel/remote/workshop/session/{ready_session["id"]}/connect'
+            if chosen["workshop"] else
+            f'/multiguard/panel/remote/{ready_session["id"]}/connect'
+        )
         auto_script = (
             f'<form id="owner-remote-auto-connect" method="post" '
-            f'action="/multiguard/panel/remote/workshop/session/{ready_session["id"]}/connect">'
+            f'action="{connect_path}">'
             f'<input type="hidden" name="csrf_token" value="{token}"></form>'
             '<script>document.getElementById("owner-remote-auto-connect").requestSubmit()</script>'
         )
