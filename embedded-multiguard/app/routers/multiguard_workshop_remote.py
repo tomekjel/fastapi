@@ -461,14 +461,15 @@ def workshop_remote_decision(request: WorkshopDecision):
             _event(db,row["id"],"CLIENT_DENIED","CLIENT")
         else:
             allowed=["desktop"]+(["files"] if request.allowFiles else [])
+            consented_at = _now()
             db.execute(text("""
                 UPDATE guard.workshop_remote_sessions
                 SET status='CONSENTED',consented_at=:now,
                     expires_at=:consent_expires,
                     granted_capabilities=CAST(:caps AS jsonb)
                 WHERE id=:sid
-            """),{"sid":row["id"],"now":_now(),
-                  "consent_expires":_now()+timedelta(minutes=5),
+            """),{"sid":row["id"],"now":consented_at,
+                  "consent_expires":consented_at+timedelta(minutes=5),
                   "caps":json.dumps(allowed)})
             _event(db,row["id"],"CLIENT_CONSENTED","CLIENT")
         updated = db.execute(text("""
