@@ -3022,9 +3022,9 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
 
 @router.get('/panel/remote', response_class=HTMLResponse)
 def owner_remote_panel(selected: Optional[uuid.UUID] = None, q: str = '', _: None = Depends(_panel_auth)):
-    if len(q)>64:
-        raise HTTPException(400,'Zbyt długi identyfikator.')
-    return _owner_remote_workspace(selected,q.removeprefix('MG-'))
+    """Existing OWNER menu path serves the new unified remote fleet, not legacy UI."""
+    from app.routers import multiguard_remote as remote
+    return remote.owner_remote_overview()
 
 
 def _owner_remote_actor(csrf_token):
