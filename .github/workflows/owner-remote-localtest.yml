@@ -21,7 +21,7 @@ jobs:
         run: |
           @echo off
           if /I not "%RUNNER_NAME%"=="ROG" exit /b 1
-          python -m py_compile embedded-multiguard\app\routers\multiguard_remote.py embedded-multiguard\app\routers\multiguard_updates.py embedded-multiguard\scripts\sync_multiguard_releases.py
+          python -m py_compile embedded-multiguard\app\routers\multiguard_remote.py embedded-multiguard\app\routers\multiguard_license.py embedded-multiguard\app\routers\multiguard_updates.py embedded-multiguard\scripts\sync_multiguard_releases.py
           if errorlevel 1 exit /b 1
           python -m unittest discover -s embedded-multiguard\tests -p test_owner_remote_fleet_ui.py -v
           if errorlevel 1 exit /b 1
