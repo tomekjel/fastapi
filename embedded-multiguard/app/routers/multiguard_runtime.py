@@ -2884,7 +2884,7 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
                 raise HTTPException(404,"Nie znaleziono komputera z aktywnym Pro.")
         if chosen and chosen["workshop"]:
             sessions = con.execute(text("""
-                SELECT id,status,requested_at,ended_at
+                SELECT id,status,requested_at,ended_at,expires_at,mesh_share_expires_at
                 FROM guard.workshop_remote_sessions WHERE installation_id=:id
                 ORDER BY requested_at DESC LIMIT 40
             """),{"id":selected}).mappings().all()
@@ -2894,7 +2894,7 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
             """),{"id":selected}).mappings().all()
         else:
             sessions = con.execute(text("""
-                SELECT id,status,requested_at,ended_at FROM guard.remote_sessions
+                SELECT id,status,requested_at,ended_at,expires_at,mesh_share_expires_at FROM guard.remote_sessions
                 WHERE installation_id=:id ORDER BY requested_at DESC LIMIT 40
             """),{"id":selected}).mappings().all() if chosen else []
             requests = con.execute(text("""
@@ -2902,6 +2902,14 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
                 WHERE installation_id=:id AND status NOT IN ('RESOLVED','CANCELLED')
                 ORDER BY created_at DESC LIMIT 20
             """),{"id":selected}).mappings().all() if chosen else []
+    def pending_or_active(session):
+        if session["status"] not in {"REQUESTED", "CONSENTED", "CONNECT_READY", "ACTIVE"}:
+            return False
+        deadline = (session["mesh_share_expires_at"]
+                    if session["status"] in {"CONNECT_READY", "ACTIVE"}
+                    else session["expires_at"])
+        return deadline is None or deadline > datetime.now(timezone.utc)
+
     def action(path, label, fields=''):
         return (f'<form method="post" action="{path}">'
                 f'<input type="hidden" name="csrf_token" value="{token}">'
@@ -2924,7 +2932,7 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
             # Node IDs are internal transport details. The user must never
             # copy MeshCentral IDs into the owner console.
             # An agent is enrolled only after consent for a specific session.
-            if not any(s["status"] in {"REQUESTED","CONSENTED","CONNECT_READY","ACTIVE"} for s in sessions):
+            if not any(pending_or_active(s) for s in sessions):
                 controls += action(
                     f'/multiguard/panel/remote/workshop/{selected}/request',
                     "POŁĄCZ")
@@ -2941,7 +2949,7 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
         elif chosen["plan_change_pending"]:
             controls += '<p>Trwa zmiana edycji licencji. Najpierw dokończ ją w zakładce Licencje.</p>'
         else:
-            if not any(s["status"] in {"REQUESTED","CONSENTED","CONNECT_READY","ACTIVE"} for s in sessions):
+            if not any(pending_or_active(s) for s in sessions):
                 controls += action(
                     f'/multiguard/panel/remote/commercial/{selected}/request',
                     'POŁĄCZ')
@@ -2962,7 +2970,7 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
             and not chosen["plan_change_pending"]
             and session["status"] in {"CONSENTED","CONNECT_READY","ACTIVE"}
         )
-        if can_connect:
+        if can_connect and pending_or_active(session):
             buttons += action(endpoint+'/connect','OTWÓRZ PULPIT')
         if session["status"] in {"REQUESTED","CONSENTED","CONNECT_READY","ACTIVE"}:
             buttons += action(endpoint+'/end','ZAKOŃCZ SESJĘ')
@@ -2973,10 +2981,10 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
     # refresh the waiting view and submit the CSRF-protected connect action.
     # No share is created before consent, and denial ends the polling loop.
     remote_pending = bool(chosen and any(
-        s["status"] in {"REQUESTED", "CONSENTED"} for s in sessions))
+        pending_or_active(s) and s["status"] in {"REQUESTED", "CONSENTED"} for s in sessions))
     ready_session = next((s for s in sessions if (
         chosen and chosen["mesh_node_id"]
-        and s["status"] == "CONSENTED"
+        and pending_or_active(s) and s["status"] == "CONSENTED"
     )), None)
     auto_script = (
         '<script>setTimeout(function(){window.location.reload()},2500)</script>'
@@ -3116,14 +3124,8 @@ def owner_commercial_remote_request(
         """), {"id": installation_id}).mappings().first()
         if not installation or not installation["service_device_id"]:
             raise HTTPException(409, "Komputer nie ma powiązanego urządzenia serwisowego.")
-        existing = con.execute(text("""
-            SELECT id FROM guard.remote_sessions
-            WHERE installation_id=:id
-              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
-            LIMIT 1
-        """), {"id": installation_id}).first()
-        if existing:
-            raise HTTPException(409, "Dla komputera trwa już sesja zdalna.")
+        # The session creation API expires old requests and checks
+        # for an existing live session atomically before inserting a new one.
         support = con.execute(text("""
             SELECT id FROM guard.support_requests
             WHERE installation_id=:id AND status NOT IN ('RESOLVED','CANCELLED')
