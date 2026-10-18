@@ -1322,6 +1322,28 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
 
 
 
+@router.get("/panel/remote-api/workshop/active/{installation_id}")
+def panel_workshop_active(installation_id: uuid.UUID, _: None = Depends(_panel_auth)):
+    """Resume a workshop session from server state, never from browser storage."""
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    with engine.connect() as db:
+        grant = workshop._grant(db, installation_id)
+        if not workshop._eligible(grant):
+            raise HTTPException(403, "Nieaktywny tryb serwisowy PRO.")
+        row = db.execute(text("""
+            SELECT * FROM guard.workshop_remote_sessions
+            WHERE installation_id=:iid
+              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            ORDER BY requested_at DESC LIMIT 1
+        """), {"iid": installation_id}).mappings().first()
+    if not row:
+        return {"session": None}
+    result = workshop._public(row)
+    result["meshLinked"] = bool(grant["mesh_node_id"])
+    return {"session": result}
+
+
 @router.get("/panel/remote/workshop/{installation_id}")
 def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_panel_auth)):
     """Workshop PRO control room: audited unattended OWNER access, new browser tab."""
@@ -1362,6 +1384,29 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       const end = document.getElementById('ws-end');
       const status = document.getElementById('ws-status');
       let sid = null, timer = null;
+      async function recover() {
+        start.disabled = true;
+        connect.disabled = true;
+        end.disabled = true;
+        status.textContent = 'Sprawdzam, czy istnieje otwarta sesja…';
+        try {
+          const data = await api('active/' + installation);
+          if (data.session) {
+            sid = data.session.sessionId;
+            end.disabled = false;
+            timer = setInterval(refresh, 3000);
+            await refresh();
+          } else {
+            sid = null;
+            start.disabled = false;
+            status.textContent = 'Gotowy do połączenia.';
+          }
+        } catch(e) {
+          status.textContent = 'Nie można sprawdzić otwartych sesji: ' + e.message;
+          // Never offer a duplicate connection until server confirms no open session.
+          start.disabled = true;
+        }
+      }
       async function api(path, method='GET') {
         const r = await fetch('/multiguard/panel/remote-api/workshop/' + path, {
           method, credentials:'same-origin', cache:'no-store',
@@ -1441,6 +1486,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           status.textContent='Sesja zakończona. Możesz rozpocząć kolejne połączenie.';
         } catch(e) {end.disabled=false;status.textContent=e.message;}
       };
+      recover();
     })();
     </script>
     """
