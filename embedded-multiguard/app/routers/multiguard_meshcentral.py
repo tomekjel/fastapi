@@ -245,11 +245,13 @@ def verify_session_node(local_id: str, session_id: str) -> str:
     return node
 
 
-def create_share(
+def _create_share(
     node_id: str,
     session_label: str,
     capabilities: Iterable[str],
     duration_minutes: int = 60,
+    *,
+    workshop_unattended: bool = False,
 ) -> MeshShare:
     node_id = node_id.strip()
     if not node_id:
@@ -264,19 +266,16 @@ def create_share(
 
     share_type = "desktop,files" if "files" in granted else "desktop"
     duration = max(5, min(int(duration_minutes), 120))
-    # Every commercial/temporary workshop client share MUST require both
-    # a fresh prompt on the endpoint and the visible privacy toolbar.
-    # Previous versions accepted notify-only MESH_CENTRAL_SHARE_CONSENT,
-    # which could silently bypass client choice despite application consent.
-    # OWNER_UNATTENDED must use a separate, independently authorized method.
-    configured_consent = os.getenv(
-        "MESH_CENTRAL_SHARE_CONSENT", "prompt,bar"
-    ).strip() or "prompt,bar"
-    if configured_consent != "prompt,bar":
-        raise MeshCentralError(
-            "Połączenie z klientem wymaga MeshCentral: prompt,bar."
-        )
-    consent = "prompt,bar"
+    # Commercial links must always prompt for fresh consent. The separate
+    # OWNER workshop path is allowed only after an explicit PRO workshop grant
+    # was checked by request_for_owner/connect_for_owner.
+    if workshop_unattended:
+        consent = "bar"
+    else:
+        configured = os.getenv("MESH_CENTRAL_SHARE_CONSENT", "prompt,bar").strip() or "prompt,bar"
+        if configured != "prompt,bar":
+            raise MeshCentralError("Połączenie z klientem wymaga MeshCentral: prompt,bar.")
+        consent = "prompt,bar"
 
     cmd = _base_command() + [
         "--id", node_id,
@@ -319,6 +318,30 @@ def create_share(
     except ValueError as exc:
         raise MeshCentralError("MeshCentral zwrócił niebezpieczny adres sesji.") from exc
     return MeshShare(public_match.group(1), share_url)
+
+
+def create_share(
+    node_id: str,
+    session_label: str,
+    capabilities: Iterable[str],
+    duration_minutes: int = 60,
+) -> MeshShare:
+    """Commercial client share: always prompt for each connection."""
+    return _create_share(node_id, session_label, capabilities, duration_minutes)
+
+
+def create_workshop_share(
+    node_id: str,
+    session_label: str,
+    capabilities: Iterable[str],
+    duration_minutes: int = 60,
+) -> MeshShare:
+    """OWNER-only workshop grant: visible privacy bar, no per-session prompt.
+
+    Must be called only from the authenticated workshop OWNER path.
+    """
+    return _create_share(node_id, session_label, capabilities, duration_minutes,
+                         workshop_unattended=True)
 
 
 def _share_absent_from_listing(node_id: str, public_id: str) -> bool:
