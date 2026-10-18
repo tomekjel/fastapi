@@ -91,6 +91,15 @@ class SessionTransportTests(unittest.TestCase):
             with self.subTest(lines=lines[:16]), self.assertRaises(mesh.MeshCentralError):
                 check(lines)
 
+    def test_separate_commercial_and_workshop_consent_policies(self):
+        from unittest.mock import patch
+        with patch.object(mesh, "_base_command", return_value=["meshctrl", "DeviceSharing"]), \
+             patch.object(mesh, "_run", return_value="ID: share\nURL: https://mesh.multi-servis.pl/guest\n") as run:
+            mesh.create_share(self.node, "Commercial", ["desktop"])
+            self.assertEqual(run.call_args.args[0][run.call_args.args[0].index("--consent")+1], "prompt,bar")
+            mesh.create_workshop_share(self.node, "Service", ["desktop"])
+            self.assertEqual(run.call_args.args[0][run.call_args.args[0].index("--consent")+1], "bar")
+
     def test_missing_group_is_not_guessed(self):
         with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID":""}), \
              patch.object(mesh, "_run") as run, self.assertRaises(mesh.MeshCentralError):
@@ -194,7 +203,7 @@ class SessionTransportTests(unittest.TestCase):
              patch.object(workshop, "engine") as engine, \
              patch.object(workshop, "_grant", return_value=grant), \
              patch.object(workshop, "_eligible", return_value=True), \
-             patch.object(mesh, "create_share",
+             patch.object(mesh, "create_workshop_share",
                           return_value=SimpleNamespace(public_id="share-loser",url="https://example.test")) as create, \
              patch.object(mesh, "revoke_share") as revoke:
             engine.begin.return_value.__enter__.return_value = db
@@ -218,7 +227,7 @@ class SessionTransportTests(unittest.TestCase):
              patch.object(workshop, "engine") as engine, \
              patch.object(workshop, "_grant", return_value=grant), \
              patch.object(workshop, "_eligible", return_value=True), \
-             patch.object(mesh, "create_share",
+             patch.object(mesh, "create_workshop_share",
                           return_value=SimpleNamespace(public_id="new-share",url="https://example.test")), \
              patch.object(mesh, "revoke_share") as revoke:
             engine.begin.return_value.__enter__.return_value = db
@@ -313,7 +322,7 @@ class SessionTransportTests(unittest.TestCase):
              patch.object(workshop, "engine") as engine, \
              patch.object(workshop, "_grant", return_value=grant), \
              patch.object(workshop, "_eligible", return_value=True), \
-             patch.object(mesh, "create_share") as create, \
+             patch.object(mesh, "create_workshop_share") as create, \
              patch.object(mesh, "revoke_share") as revoke:
             engine.begin.return_value.__enter__.return_value = db
             with self.assertRaises(HTTPException) as caught:
