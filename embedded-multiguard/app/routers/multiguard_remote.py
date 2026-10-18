@@ -1090,3 +1090,85 @@ def bind_mesh_node(
 
     return {"status": "ok", "meshNodeId": node_id}
 
+
+
+
+@router.get("/panel/remote")
+def owner_remote_overview(_: None = Depends(__import__("app.routers.multiguard_license", fromlist=["_panel_auth"])._panel_auth)):
+    """Compact full-width PRO fleet and support history; never render finances.
+
+    This view does not grant remote access: session creation still requires
+    OWNER API authorization and a fresh, verified customer consent.
+    """
+    from fastapi.responses import HTMLResponse
+    from app.routers.multiguard_license import _panel_html
+    from html import escape
+    from collections import defaultdict
+
+    with engine.connect() as db:
+        rows = db.execute(text("""
+            SELECT gi.id, gi.installation_external_id,
+                   gi.plan_code, gi.lifecycle, gi.valid_until, gi.is_current,
+                   gi.hostname, gi.manufacturer, gi.model,
+                   sr.id AS request_id, sr.subject AS request_subject,
+                   sr.status AS request_status, sr.created_at AS request_created
+            FROM guard.installations gi
+            LEFT JOIN guard.support_requests sr ON sr.installation_id=gi.id
+            WHERE gi.is_current=TRUE AND UPPER(gi.plan_code)='PRO'
+            ORDER BY gi.valid_until DESC NULLS LAST, gi.id, sr.created_at DESC
+            LIMIT 1500
+        """)).mappings().all()
+
+    devices = {}
+    for row in rows:
+        key = str(row["id"])
+        if key not in devices:
+            devices[key] = {"info": row, "requests": []}
+        if row["request_id"] is not None:
+            devices[key]["requests"].append(row)
+
+    def safe(value):
+        return escape(str(value if value is not None else ""), quote=True)
+
+    output = []
+    for device in devices.values():
+        item = device["info"]
+        external = str(item["installation_external_id"])
+        machine = " ".join(str(item[k] or "").strip() for k in ("manufacturer", "model")).strip()
+        machine = machine or str(item["hostname"] or "Komputer bez nazwy")
+        valid = item["valid_until"]
+        expiry = valid.strftime("%d.%m.%Y") if valid else "Bez daty"
+        requests = device["requests"]
+        history = "".join(
+            '<li><span>' + safe((r["request_created"].strftime("%d.%m.%Y") if r["request_created"] else "")) +
+            '</span> ' + safe(r["request_subject"]) + ' · ' + safe(r["request_status"]) + '</li>'
+            for r in requests
+        )
+        disclosure = (
+            '<details><summary>' + str(len(requests)) + ' zgłoszeń</summary><ul>' +
+            history + '</ul></details>'
+            if requests else '<span class="muted">Brak zgłoszeń</span>'
+        )
+        details_url = '/multiguard/panel/device/' + safe(item["id"])
+        output.append(
+            '<tr><td><code>' + safe(external[:12]) + '</code></td>'
+            '<td><a href="' + details_url + '">' + safe(machine) + '</a>'
+            '<small style="display:block">' + safe(item["hostname"]) + '</small></td>'
+            '<td>PRO · ' + safe(item["lifecycle"]) + '</td>'
+            '<td>' + safe(expiry) + '</td>'
+            '<td>' + disclosure + '</td>'
+            '<td><a class="button-link compact" href="' + details_url + '">SZCZEGÓŁY</a></td></tr>'
+        )
+    body = (
+        '<section class="card"><div class="eyebrow">MULTI-SERVIS / ZDALNA POMOC</div>'
+        '<h1>Komputery PRO</h1><p>Lista urządzeń i zgłoszeń. Kwoty napraw '
+        'nie są pokazywane na tym ekranie. Zdalny pulpit wymaga zgody '
+        'klienta na każdą sesję.</p>'
+        '<div class="table-wrap"><table><thead><tr>'
+        '<th>ID komputera</th><th>Komputer</th><th>Licencja</th>'
+        '<th>Ważna do</th><th>Zgłoszenia</th><th>Akcje</th>'
+        '</tr></thead><tbody>' +
+        ("".join(output) if output else '<tr><td colspan="6">Brak komputerów PRO.</td></tr>') +
+        '</tbody></table></div></section>'
+    )
+    return HTMLResponse(_panel_html(body), headers={"Cache-Control": "private, no-store"})
