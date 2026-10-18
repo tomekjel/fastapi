@@ -878,8 +878,9 @@ def remote_session_connect(
                 text(
                     """
                     UPDATE guard.remote_sessions
-                    SET status='ERROR',last_error=:error,last_activity_at=:now
+                    SET last_error=:error,last_activity_at=:now
                     WHERE id=:session_id
+                      AND status IN ('CONSENTED','CONNECT_READY','ACTIVE')
                     """
                 ),
                 {
