@@ -1118,21 +1118,27 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
             LIMIT 1500
         """)).mappings().all()
 
-    # Only explicit license-to-order associations are trusted. Never infer a
-    # physical device from mutable hostname, model or customer name.
+    # Device identity comes only from the internal core.devices foreign key,
+    # never from hostname, client name, or model similarity.
     with engine.connect() as db:
         linked_orders = db.execute(text("""
-            SELECT ll.installation_id, ll.reception_id,
-                   so.reception_number,
+            SELECT gi.id AS installation_internal_id, so.id AS order_id,
+                   so.reception_number, so.received_at,
                    (SELECT count(*) FROM service.service_order_media m
-                    WHERE m.service_order_id=ll.reception_id
-                      AND m.deleted_at IS NULL) AS photo_count
-            FROM guard.license_links ll
-            JOIN service.service_orders so ON so.id=ll.reception_id
-            WHERE ll.installation_id IS NOT NULL
-              AND ll.reception_id IS NOT NULL
+                    JOIN core.storage_objects o ON o.id=m.storage_object_id
+                    WHERE m.service_order_id=so.id
+                      AND m.deleted_at IS NULL AND o.deleted_at IS NULL) AS photo_count
+            FROM guard.installations gi
+            JOIN service.service_orders so ON so.device_id=gi.service_device_id
+            WHERE gi.is_current=TRUE AND gi.service_device_id IS NOT NULL
+            ORDER BY so.received_at DESC
+            LIMIT 3000
         """)).mappings().all()
-    orders_by_installation = {str(x["installation_id"]): x for x in linked_orders}
+    orders_by_installation = {}
+    for service_row in linked_orders:
+        orders_by_installation.setdefault(
+            str(service_row["installation_internal_id"]), []
+        ).append(service_row)
 
     devices = {}
     for row in rows:
@@ -1165,14 +1171,25 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
             if requests else '<span class="muted">Brak zgłoszeń</span>'
         )
         details_url = '/multiguard/panel/device/' + safe(item["id"])
-        associated = orders_by_installation.get(external)
-        if associated:
-            order_url = '/multiguard/panel/service/' + safe(associated["reception_id"])
-            repairs = '<a href="' + order_url + '">Zlecenie ' + safe(associated["reception_number"]) + '</a>'
-            photos = '<a href="' + order_url + '">Zdjęcia: ' + str(int(associated["photo_count"] or 0)) + '</a>'
-        else:
-            repairs = '<span class="muted">Brak powiązanego zlecenia</span>'
-            photos = '<span class="muted">—</span>'
+        associated = orders_by_installation.get(str(item["id"]), [])
+        repairs = (
+            '<details><summary>' + str(len(associated)) + ' napraw</summary><ul>' +
+            ''.join(
+                '<li><a href="/multiguard/panel/service/' + safe(o["order_id"]) + '">' +
+                safe(o["reception_number"]) + '</a></li>' for o in associated
+            ) + '</ul></details>'
+            if associated else '<span class="muted">Brak powiązanych napraw</span>'
+        )
+        total_photos = sum(int(o["photo_count"] or 0) for o in associated)
+        photos = (
+            '<details><summary>' + str(total_photos) + ' zdjęć/plików</summary><ul>' +
+            ''.join(
+                '<li><a href="/multiguard/panel/service/' + safe(o["order_id"]) + '">' +
+                safe(o["reception_number"]) + ': ' + str(int(o["photo_count"] or 0)) + '</a></li>'
+                for o in associated if int(o["photo_count"] or 0) > 0
+            ) + '</ul></details>'
+            if total_photos else '<span class="muted">Brak zdjęć</span>'
+        )
         output.append(
             '<tr><td><code>' + safe(external[:12]) + '</code></td>'
             '<td><a href="' + details_url + '">' + safe(machine) + '</a>'
