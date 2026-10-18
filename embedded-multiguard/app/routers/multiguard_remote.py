@@ -1159,7 +1159,7 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
             FROM guard.installations gi
             LEFT JOIN guard.support_requests sr ON sr.installation_id=gi.id
             WHERE gi.is_current=TRUE AND UPPER(gi.plan_code)='PRO'
-            ORDER BY sr.created_at DESC NULLS LAST, gi.id
+            ORDER BY (CASE WHEN sr.status NOT IN ('RESOLVED','CANCELLED') THEN 0 ELSE 1 END), sr.created_at DESC NULLS LAST, gi.id
             LIMIT 1500
         """)).mappings().all()
 
@@ -1196,11 +1196,13 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
     def safe(value):
         return escape(str(value if value is not None else ""), quote=True)
 
-    # Only actionable customer reports belong in the remote queue.
+    # Show every active PRO installation; requested help sorts before idle devices.
     output = []
-    for device in devices.values():
-        if not any(str(req['request_status']) not in ('RESOLVED', 'CANCELLED') for req in device['requests']):
-            continue
+    for device in sorted(devices.values(), key=lambda dev: (
+        0 if any(str(req['request_status']) not in ('RESOLVED', 'CANCELLED') for req in dev['requests']) else 1,
+        -max((req['request_created'].timestamp() if req['request_created'] else 0)
+             for req in dev['requests']) if dev['requests'] else 0
+    )):
         item = device["info"]
         external = str(item["installation_external_id"])
         machine = " ".join(str(item[k] or "").strip() for k in ("manufacturer", "model")).strip()
@@ -1242,12 +1244,16 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
             (req for req in requests if str(req["request_status"]) not in ("RESOLVED", "CANCELLED")),
             None,
         )
+        connect_target = (
+            '/multiguard/panel/remote/session/' + safe(ready_request["request_id"])
+            if ready_request else '/multiguard/panel/remote/device/' + safe(item["id"])
+        )
         connect_action = (
             '<a class="button-link compact" target="_blank" rel="noopener" '
-            'href="/multiguard/panel/remote/session/' + safe(ready_request["request_id"]) +
-            '">POŁĄCZ</a> '
-            if ready_request and str(item["lifecycle"]) == "ACTIVE"
-            else '<span class="muted">Brak otwartego zgłoszenia</span> '
+            'onclick="return confirm(\'Czy na pewno rozpocząć procedurę połączenia z tym komputerem?\')" '
+            'href="' + connect_target + '">POŁĄCZ</a> '
+            if str(item["lifecycle"]) == "ACTIVE"
+            else '<span class="muted">Licencja nieaktywna</span> '
         )
         output.append(
             '<tr><td><code>' + safe(external[:12]) + '</code></td>'
@@ -1305,7 +1311,7 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
         '<th>ID komputera</th><th>Komputer</th><th>Licencja</th>'
         '<th>Ważna do</th><th>Zgłoszenia</th><th>Naprawy</th><th>Zdjęcia</th><th>Akcje</th>'
         '</tr></thead><tbody>' +
-        ("".join(output) if output else '<tr><td colspan="8">Brak otwartych zgłoszeń klientów PRO.</td></tr>') +
+        ("".join(output) if output else '<tr><td colspan="8">Brak aktywnych instalacji klientów PRO.</td></tr>') +
         '</tbody></table></div></section>'
     )
     return HTMLResponse(_panel_html(body), headers={"Cache-Control": "private, no-store"})
@@ -1365,6 +1371,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         } catch (e) { status.textContent = 'Błąd: ' + e.message; }
       }
       start.onclick = async () => {
+        if (!window.confirm('Czy na pewno rozpocząć sesję serwisową na tym komputerze?')) return;
         start.disabled = true;
         try {
           const reply = await api('request/' + installation, 'POST');
@@ -1522,6 +1529,7 @@ def owner_remote_session_workspace(
         } catch (error) { status.textContent = 'Błąd sprawdzenia: ' + error.message; }
       }
       start.onclick = async () => {
+        if (!window.confirm('Wysłać klientowi prośbę o zatwierdzenie połączenia?')) return;
         start.disabled = true;
         try {
           const session = await api('/multiguard/panel/remote-api/sessions', 'POST',
