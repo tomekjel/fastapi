@@ -195,6 +195,17 @@ class SessionTransportTests(unittest.TestCase):
         self.assertFalse(any("UPDATE guard.workshop_remote_sessions" in str(c.args[0])
                              for c in db.execute.call_args_list))
 
+    def test_paid_connect_checks_share_identity_and_consent_after_mesh_call(self):
+        # Regression contract: concurrent OWNER actions must never overwrite
+        # a newer public share or consent and must check actual lease validity.
+        import inspect
+        source = inspect.getsource(paid.remote_session_connect)
+        self.assertIn('current["mesh_public_id"] != existing_public_id', source)
+        self.assertIn('list(current["granted_capabilities"] or []) != granted', source)
+        self.assertIn('current["ended_at"] is not None', source)
+        self.assertIn('current["mesh_share_expires_at"] <= datetime.now(timezone.utc)', source)
+        self.assertIn('current["expires_at"] <= datetime.now(timezone.utc)', source)
+
     def test_paid_expiry_query_includes_missing_share_lease(self):
         db = MagicMock()
         db.execute.return_value.mappings.return_value.all.return_value = []
