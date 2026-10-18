@@ -34,6 +34,12 @@ class OwnerRemoteConsentFirstTests(unittest.TestCase):
         self.assertIn("remote.create_remote_session", body)
         self.assertNotIn("mesh_node_id", body)
 
+    def test_connect_uses_token_mode_mesh_url_default(self):
+        runtime = self.source
+        self.assertIn("'wss://mesh.multi-servis.pl'", runtime)
+        self.assertIn("remote.remote_session_connect(str(session_id),actor)", runtime)
+        self.assertIn("if url.scheme!='https' or not configured.hostname", runtime)
+
     def test_panel_does_not_gate_initial_request_on_mesh_agent(self):
         panel = ast.get_source_segment(self.source, self.functions["_owner_remote_workspace"])
         self.assertIn("'/multiguard/panel/remote/commercial/{selected}/request'", panel)
