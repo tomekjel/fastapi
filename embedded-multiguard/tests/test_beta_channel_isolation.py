@@ -30,7 +30,7 @@ class BetaChannelIsolation(unittest.TestCase):
         self.assertIn("guard.workshop_grants", resolver)
         self.assertIn("guard.license_links", resolver)
         self.assertIn("guard.installations", resolver)
-        self.assertLess(resolver.index("guard.workshop_grants"), resolver.index("guard.installations"))
+        self.assertLess(resolver.index("FROM guard.workshop_grants"), resolver.index("FROM guard.installations"))
 
     def test_unpublished_draft_releases_remain_excluded(self):
         self.assertIn('if release.get("draft"):', SYNC)
