@@ -44,7 +44,8 @@ class OwnerRemoteConsentFirstTests(unittest.TestCase):
         panel = ast.get_source_segment(self.source, self.functions["_owner_remote_workspace"])
         self.assertIn('deadline > datetime.now(timezone.utc)', panel)
         self.assertIn('pending_or_active(s) for s in sessions', panel)
-        self.assertIn('and pending_or_active(s) and s["status"] == "CONSENTED"', panel)
+        self.assertIn('and s["status"] == "CONSENTED"', panel)
+        self.assertIn("if pending_or_active(session):", panel)
         # Backend still decides whether an old session must be closed before retry.
         request = ast.get_source_segment(
             self.source, self.functions["owner_commercial_remote_request"]
