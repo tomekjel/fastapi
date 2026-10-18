@@ -15,3 +15,5 @@ retry=scope-click-handler
 check=resume-session-server-state-20261018
 
 check=isolated-beta-channel
+
+check=license-beta-channel-20261018
