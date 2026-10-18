@@ -1390,7 +1390,10 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
             clearInterval(timer);
             timer = null;
           } else status.textContent = 'Przygotowywanie sesji serwisowej…';
-        } catch (e) { status.textContent = 'Błąd: ' + e.message; }
+        } catch (e) {
+          connect.disabled = true;
+          status.textContent = 'Utracono potwierdzenie stanu MeshCentral: ' + e.message;
+        }
       }
       start.onclick = async () => {
         if (!window.confirm('Czy na pewno połączyć się z komputerem serwisowym?')) return;
