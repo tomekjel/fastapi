@@ -195,6 +195,16 @@ class SessionTransportTests(unittest.TestCase):
         self.assertFalse(any("UPDATE guard.workshop_remote_sessions" in str(c.args[0])
                              for c in db.execute.call_args_list))
 
+    def test_paid_expiry_query_includes_missing_share_lease(self):
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.all.return_value = []
+        db.execute.return_value.mappings.return_value.first.return_value = None
+        paid._expire_and_find_open(db, self.iid)
+        query = str(db.execute.call_args_list[0].args[0])
+        self.assertIn("rs.mesh_share_expires_at IS NULL", query)
+        self.assertIn("rs.mesh_share_expires_at<=:now", query)
+        self.assertIn("rs.expires_at<=:now", query)
+
     def test_missing_share_lease_is_expired_and_revoked(self):
         active = {**self.row, "status":"CONNECT_READY", "mesh_public_id":"orphan-share",
                   "mesh_share_expires_at":None}
