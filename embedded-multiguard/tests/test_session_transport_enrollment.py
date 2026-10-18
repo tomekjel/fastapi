@@ -203,6 +203,11 @@ class SessionTransportTests(unittest.TestCase):
         self.assertIn("if updated.rowcount:", source)
         self.assertNotIn("SET status='ERROR',last_error=:error", source)
 
+    def test_paid_consent_rejects_exact_expiry_boundary(self):
+        import inspect
+        source = inspect.getsource(paid.agent_remote_decision)
+        self.assertIn('if row["expires_at"] <= now:', source)
+
     def test_paid_share_expiry_is_shared_between_database_and_response(self):
         import inspect
         source = inspect.getsource(paid.remote_session_connect)
