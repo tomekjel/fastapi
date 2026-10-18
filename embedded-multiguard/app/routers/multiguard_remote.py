@@ -917,6 +917,11 @@ def remote_session_connect(
                 JOIN guard.installations gi ON gi.id=rs.installation_id
                 WHERE rs.id=:sid FOR UPDATE OF rs,gi
             """), {"sid": session_uuid}).mappings().first()
+            # If MeshCentral was slow enough for the new lease to expire,
+            # revoke it through the existing rollback path rather than
+            # publishing an already-expired remote-control URL.
+            if share_expires <= datetime.now(timezone.utc):
+                raise HTTPException(410, "Nowy link MeshCentral wygasł przed zapisem.")
             if (not current or not _has_active_remote_pro(current, datetime.now(timezone.utc))
                     or current["mesh_node_id"] != node_id
                     or current["mesh_public_id"] != existing_public_id
