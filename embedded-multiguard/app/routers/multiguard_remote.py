@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -14,6 +14,9 @@ from sqlalchemy import text
 from app.database import engine
 from app.security import CurrentUser, require_owner
 from app.routers.multiguard_license import _panel_auth, _panel_html
+from app.routers.multiguard_panel_settings import _csrf_token, _token_valid
+from types import SimpleNamespace
+import time
 from app.routers.multiguard_runtime import (
     _ensure_schema as _ensure_runtime_schema,
     _require_agent,
@@ -1094,6 +1097,48 @@ def bind_mesh_node(
 
 
 
+def _owner_panel_csrf(x_owner_csrf: str = Header(default="")) -> None:
+    if not _token_valid(x_owner_csrf):
+        raise HTTPException(403, "Wygasły lub nieprawidłowy token panelu.")
+
+
+def _panel_owner_identity():
+    # Panel-only identity, never accepted by the separate bearer API.
+    return SimpleNamespace(id=None, display_name="OWNER")
+
+
+@router.post("/panel/remote-api/sessions")
+def panel_create_remote_session(
+    body: OwnerRemoteCreateBody,
+    _: None = Depends(_panel_auth),
+    __: None = Depends(_owner_panel_csrf),
+):
+    return create_remote_session(body, user=_panel_owner_identity())
+
+
+@router.get("/panel/remote-api/sessions/{session_id}")
+def panel_remote_session_detail(session_id: str, _: None = Depends(_panel_auth)):
+    return remote_session_detail(session_id, user=_panel_owner_identity())
+
+
+@router.post("/panel/remote-api/sessions/{session_id}/connect")
+def panel_remote_session_connect(
+    session_id: str,
+    _: None = Depends(_panel_auth),
+    __: None = Depends(_owner_panel_csrf),
+):
+    return remote_session_connect(session_id, user=_panel_owner_identity())
+
+
+@router.post("/panel/remote-api/sessions/{session_id}/end")
+def panel_remote_session_end(
+    session_id: str,
+    _: None = Depends(_panel_auth),
+    __: None = Depends(_owner_panel_csrf),
+):
+    return remote_session_end(session_id, user=_panel_owner_identity())
+
+
 @router.get("/panel/remote")
 def owner_remote_overview(_: None = Depends(_panel_auth)):
     """Compact full-width PRO fleet and support history; never render finances.
@@ -1252,6 +1297,7 @@ def owner_remote_session_workspace(
         raise HTTPException(409, "Zgłoszenie zostało zamknięte.")
 
     subject = escape(str(row["subject"] or "Pomoc zdalna"), quote=True)
+    csrf = _csrf_token(int(time.time() // 3600))
     html_body = """
     <section class="card">
       <div class="eyebrow">MULTI-GUARD PRO / ZDALNA POMOC</div>
@@ -1266,6 +1312,7 @@ def owner_remote_session_workspace(
     <script>
     (() => {
       const supportRequestId = """ + json.dumps(str(request_id)) + """;
+      const csrf = """ + json.dumps(csrf) + """;
       const status = document.getElementById('remote-status');
       const start = document.getElementById('request-connect');
       const connect = document.getElementById('connect-desktop');
@@ -1276,7 +1323,7 @@ def owner_remote_session_workspace(
         const response = await fetch(url, {
           method,
           credentials: 'same-origin',
-          headers: body ? {'Content-Type':'application/json'} : {},
+          headers: method === 'POST' ? {'Content-Type':'application/json', 'X-Owner-CSRF':csrf} : {},
           body: body ? JSON.stringify(body) : undefined,
           cache: 'no-store'
         });
@@ -1289,7 +1336,7 @@ def owner_remote_session_workspace(
       async function refresh() {
         if (!sessionId) return;
         try {
-          const session = await api('/multiguard/remote-sessions/' + sessionId);
+          const session = await api('/multiguard/panel/remote-api/sessions/' + sessionId);
           if (session.status === 'CONSENTED' || session.status === 'CONNECT_READY') {
             status.textContent = 'Klient wyraził zgodę. Możesz otworzyć pulpit.';
             connect.disabled = false;
