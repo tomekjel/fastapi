@@ -22,6 +22,7 @@ OWNER_DEVICE_FILE="$ROUTER_DIR/multiguard_panel_devices.py"
 THEME_FILE="$ROUTER_DIR/multiguard_panel_theme.py"
 TRIAGE_FILE="$ROUTER_DIR/multiguard_panel_triage.py"
 DIAGNOSTICS_PANEL_FILE="$ROUTER_DIR/multiguard_panel_diagnostics.py"
+MOBILE_DIAG_FILE="$ROUTER_DIR/mobile_caller_diagnostics.py"
 SCRIPT_DIR="$APP_ROOT/scripts"
 SYNC_SCRIPT_FILE="$SCRIPT_DIR/sync_multiguard_releases.py"
 RELEASE_ROOT="$APP_ROOT/releases/multiguard"
@@ -41,6 +42,7 @@ HAD_OWNER_DEVICE_FILE=0
 HAD_THEME_FILE=0
 HAD_TRIAGE_FILE=0
 HAD_DIAGNOSTICS_PANEL=0
+HAD_MOBILE_DIAG=0
 
 cleanup() {
   rm -f "$OPENAPI_TMP"
@@ -107,6 +109,11 @@ rollback() {
       cp -a "$BACKUP_DIR/multiguard_panel_diagnostics.py" "$DIAGNOSTICS_PANEL_FILE"
     else
       rm -f "$DIAGNOSTICS_PANEL_FILE"
+    fi
+    if [ "$HAD_MOBILE_DIAG" -eq 1 ]; then
+      cp -a "$BACKUP_DIR/mobile_caller_diagnostics.py" "$MOBILE_DIAG_FILE"
+    else
+      rm -f "$MOBILE_DIAG_FILE"
     fi
     systemctl disable --now multiservis-multiguard-release-sync.timer >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/multiservis-multiguard-release-sync.service
@@ -179,6 +186,11 @@ if [ -f "$DIAGNOSTICS_PANEL_FILE" ]; then
   cp -a "$DIAGNOSTICS_PANEL_FILE" "$BACKUP_DIR/multiguard_panel_diagnostics.py"
 fi
 
+if [ -f "$MOBILE_DIAG_FILE" ]; then
+  HAD_MOBILE_DIAG=1
+  cp -a "$MOBILE_DIAG_FILE" "$BACKUP_DIR/mobile_caller_diagnostics.py"
+fi
+
 DEPLOY_STARTED=1
 
 curl -fsSL "$RAW_BASE/app/routers/multiguard_license.py" -o "$LICENSE_ROUTER_FILE"
@@ -192,8 +204,9 @@ curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_devices.py" -o "$OWNER_DEVICE
 curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_theme.py" -o "$THEME_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_triage.py" -o "$TRIAGE_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_panel_diagnostics.py" -o "$DIAGNOSTICS_PANEL_FILE"
+curl -fsSL "$RAW_BASE/app/routers/mobile_caller_diagnostics.py" -o "$MOBILE_DIAG_FILE"
 curl -fsSL "$RAW_BASE/scripts/sync_multiguard_releases.py" -o "$SYNC_SCRIPT_FILE"
-chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE" "$THEME_FILE" "$TRIAGE_FILE" "$DIAGNOSTICS_PANEL_FILE"
+chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE" "$THEME_FILE" "$TRIAGE_FILE" "$DIAGNOSTICS_PANEL_FILE" "$MOBILE_DIAG_FILE"
 chmod 0755 "$SYNC_SCRIPT_FILE"
 
 PYTHON="$APP_ROOT/.venv/bin/python"
@@ -226,6 +239,7 @@ import_lines = [
     "from app.routers import multiguard_panel_devices",
     "from app.routers import multiguard_panel_triage",
     "from app.routers import multiguard_panel_diagnostics",
+    "from app.routers import mobile_caller_diagnostics",
 ]
 include_lines = [
     "app.include_router(multiguard_license.router)",
@@ -237,6 +251,7 @@ include_lines = [
     "app.include_router(multiguard_panel_devices.router)",
     "app.include_router(multiguard_panel_triage.router)",
     "app.include_router(multiguard_panel_diagnostics.router)",
+    "app.include_router(mobile_caller_diagnostics.router)",
 ]
 
 for import_line in import_lines:
@@ -260,7 +275,7 @@ for include_line in include_lines:
 path.write_text(source, encoding="utf-8")
 PY
 
-"$PYTHON" -m py_compile "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE" "$THEME_FILE" "$TRIAGE_FILE" "$DIAGNOSTICS_PANEL_FILE" "$SYNC_SCRIPT_FILE" "$MAIN_FILE"
+"$PYTHON" -m py_compile "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SERVICE_PANEL_FILE" "$SETTINGS_PANEL_FILE" "$OWNER_DEVICE_FILE" "$THEME_FILE" "$TRIAGE_FILE" "$DIAGNOSTICS_PANEL_FILE" "$MOBILE_DIAG_FILE" "$SYNC_SCRIPT_FILE" "$MAIN_FILE"
 
 cat > /etc/systemd/system/multiservis-multiguard-release-sync.service <<EOF
 [Unit]
@@ -355,6 +370,7 @@ required = [
     "/multiguard/remote-sessions/{session_id}/connect",
     "/multiguard/remote-sessions/{session_id}/end",
     "/multiguard/remote/mesh-bind",
+    "/mobile/diagnostics/caller",
     "/multiguard/releases/{target}/{arch}/{current_version}",
     "/multiguard/update-assets/{channel}/{version}/{filename}",
 ]
