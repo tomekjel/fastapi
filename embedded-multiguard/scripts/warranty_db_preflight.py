@@ -123,7 +123,7 @@ with engine.connect() as db:
               AND table_name IN (
                 'v_owner_monthly_report',
                 'v_owner_quarterly_report',
-                'v_owner_yearly_report'
+                'v_owner_yearly_report','v_service_order_summary'
               )
             ORDER BY table_name,ordinal_position
         """)).mappings()
