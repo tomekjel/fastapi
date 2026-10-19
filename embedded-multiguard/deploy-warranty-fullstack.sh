@@ -125,22 +125,26 @@ PY
 
 PYTHONPATH="$ROOT" "$PY" - <<'PY'
 from app.main import app
-routes={(r.path,method) for r in app.routes if hasattr(r,"path")
-        for method in (r.methods or [])}
+# FastAPI in this installation stores included router groups as an opaque
+# route wrapper rather than one r.path entry per endpoint. Counting or
+# filtering app.routes therefore generates false negatives (seen on CT103).
+# The generated OpenAPI contract is the correct externally visible check.
+app.openapi_schema = None
+paths=app.openapi().get("paths",{})
 for route,verb in (
-  ("/health","GET"),
-  ("/receptions/{reception_id}/warranty-return","POST"),
-  ("/mobile/warranty/active-receptions","GET"),
-  ("/mobile/receptions/{reception_id}/visits","GET"),
-  ("/mobile/receptions/search","GET"),
-  ("/mobile/finances/visit-report","GET"),
-  ("/multiguard/panel/service/{order_id}/warranty-return","POST"),
-  ("/multiguard/panel/statistics","GET"),
-  ("/multiguard/panel/service","GET"),
+  ("/health","get"),
+  ("/receptions/{reception_id}/warranty-return","post"),
+  ("/mobile/warranty/active-receptions","get"),
+  ("/mobile/receptions/{reception_id}/visits","get"),
+  ("/mobile/receptions/search","get"),
+  ("/mobile/finances/visit-report","get"),
+  ("/multiguard/panel/service/{order_id}/warranty-return","post"),
+  ("/multiguard/panel/statistics","get"),
+  ("/multiguard/panel/service","get"),
 ):
-    if (route,verb) not in routes:
-        raise SystemExit("BLOCKED: missing registered route "+verb+" "+route)
-print("PASS: app import and existing + new routes verified before restart")
+    if verb not in paths.get(route,{}):
+        raise SystemExit("BLOCKED: missing in imported app OpenAPI "+verb+" "+route)
+print("PASS: imported FastAPI OpenAPI contains existing + warranty routes")
 PY
 
 systemctl restart "$SERVICE"
