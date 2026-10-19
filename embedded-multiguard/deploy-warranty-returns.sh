@@ -104,9 +104,9 @@ PY
 PYTHONPATH="$ROOT" "$VENV" -m py_compile "$MAIN" "$ROUTER"
 systemctl restart "$SERVICE"
 curl --fail --silent --show-error --max-time 20 \
-    http://127.0.0.1:8000/health >/dev/null
+    https://api.multi-servis.pl/health >/dev/null
 curl --fail --silent --show-error --max-time 20 \
-    http://127.0.0.1:8000/openapi.json -o "$TMP/openapi.json"
+    https://api.multi-servis.pl/openapi.json -o "$TMP/openapi.json"
 "$VENV" - "$TMP/openapi.json" <<'PY'
 import json,sys
 paths=json.load(open(sys.argv[1],encoding="utf-8"))["paths"]
