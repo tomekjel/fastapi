@@ -36,8 +36,310 @@ size="$(stat -c %s "$IN")"
  { echo "BLOCKED: unexpected APK size"; exit 1; }
 # A previous signing certificate is an immutable compatibility baseline.
 # Verify rather than trust the filename.
-old_meta="$(aapt dump badging "$OLD" | grep -m 1 '^package:')"
-new_meta="$(aapt dump badging "$IN" | grep -m 1 '^package:')"
+old_meta="$(aapt dump badging "$OLD")"
+old_meta="${old_meta%%
+[[ "$old_meta" == *"name='pl.multi_servis.owner'"*
+   && "$old_meta" == *"versionCode='10'"* ]] ||
+  { echo "BLOCKED: original APK not versionCode 10"; exit 1; }
+[[ "$new_meta" == *"name='pl.multi_servis.owner'"*
+   && "$new_meta" == *"versionCode='11'"*
+   && "$new_meta" == *"versionName='1.10'"* ]] ||
+  { echo "BLOCKED: unsigned APK is not Multi-Servis 1.10 (11)"; exit 1; }
+if apksigner verify "$IN" >/dev/null 2>&1; then
+  echo "BLOCKED: input is already signed, expected unsigned build."; exit 1;
+fi
+old_certificate="$(
+  apksigner verify --print-certs "$OLD" |
+  sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})$/\1/p' |
+  head -n1 | tr '[:upper:]' '[:lower:]'
+)"
+[[ "$old_certificate" =~ ^[a-f0-9]{64}$ ]] ||
+  { echo "BLOCKED: cannot establish cert of version 1.9"; exit 1; }
+
+# Official root-owned signing config created for the *previous* Android release.
+set -a
+# shellcheck disable=SC1090
+. "$CONF"
+set +a
+: "${KEYSTORE_PASSWORD:?Missing KEYSTORE_PASSWORD}"
+: "${KEY_ALIAS:?Missing KEY_ALIAS}"
+# The prior signing config contains KEYSTORE_PASSWORD and KEY_ALIAS only.
+# For keys with a distinct key password, KEY_PASSWORD may be added to
+# root-owned signing.env. Fallback is the keystore password.
+KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+export KEYSTORE_PASSWORD KEY_PASSWORD
+
+tmp="$(mktemp -d "$STAGING/sign-android-110.XXXXXXXX")"
+trap 'rm -rf "$tmp"' EXIT
+echo "=== Align, sign and compare with version 1.9 ==="
+zipalign -f -p 4 "$IN" "$tmp/aligned.apk" >/dev/null
+apksigner sign \
+  --ks "$JKS" \
+  --ks-key-alias "$KEY_ALIAS" \
+  --ks-pass env:KEYSTORE_PASSWORD \
+  --key-pass env:KEY_PASSWORD \
+  --out "$tmp/multi-servis-1.10.apk" "$tmp/aligned.apk"
+unset KEYSTORE_PASSWORD KEY_PASSWORD
+apksigner verify --verbose "$tmp/multi-servis-1.10.apk" >/dev/null
+new_certificate="$(
+  apksigner verify --print-certs "$tmp/multi-servis-1.10.apk" |
+  sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})$/\1/p' |
+  head -n1 | tr '[:upper:]' '[:lower:]'
+)"
+[[ "$new_certificate" == "$old_certificate" ]] || {
+  echo "BLOCKED: signing certificate differs from existing version 1.9"
+  exit 1
+}
+final_meta="$(aapt dump badging "$tmp/multi-servis-1.10.apk")"
+final_meta="${final_meta%%
+[[ "$final_meta" == *"name='pl.multi_servis.owner'"*
+   && "$final_meta" == *"versionCode='11'"* ]] ||
+  { echo "BLOCKED: signed APK failed package/version check"; exit 1; }
+
+mkdir -p -m 0700 "$OUTDIR"
+[[ ! -e "$OUT" ]] ||
+  { echo "BLOCKED: output already exists; inspect before replacing"; exit 1; }
+install -m 0600 "$tmp/multi-servis-1.10.apk" "$OUT"
+( cd "$OUTDIR"; sha256sum multi-servis-1.10.apk >SHA256.txt )
+chmod 0600 "$OUTDIR/SHA256.txt"
+echo "PASS: Multi-Servis 1.10 signed with original 1.9 certificate."
+echo "CERT SHA256: $new_certificate"
+echo "SIGNED APK: $OUT"
+echo "SIGNED FILE CHECKSUM:"
+cat "$OUTDIR/SHA256.txt"
+echo "NOT PUBLISHED: no update manifest or phone installation changed."
+\n'*}"
+new_meta="$(aapt dump badging "$IN")"
+new_meta="${new_meta%%
+[[ "$old_meta" == *"name='pl.multi_servis.owner'"*
+   && "$old_meta" == *"versionCode='10'"* ]] ||
+  { echo "BLOCKED: original APK not versionCode 10"; exit 1; }
+[[ "$new_meta" == *"name='pl.multi_servis.owner'"*
+   && "$new_meta" == *"versionCode='11'"*
+   && "$new_meta" == *"versionName='1.10'"* ]] ||
+  { echo "BLOCKED: unsigned APK is not Multi-Servis 1.10 (11)"; exit 1; }
+if apksigner verify "$IN" >/dev/null 2>&1; then
+  echo "BLOCKED: input is already signed, expected unsigned build."; exit 1;
+fi
+old_certificate="$(
+  apksigner verify --print-certs "$OLD" |
+  sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})$/\1/p' |
+  head -n1 | tr '[:upper:]' '[:lower:]'
+)"
+[[ "$old_certificate" =~ ^[a-f0-9]{64}$ ]] ||
+  { echo "BLOCKED: cannot establish cert of version 1.9"; exit 1; }
+
+# Official root-owned signing config created for the *previous* Android release.
+set -a
+# shellcheck disable=SC1090
+. "$CONF"
+set +a
+: "${KEYSTORE_PASSWORD:?Missing KEYSTORE_PASSWORD}"
+: "${KEY_ALIAS:?Missing KEY_ALIAS}"
+# The prior signing config contains KEYSTORE_PASSWORD and KEY_ALIAS only.
+# For keys with a distinct key password, KEY_PASSWORD may be added to
+# root-owned signing.env. Fallback is the keystore password.
+KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+export KEYSTORE_PASSWORD KEY_PASSWORD
+
+tmp="$(mktemp -d "$STAGING/sign-android-110.XXXXXXXX")"
+trap 'rm -rf "$tmp"' EXIT
+echo "=== Align, sign and compare with version 1.9 ==="
+zipalign -f -p 4 "$IN" "$tmp/aligned.apk" >/dev/null
+apksigner sign \
+  --ks "$JKS" \
+  --ks-key-alias "$KEY_ALIAS" \
+  --ks-pass env:KEYSTORE_PASSWORD \
+  --key-pass env:KEY_PASSWORD \
+  --out "$tmp/multi-servis-1.10.apk" "$tmp/aligned.apk"
+unset KEYSTORE_PASSWORD KEY_PASSWORD
+apksigner verify --verbose "$tmp/multi-servis-1.10.apk" >/dev/null
+new_certificate="$(
+  apksigner verify --print-certs "$tmp/multi-servis-1.10.apk" |
+  sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})$/\1/p' |
+  head -n1 | tr '[:upper:]' '[:lower:]'
+)"
+[[ "$new_certificate" == "$old_certificate" ]] || {
+  echo "BLOCKED: signing certificate differs from existing version 1.9"
+  exit 1
+}
+final_meta="$(aapt dump badging "$tmp/multi-servis-1.10.apk" | grep -m 1 '^package:')"
+[[ "$final_meta" == *"name='pl.multi_servis.owner'"*
+   && "$final_meta" == *"versionCode='11'"* ]] ||
+  { echo "BLOCKED: signed APK failed package/version check"; exit 1; }
+
+mkdir -p -m 0700 "$OUTDIR"
+[[ ! -e "$OUT" ]] ||
+  { echo "BLOCKED: output already exists; inspect before replacing"; exit 1; }
+install -m 0600 "$tmp/multi-servis-1.10.apk" "$OUT"
+( cd "$OUTDIR"; sha256sum multi-servis-1.10.apk >SHA256.txt )
+chmod 0600 "$OUTDIR/SHA256.txt"
+echo "PASS: Multi-Servis 1.10 signed with original 1.9 certificate."
+echo "CERT SHA256: $new_certificate"
+echo "SIGNED APK: $OUT"
+echo "SIGNED FILE CHECKSUM:"
+cat "$OUTDIR/SHA256.txt"
+echo "NOT PUBLISHED: no update manifest or phone installation changed."
+\n'*}"
+[[ "$old_meta" == *"name='pl.multi_servis.owner'"*
+   && "$old_meta" == *"versionCode='10'"* ]] ||
+  { echo "BLOCKED: original APK not versionCode 10"; exit 1; }
+[[ "$new_meta" == *"name='pl.multi_servis.owner'"*
+   && "$new_meta" == *"versionCode='11'"*
+   && "$new_meta" == *"versionName='1.10'"* ]] ||
+  { echo "BLOCKED: unsigned APK is not Multi-Servis 1.10 (11)"; exit 1; }
+if apksigner verify "$IN" >/dev/null 2>&1; then
+  echo "BLOCKED: input is already signed, expected unsigned build."; exit 1;
+fi
+old_certificate="$(
+  apksigner verify --print-certs "$OLD" |
+  sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})$/\1/p' |
+  head -n1 | tr '[:upper:]' '[:lower:]'
+)"
+[[ "$old_certificate" =~ ^[a-f0-9]{64}$ ]] ||
+  { echo "BLOCKED: cannot establish cert of version 1.9"; exit 1; }
+
+# Official root-owned signing config created for the *previous* Android release.
+set -a
+# shellcheck disable=SC1090
+. "$CONF"
+set +a
+: "${KEYSTORE_PASSWORD:?Missing KEYSTORE_PASSWORD}"
+: "${KEY_ALIAS:?Missing KEY_ALIAS}"
+# The prior signing config contains KEYSTORE_PASSWORD and KEY_ALIAS only.
+# For keys with a distinct key password, KEY_PASSWORD may be added to
+# root-owned signing.env. Fallback is the keystore password.
+KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+export KEYSTORE_PASSWORD KEY_PASSWORD
+
+tmp="$(mktemp -d "$STAGING/sign-android-110.XXXXXXXX")"
+trap 'rm -rf "$tmp"' EXIT
+echo "=== Align, sign and compare with version 1.9 ==="
+zipalign -f -p 4 "$IN" "$tmp/aligned.apk" >/dev/null
+apksigner sign \
+  --ks "$JKS" \
+  --ks-key-alias "$KEY_ALIAS" \
+  --ks-pass env:KEYSTORE_PASSWORD \
+  --key-pass env:KEY_PASSWORD \
+  --out "$tmp/multi-servis-1.10.apk" "$tmp/aligned.apk"
+unset KEYSTORE_PASSWORD KEY_PASSWORD
+apksigner verify --verbose "$tmp/multi-servis-1.10.apk" >/dev/null
+new_certificate="$(
+  apksigner verify --print-certs "$tmp/multi-servis-1.10.apk" |
+  sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})$/\1/p' |
+  head -n1 | tr '[:upper:]' '[:lower:]'
+)"
+[[ "$new_certificate" == "$old_certificate" ]] || {
+  echo "BLOCKED: signing certificate differs from existing version 1.9"
+  exit 1
+}
+final_meta="$(aapt dump badging "$tmp/multi-servis-1.10.apk" | grep -m 1 '^package:')"
+[[ "$final_meta" == *"name='pl.multi_servis.owner'"*
+   && "$final_meta" == *"versionCode='11'"* ]] ||
+  { echo "BLOCKED: signed APK failed package/version check"; exit 1; }
+
+mkdir -p -m 0700 "$OUTDIR"
+[[ ! -e "$OUT" ]] ||
+  { echo "BLOCKED: output already exists; inspect before replacing"; exit 1; }
+install -m 0600 "$tmp/multi-servis-1.10.apk" "$OUT"
+( cd "$OUTDIR"; sha256sum multi-servis-1.10.apk >SHA256.txt )
+chmod 0600 "$OUTDIR/SHA256.txt"
+echo "PASS: Multi-Servis 1.10 signed with original 1.9 certificate."
+echo "CERT SHA256: $new_certificate"
+echo "SIGNED APK: $OUT"
+echo "SIGNED FILE CHECKSUM:"
+cat "$OUTDIR/SHA256.txt"
+echo "NOT PUBLISHED: no update manifest or phone installation changed."
+\n'*}"
+[[ "$final_meta" == *"name='pl.multi_servis.owner'"*
+   && "$final_meta" == *"versionCode='11'"* ]] ||
+  { echo "BLOCKED: signed APK failed package/version check"; exit 1; }
+
+mkdir -p -m 0700 "$OUTDIR"
+[[ ! -e "$OUT" ]] ||
+  { echo "BLOCKED: output already exists; inspect before replacing"; exit 1; }
+install -m 0600 "$tmp/multi-servis-1.10.apk" "$OUT"
+( cd "$OUTDIR"; sha256sum multi-servis-1.10.apk >SHA256.txt )
+chmod 0600 "$OUTDIR/SHA256.txt"
+echo "PASS: Multi-Servis 1.10 signed with original 1.9 certificate."
+echo "CERT SHA256: $new_certificate"
+echo "SIGNED APK: $OUT"
+echo "SIGNED FILE CHECKSUM:"
+cat "$OUTDIR/SHA256.txt"
+echo "NOT PUBLISHED: no update manifest or phone installation changed."
+\n'*}"
+new_meta="$(aapt dump badging "$IN")"
+new_meta="${new_meta%%
+[[ "$old_meta" == *"name='pl.multi_servis.owner'"*
+   && "$old_meta" == *"versionCode='10'"* ]] ||
+  { echo "BLOCKED: original APK not versionCode 10"; exit 1; }
+[[ "$new_meta" == *"name='pl.multi_servis.owner'"*
+   && "$new_meta" == *"versionCode='11'"*
+   && "$new_meta" == *"versionName='1.10'"* ]] ||
+  { echo "BLOCKED: unsigned APK is not Multi-Servis 1.10 (11)"; exit 1; }
+if apksigner verify "$IN" >/dev/null 2>&1; then
+  echo "BLOCKED: input is already signed, expected unsigned build."; exit 1;
+fi
+old_certificate="$(
+  apksigner verify --print-certs "$OLD" |
+  sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})$/\1/p' |
+  head -n1 | tr '[:upper:]' '[:lower:]'
+)"
+[[ "$old_certificate" =~ ^[a-f0-9]{64}$ ]] ||
+  { echo "BLOCKED: cannot establish cert of version 1.9"; exit 1; }
+
+# Official root-owned signing config created for the *previous* Android release.
+set -a
+# shellcheck disable=SC1090
+. "$CONF"
+set +a
+: "${KEYSTORE_PASSWORD:?Missing KEYSTORE_PASSWORD}"
+: "${KEY_ALIAS:?Missing KEY_ALIAS}"
+# The prior signing config contains KEYSTORE_PASSWORD and KEY_ALIAS only.
+# For keys with a distinct key password, KEY_PASSWORD may be added to
+# root-owned signing.env. Fallback is the keystore password.
+KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+export KEYSTORE_PASSWORD KEY_PASSWORD
+
+tmp="$(mktemp -d "$STAGING/sign-android-110.XXXXXXXX")"
+trap 'rm -rf "$tmp"' EXIT
+echo "=== Align, sign and compare with version 1.9 ==="
+zipalign -f -p 4 "$IN" "$tmp/aligned.apk" >/dev/null
+apksigner sign \
+  --ks "$JKS" \
+  --ks-key-alias "$KEY_ALIAS" \
+  --ks-pass env:KEYSTORE_PASSWORD \
+  --key-pass env:KEY_PASSWORD \
+  --out "$tmp/multi-servis-1.10.apk" "$tmp/aligned.apk"
+unset KEYSTORE_PASSWORD KEY_PASSWORD
+apksigner verify --verbose "$tmp/multi-servis-1.10.apk" >/dev/null
+new_certificate="$(
+  apksigner verify --print-certs "$tmp/multi-servis-1.10.apk" |
+  sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})$/\1/p' |
+  head -n1 | tr '[:upper:]' '[:lower:]'
+)"
+[[ "$new_certificate" == "$old_certificate" ]] || {
+  echo "BLOCKED: signing certificate differs from existing version 1.9"
+  exit 1
+}
+final_meta="$(aapt dump badging "$tmp/multi-servis-1.10.apk" | grep -m 1 '^package:')"
+[[ "$final_meta" == *"name='pl.multi_servis.owner'"*
+   && "$final_meta" == *"versionCode='11'"* ]] ||
+  { echo "BLOCKED: signed APK failed package/version check"; exit 1; }
+
+mkdir -p -m 0700 "$OUTDIR"
+[[ ! -e "$OUT" ]] ||
+  { echo "BLOCKED: output already exists; inspect before replacing"; exit 1; }
+install -m 0600 "$tmp/multi-servis-1.10.apk" "$OUT"
+( cd "$OUTDIR"; sha256sum multi-servis-1.10.apk >SHA256.txt )
+chmod 0600 "$OUTDIR/SHA256.txt"
+echo "PASS: Multi-Servis 1.10 signed with original 1.9 certificate."
+echo "CERT SHA256: $new_certificate"
+echo "SIGNED APK: $OUT"
+echo "SIGNED FILE CHECKSUM:"
+cat "$OUTDIR/SHA256.txt"
+echo "NOT PUBLISHED: no update manifest or phone installation changed."
+\n'*}"
 [[ "$old_meta" == *"name='pl.multi_servis.owner'"*
    && "$old_meta" == *"versionCode='10'"* ]] ||
   { echo "BLOCKED: original APK not versionCode 10"; exit 1; }
