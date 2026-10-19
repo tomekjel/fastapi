@@ -182,10 +182,10 @@ def completed_visit_finances(
                   COALESCE(SUM(actual_profit),0) AS actual_profit,
                   COALESCE(SUM(economic_profit),0) AS economic_profit
                 FROM service.v_owner_completed_visit_profit
-                WHERE (:since IS NULL OR
-                    (completed_at AT TIME ZONE 'Europe/Warsaw')::date >= :since)
-                  AND (:until IS NULL OR
-                    (completed_at AT TIME ZONE 'Europe/Warsaw')::date <= :until)
+                WHERE (CAST(:since AS date) IS NULL OR
+                    (completed_at AT TIME ZONE 'Europe/Warsaw')::date >= CAST(:since AS date))
+                  AND (CAST(:until AS date) IS NULL OR
+                    (completed_at AT TIME ZONE 'Europe/Warsaw')::date <= CAST(:until AS date))
                 GROUP BY 1 ORDER BY 1 DESC
                 """
             ),
