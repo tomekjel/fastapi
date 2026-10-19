@@ -249,7 +249,7 @@ def _pg18_client_binaries():
             [str(dump), "--version"], capture_output=True,
             text=True, timeout=10, check=True
         ).stdout
-        match = re.search(r"(?:PostgreSQL\\) )?(18)\\.", version)
+        match = re.search(r"\b18\.\d+\b", version)
         if match:
             return str(dump), str(restore)
     raise RuntimeError(
