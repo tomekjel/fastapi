@@ -10,6 +10,8 @@ Never load this router in production with an absent/incompatible DB migration.
 from __future__ import annotations
 
 import uuid
+import re
+import unicodedata
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -190,6 +192,77 @@ def reception_visits(
             "donor_material_value": float(r["donor_material_value"]),
         }
         for r in rows
+    ]
+
+
+def _normalize_name(value: str) -> list[str]:
+    value = unicodedata.normalize("NFD", value.strip().lower().replace("ł", "l"))
+    value = "".join(c for c in value if not unicodedata.combining(c))
+    return re.findall(r"[a-z0-9]{2,}", value)[:6]
+
+
+@router.get("/mobile/receptions/search")
+def search_historical_receptions(
+    name: str = Query(..., min_length=2, max_length=120),
+    user: CurrentUser = Depends(require_staff),
+):
+    """Search all past/active orders by a name/surname, regardless of status.
+
+    Scoped to authenticated staff. Tokens are sanitized to alphanumerics and
+    bound parameters, so client-provided %/_ cannot expand a LIKE wildcard.
+    """
+    terms = _normalize_name(name)
+    if not terms or sum(len(t) for t in terms) < 3:
+        return []
+    normalized_display = (
+        "translate(lower(coalesce(s.display_name,'')),"
+        " 'ąćęłńóśźż', 'acelnoszz')"
+    )
+    where = " AND ".join(
+        f"{normalized_display} LIKE :term{i}" for i in range(len(terms))
+    )
+    parameters = {f"term{i}": f"%{term}%" for i, term in enumerate(terms)}
+    with engine.connect() as conn:
+        rows = conn.execute(text(f"""
+            SELECT s.id, s.reception_number, s.status,
+                   s.received_at, s.completed_at,
+                   so.current_visit_received_at, so.is_warranty_repair,
+                   s.display_name, s.phone_e164, s.second_phone_e164,
+                   s.device_type, s.manufacturer, s.model, s.serial_number,
+                   so.fault_description
+            FROM service.v_service_order_summary s
+            JOIN service.service_orders so ON so.id=s.id
+            WHERE {where}
+            ORDER BY COALESCE(
+                so.current_visit_received_at,s.received_at
+            ) DESC, s.reception_number DESC
+            LIMIT 100
+        """), parameters).mappings().all()
+    return [
+        {
+            "id": str(row["id"]),
+            "reception_number": row["reception_number"],
+            "status": str(row["status"]),
+            "received_at": row["received_at"].isoformat(),
+            "completed_at": (
+                row["completed_at"].isoformat() if row["completed_at"] else None
+            ),
+            "current_visit_received_at": (
+                row["current_visit_received_at"].isoformat()
+                if row["current_visit_received_at"] else None
+            ),
+            "is_warranty_repair": bool(row["is_warranty_repair"]),
+            "client_name": row["display_name"] or "",
+            "phone_number1": row["phone_e164"] or "",
+            "phone_number2": row["second_phone_e164"] or "",
+            "device_type": row["device_type"] or "",
+            "device_brand_model": " ".join(
+                str(x) for x in (row["manufacturer"],row["model"]) if x
+            ),
+            "serial_number": row["serial_number"] or "",
+            "issue_description": row["fault_description"] or "",
+        }
+        for row in rows
     ]
 
 
