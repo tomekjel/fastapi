@@ -36,6 +36,32 @@ with engine.connect() as conn:
     """)).one()
 if not all(record):
     raise SystemExit("BLOCKED: warranty DB migration and finance ledger must exist")
+    ledger=conn.execute(text("""
+      SELECT count(*) AS issues,
+             coalesce(sum(service_amount),0) AS revenue,
+             coalesce(sum(material_cost),0) AS material
+      FROM service.v_owner_completed_visit_profit
+    """)).mappings().one()
+    legacy=conn.execute(text("""
+      SELECT count(*) AS issues,
+             coalesce(sum(f.service_amount),0) AS revenue,
+             coalesce(sum(f.material_cost),0) AS material
+      FROM service.service_orders o
+      LEFT JOIN service.owner_finances f ON f.service_order_id=o.id
+      WHERE o.status='COMPLETED'
+    """)).mappings().one()
+    # Before the first warranty return these totals should match. Afterward
+    # source-of-truth historic ledger contains additional completed visits.
+    # Never deploy onto a ledger that has silently LOST historical revenue.
+    if ledger["issues"] < legacy["issues"]:
+        raise SystemExit("BLOCKED: missing completed visits in finance ledger")
+    if ledger["issues"] == legacy["issues"] and (
+        ledger["revenue"]!=legacy["revenue"] or
+        ledger["material"]!=legacy["material"]
+    ):
+        raise SystemExit("BLOCKED: ledger differs from pre-warranty finances")
+    print("PASS: immutable ledger issues=",ledger["issues"],
+          "revenue=",ledger["revenue"],"materials=",ledger["material"])
 print("PASS: read-only SQL preflight")
 PY
 
@@ -102,6 +128,22 @@ if "app.include_router(_ms_warranty.router)" not in s:
     p.write_text(s+snippet,encoding="utf-8")
 PY
 PYTHONPATH="$ROOT" "$VENV" -m py_compile "$MAIN" "$ROUTER"
+PYTHONPATH="$ROOT" "$VENV" - <<'PY'
+from app.main import app
+paths={(route.path,tuple(sorted(route.methods or [])))
+       for route in app.routes if hasattr(route,"path")}
+for needed in (
+    ("/receptions/{reception_id}/warranty-return", "POST"),
+    ("/mobile/warranty/active-receptions", "GET"),
+    ("/mobile/receptions/{reception_id}/visits", "GET"),
+    ("/mobile/receptions/search", "GET"),
+    ("/mobile/finances/visit-report", "GET"),
+):
+    if not any(path==needed[0] and needed[1] in methods
+               for path,methods in paths):
+        raise SystemExit("BLOCKED: FastAPI app lacks reviewed warranty route "+needed[0])
+print("PASS: imported FastAPI app and all warranty routes before restart")
+PY
 systemctl restart "$SERVICE"
 curl --fail --silent --show-error --max-time 20 \
     https://api.multi-servis.pl/health >/dev/null
@@ -114,6 +156,7 @@ for route,method in (
   ("/receptions/{reception_id}/warranty-return","post"),
   ("/mobile/warranty/active-receptions","get"),
   ("/mobile/receptions/{reception_id}/visits","get"),
+  ("/mobile/receptions/search","get"),
   ("/mobile/finances/visit-report","get"),
 ):
     assert method in paths.get(route,{}), f"Missing {method.upper()} {route}"
