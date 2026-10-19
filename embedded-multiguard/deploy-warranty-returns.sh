@@ -113,7 +113,7 @@ if not any(isinstance(stmt,(ast.Assign,ast.AnnAssign))
 PY
 
 STAGED=1
-cp -p "$TMP/multiservis_warranty_returns.py" "$ROUTER"
+install -m 0644 "$TMP/multiservis_warranty_returns.py" "$ROUTER"
 "$VENV" - "$MAIN" <<'PY'
 from pathlib import Path
 import sys
@@ -145,8 +145,15 @@ for needed in (
 print("PASS: imported FastAPI app and all warranty routes before restart")
 PY
 systemctl restart "$SERVICE"
-curl --fail --silent --show-error --max-time 20 \
-    https://api.multi-servis.pl/health >/dev/null
+HEALTH_OK=0
+for i in $(seq 1 12); do
+  if curl --fail --silent --max-time 5 https://api.multi-servis.pl/health >/dev/null 2>&1; then
+    HEALTH_OK=1
+    break
+  fi
+  sleep 2
+done
+[[ "$HEALTH_OK" -eq 1 ]] || { echo "BLOCKED: public health failed"; false; }
 curl --fail --silent --show-error --max-time 20 \
     https://api.multi-servis.pl/openapi.json -o "$TMP/openapi.json"
 "$VENV" - "$TMP/openapi.json" <<'PY'
