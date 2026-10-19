@@ -113,6 +113,7 @@ paths=json.load(open(sys.argv[1],encoding="utf-8"))["paths"]
 for route,method in (
   ("/receptions/{reception_id}/warranty-return","post"),
   ("/mobile/warranty/active-receptions","get"),
+  ("/mobile/receptions/{reception_id}/visits","get"),
   ("/mobile/finances/visit-report","get"),
 ):
     assert method in paths.get(route,{}), f"Missing {method.upper()} {route}"
