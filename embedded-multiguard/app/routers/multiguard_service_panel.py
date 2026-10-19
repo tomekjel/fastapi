@@ -241,9 +241,11 @@ def service_orders(
         raise HTTPException(400, "Dostępne rozmiary strony: 20 lub 50.")
     where = []
     params: dict[str, object] = {}
-    if _STATUS[status][1]:
-        where.append(_STATUS[status][1])
     query = q.strip()
+    # Searching by client/name/QR must include older issued orders too.
+    # Status tabs apply only when search is empty.
+    if _STATUS[status][1] and not query:
+        where.append(_STATUS[status][1])
     if query:
         where.append("""
             (s.reception_number ILIKE :query OR s.display_name ILIKE :query
@@ -260,12 +262,14 @@ def service_orders(
     # Guard against wildcard expansion and unbounded browser lists.
     sql = f"""
         SELECT s.id,s.reception_number,s.status,s.received_at,s.completed_at,
+               so.current_visit_received_at,so.is_warranty_repair,
                s.manufacturer,s.model,s.serial_number,s.device_type,
                s.display_name,s.phone_e164,
                latest_note.note_text AS latest_note_text,
                latest_note.visibility AS latest_note_visibility,
                latest_note.created_at AS latest_note_at
         FROM service.v_service_order_summary s
+        JOIN service.service_orders so ON so.id=s.id
         LEFT JOIN LATERAL (
           SELECT n.note_text,n.visibility,n.created_at
           FROM service.service_order_notes n
@@ -273,7 +277,7 @@ def service_orders(
           ORDER BY n.created_at DESC,n.id DESC LIMIT 1
         ) latest_note ON TRUE
         {where_sql}
-        ORDER BY s.received_at DESC
+        ORDER BY COALESCE(so.current_visit_received_at,s.received_at) DESC
         LIMIT :limit OFFSET :offset
     """
     with engine.connect() as con:
@@ -317,11 +321,11 @@ def service_orders(
         trs.append(f"""
         <tr>
           <td><a class="strong-link" href="/multiguard/panel/service/{row['id']}">{esc(row['reception_number'])}</a></td>
-          <td>{status_badge(row['status'])}</td>
+          <td>{('<span class="badge mg-red">NAPRAWA GWARANCYJNA</span>' if row['is_warranty_repair'] and str(row['status']) in ('IN_SERVICE','READY_FOR_PICKUP') else status_badge(row['status']))}</td>
           <td><strong>{esc(model)}</strong><small class="row-sub">{esc(row['serial_number'] or '—')}</small></td>
           <td>{esc(row['display_name'] or '—')}<small class="row-sub">{esc(row['phone_e164'] or '')}</small></td>
           <td>{note_preview}</td>
-          <td class="numbers">{dt(row['received_at'])}</td>
+          <td class="numbers">{dt(row['current_visit_received_at'] or row['received_at'])}</td>
           <td class="numbers">{dt(row['completed_at'])}</td>
           <td><a class="button-link compact" href="/multiguard/panel/service/{row['id']}">PODGLĄD</a></td>
         </tr>""")
@@ -343,7 +347,7 @@ def service_orders(
       <form class="service-search" method="get" action="/multiguard/panel/service">
         <input type="hidden" name="status" value="{esc(status)}">
         <input type="hidden" name="page_size" value="{page_size}">
-        <label>Wyszukaj numer, klienta, telefon, model lub numer seryjny<input name="q" maxlength="120" value="{esc(query)}" placeholder="np. MS-2026-..., Lenovo, +48..."></label>
+        <label>Wyszukaj numer, imię, nazwisko, telefon, model lub numer seryjny (we wszystkich statusach)<input name="q" maxlength="120" value="{esc(query)}" placeholder="np. MS-2026-..., Lenovo, +48..."></label>
         <button type="submit">SZUKAJ</button>
       </form>
       <div class="table-wrap"><table>
@@ -462,38 +466,32 @@ def service_statistics(
     with engine.connect() as con:
         total = con.execute(text("""
             SELECT count(*) AS orders,
-                   COALESCE(sum(f.service_amount),0) AS revenue,
-                   COALESCE(sum(f.material_cost),0) AS material_cost,
-                   COALESCE(sum(f.donor_material_value),0) AS donor_material_value,
-                   COALESCE(sum(f.service_amount-f.material_cost),0) AS actual_profit,
-                   COALESCE(sum(f.service_amount-f.material_cost-f.donor_material_value),0)
-                       AS economic_profit
-            FROM service.service_orders s
-            LEFT JOIN service.owner_finances f ON f.service_order_id=s.id
-            WHERE s.status='COMPLETED'
-              AND s.completed_at >= :start_at AND s.completed_at < :end_at
+                   COALESCE(sum(v.service_amount),0) AS revenue,
+                   COALESCE(sum(v.material_cost),0) AS material_cost,
+                   COALESCE(sum(v.donor_material_value),0) AS donor_material_value,
+                   COALESCE(sum(v.actual_profit),0) AS actual_profit,
+                   COALESCE(sum(v.economic_profit),0) AS economic_profit
+            FROM service.v_owner_completed_visit_profit v
+            WHERE v.completed_at >= :start_at AND v.completed_at < :end_at
         """), query_params).mappings().one()
         breakdown = con.execute(text("""
-            SELECT date_trunc(:grouping, s.completed_at AT TIME ZONE 'Europe/Warsaw')
+            SELECT date_trunc(:grouping, v.completed_at AT TIME ZONE 'Europe/Warsaw')
                        AS bucket,
                    count(*) AS orders,
-                   COALESCE(sum(f.service_amount),0) AS revenue,
-                   COALESCE(sum(f.material_cost),0) AS material_cost,
-                   COALESCE(sum(f.donor_material_value),0) AS donor_material_value,
-                   COALESCE(sum(f.service_amount-f.material_cost),0) AS actual_profit,
-                   COALESCE(sum(f.service_amount-f.material_cost-f.donor_material_value),0)
-                       AS economic_profit
-            FROM service.service_orders s
-            LEFT JOIN service.owner_finances f ON f.service_order_id=s.id
-            WHERE s.status='COMPLETED'
-              AND s.completed_at >= :start_at AND s.completed_at < :end_at
+                   COALESCE(sum(v.service_amount),0) AS revenue,
+                   COALESCE(sum(v.material_cost),0) AS material_cost,
+                   COALESCE(sum(v.donor_material_value),0) AS donor_material_value,
+                   COALESCE(sum(v.actual_profit),0) AS actual_profit,
+                   COALESCE(sum(v.economic_profit),0) AS economic_profit
+            FROM service.v_owner_completed_visit_profit v
+            WHERE v.completed_at >= :start_at AND v.completed_at < :end_at
             GROUP BY bucket ORDER BY bucket
         """), {**query_params, "grouping": grouping}).mappings().all()
 
     # The number of issued orders is operational data and may be visible.
     # All monetary data below lives inside a closed <details> element.
     public_metrics = (
-        '<div class="metric accent-blue"><b>Wydane zlecenia</b>'
+        '<div class="metric accent-blue"><b>Wydania sprzętu</b>'
         f'<strong>{int(total["orders"] or 0)}</strong></div>'
     )
     finance_items = [
