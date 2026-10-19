@@ -148,6 +148,51 @@ def active_warranty_receptions(
         ]
 
 
+@router.get("/mobile/receptions/{reception_id}/visits")
+def reception_visits(
+    reception_id: str,
+    user: CurrentUser = Depends(require_staff),
+):
+    order_id = _uuid(reception_id)
+    with engine.connect() as conn:
+        _schema_ready(conn)
+        found = conn.execute(
+            text("SELECT 1 FROM service.service_orders WHERE id=:id"),
+            {"id": order_id},
+        ).scalar()
+        if found is None:
+            raise HTTPException(404, "Nie znaleziono zlecenia.")
+        rows = conn.execute(
+            text(
+                """
+                SELECT visit_number, is_warranty_return, is_current,
+                       received_at, ready_at, completed_at, status,
+                       service_amount, material_cost, donor_material_value
+                FROM service.service_order_visits
+                WHERE service_order_id=:id ORDER BY visit_number DESC
+                """
+            ),
+            {"id": order_id},
+        ).mappings().all()
+    return [
+        {
+            "visit_number": r["visit_number"],
+            "is_warranty_return": r["is_warranty_return"],
+            "is_current": r["is_current"],
+            "received_at": r["received_at"].isoformat(),
+            "ready_at": r["ready_at"].isoformat() if r["ready_at"] else None,
+            "completed_at": (
+                r["completed_at"].isoformat() if r["completed_at"] else None
+            ),
+            "status": str(r["status"]),
+            "service_amount": float(r["service_amount"]),
+            "material_cost": float(r["material_cost"]),
+            "donor_material_value": float(r["donor_material_value"]),
+        }
+        for r in rows
+    ]
+
+
 @router.get("/mobile/finances/visit-report")
 def completed_visit_finances(
     group_by: str = Query(default="month", alias="groupBy"),
