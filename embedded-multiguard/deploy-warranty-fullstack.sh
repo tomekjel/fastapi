@@ -30,7 +30,7 @@ command -v curl >/dev/null && command -v systemctl >/dev/null ||
 from pathlib import Path
 import hashlib,sys
 p=Path(sys.argv[1]); data=p.read_bytes()
-sha=hashlib.sha1(b"blob "+str(len(data)).encode()+b"\\0"+data).hexdigest()
+sha=hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest()
 expected="8b6e213cf555c19482f56847be50d4b479b40afa"
 if sha!=expected:
     raise SystemExit("BLOCKED: installed OWNER service panel differs from reviewed baseline: "+sha)
@@ -115,9 +115,9 @@ main=Path(sys.argv[1])
 source=main.read_text(encoding="utf-8")
 marker="app.include_router(_ms_warranty.router)"
 snippet=(
-    "\\n# Multi-Servis warranty/repeat-visit contract.\\n"
-    "from app.routers import multiservis_warranty_returns as _ms_warranty\\n"
-    +marker+"\\n"
+    "\n# Multi-Servis warranty/repeat-visit contract.\n"
+    "from app.routers import multiservis_warranty_returns as _ms_warranty\n"
+    +marker+"\n"
 )
 if marker not in source:
     main.write_text(source+snippet,encoding="utf-8")
