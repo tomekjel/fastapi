@@ -247,8 +247,27 @@ def service_orders(
     if _STATUS[status][1] and not query:
         where.append(_STATUS[status][1])
     if query:
+        # Historical name searches ignore case, Polish diacritics and the
+        # order of forename/surname. Every user token is a bound SQL argument.
+        normalized = query.lower().translate(str.maketrans(
+            "ąćęłńóśźż", "acelnoszz"
+        ))
+        name_tokens = [
+            part.replace("%", "\\%").replace("_", "\\_")
+            for part in normalized.split()[:6] if part
+        ]
+        name_parts = []
+        for index, token in enumerate(name_tokens):
+            key = "name_token_" + str(index)
+            params[key] = "%" + token + "%"
+            name_parts.append(
+                "translate(lower(coalesce(s.display_name,'')), "
+                "'ąćęłńóśźż','acelnoszz') LIKE :" + key
+            )
+        name_clause = " AND ".join(name_parts) or "FALSE"
         where.append("""
             (s.reception_number ILIKE :query OR s.display_name ILIKE :query
+             OR (""" + name_clause + """)
              OR s.model ILIKE :query OR s.manufacturer ILIKE :query
              OR s.serial_number ILIKE :query OR s.phone_e164 ILIKE :query
              OR EXISTS (
