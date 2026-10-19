@@ -671,10 +671,47 @@ def issue_service_order_from_web(
     )
 
 
+@router.post("/multiguard/panel/service/{order_id}/warranty-return")
+def reopen_service_warranty_from_web(
+    order_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """Reopen an issued order, retaining its printed number and payment history."""
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowe potwierdzenie naprawy gwarancyjnej.")
+    with engine.begin() as con:
+        migration_ready=con.execute(text("""
+            SELECT
+              to_regclass('service.service_order_visits') IS NOT NULL
+              AND to_regprocedure('service.reopen_warranty_return(uuid,uuid)')
+                  IS NOT NULL
+        """)).scalar_one()
+        if not migration_ready:
+            raise HTTPException(503, "Obsługa wizyt gwarancyjnych nie została wdrożona.")
+        row=con.execute(text("""
+            SELECT status FROM service.service_orders
+            WHERE id=:id FOR UPDATE
+        """),{"id":order_id}).mappings().first()
+        if row is None:
+            raise HTTPException(404, "Nie znaleziono zlecenia.")
+        if str(row["status"]) != "COMPLETED":
+            raise HTTPException(409, "Naprawę gwarancyjną można przyjąć tylko po wydaniu.")
+        con.execute(text(
+            "SELECT service.reopen_warranty_return(:id,NULL::uuid)"
+        ),{"id":order_id})
+    return RedirectResponse(
+        f"/multiguard/panel/service/{order_id}?warranty=1",
+        status_code=303,
+        headers={"Cache-Control":"private, no-store"},
+    )
+
+
 @router.get("/multiguard/panel/service/{order_id}", response_class=HTMLResponse)
 def service_order_detail(
     order_id: uuid.UUID,
     issued: int = Query(0),
+    warranty: int = Query(0),
     _: None = Depends(_panel_auth),
 ):
     with engine.connect() as con:
@@ -684,6 +721,7 @@ def service_order_detail(
                    COALESCE(f.donor_material_value,0) AS donor_material_value,
                    COALESCE(f.service_amount-f.material_cost,0) AS actual_profit,
                    so.intake_description,so.fault_description,
+                   so.current_visit_received_at,so.is_warranty_repair,
                    so.technician_notes,so.customer_notes,so.accessories_received
             FROM service.v_service_order_summary s
             JOIN service.service_orders so ON so.id=s.id
@@ -693,6 +731,13 @@ def service_order_detail(
         """),{"id":order_id}).mappings().first()
         if not row:
             raise HTTPException(404, "Nie znaleziono zlecenia.")
+        visit_history=con.execute(text("""
+            SELECT visit_number,is_warranty_return,received_at,completed_at,
+                   status,service_amount,material_cost,donor_material_value
+            FROM service.service_order_visits
+            WHERE service_order_id=:id
+            ORDER BY visit_number DESC
+        """),{"id":order_id}).mappings().all()
         history=con.execute(text("""
             SELECT old_status,new_status,changed_at FROM service.service_order_status_history
             WHERE service_order_id=:id ORDER BY changed_at DESC LIMIT 25
@@ -717,7 +762,8 @@ def service_order_detail(
         fact("Telefon",row["phone_e164"]),
         fact("Sprzęt"," ".join(x for x in [row["manufacturer"],row["model"]] if x)),
         fact("Numer seryjny",row["serial_number"]),
-        fact("Przyjęto",dt(row["received_at"])),
+        fact("Pierwsze przyjęcie",dt(row["received_at"])),
+        fact("Bieżące przyjęcie",dt(row["current_visit_received_at"] or row["received_at"])),
         fact("Gotowe do odbioru",dt(row["ready_at"])),
         fact("Wydano",dt(row["completed_at"])),
     ])
@@ -789,6 +835,40 @@ def service_order_detail(
                         ' teraz na akceptację dokumentów klienta, jeśli przypisano licencję.'
                         '</p>')
 
+    warranty_action = ""
+    if str(row["status"]) == "COMPLETED":
+        token=_csrf_token(int(time.time() // 3600))
+        warranty_action=f"""
+        <section class="card service-release-card">
+        <div class="section-head"><div>
+          <div class="eyebrow">PONOWNE PRZYJĘCIE</div>
+          <h2>Naprawa gwarancyjna</h2>
+          <p>Ten sam numer i kod QR; nowe przyjęcie i niezależne rozliczenie.
+             Ostateczną decyzję o odpłatności wpisz w notatkach.</p></div>
+          <form method="post" action="/multiguard/panel/service/{order_id}/warranty-return"
+                onsubmit="return confirm('Przyjąć sprzęt ponownie pod starym numerem?');">
+            <input type="hidden" name="csrf_token" value="{esc(token)}">
+            <button type="submit">NAPRAWA GWARANCYJNA</button>
+          </form>
+        </div></section>"""
+    if warranty:
+        warranty_action='<p class="notice-success">Ponowne przyjęcie gwarancyjne zostało zapisane.</p>' + warranty_action
+    visit_rows="".join(
+        '<tr><td>'+str(v["visit_number"])+'</td>'
+        '<td>'+("Gwarancyjna" if v["is_warranty_return"] else "Pierwsze przyjęcie")+'</td>'
+        '<td>'+dt(v["received_at"])+'</td>'
+        '<td>'+dt(v["completed_at"])+'</td>'
+        '<td>'+money(v["service_amount"])+'</td></tr>'
+        for v in visit_history
+    )
+    visits_html=f"""
+        <section class="card"><h2>Historia przyjęć – ten sam numer zlecenia</h2>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Przyjęcie</th><th>Rodzaj</th><th>Przyjęto</th>
+              <th>Wydano</th><th>Kwota usługi</th></tr></thead>
+            <tbody>{visit_rows}</tbody></table></div>
+        </section>"""
+
     fin=[("Kwota usługi",row["service_amount"]),
          ("Koszt materiałów",row["material_cost"]),
          ("Wartość materiałów z dawcy",row["donor_material_value"]),
@@ -804,6 +884,8 @@ def service_order_detail(
       <div class="detail-facts">{facts}</div>
     </section>
     {issue_action}
+    {warranty_action}
+    {visits_html}
     <section class="card owner-service-notes" id="service-notes">
       <div class="section-head"><div><div class="eyebrow">ZAPISY Z ANDROIDA</div>
         <h2>Notatki do zlecenia ({len(order_notes)})</h2></div></div>
