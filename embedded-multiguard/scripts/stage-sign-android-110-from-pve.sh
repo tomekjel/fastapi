@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run on Proxmox PVE host (NOT in CT103) after staging unsigned APK over SSH.
+# Run on Proxmox PVE host (NOT in CT103) after transferring unsigned APK with Taildrop or approved transfer.
 # This only creates a signed 1.10 APK and never publishes it or modifies 1.9.
 set -Eeuo pipefail
 umask 077
@@ -36,7 +36,7 @@ pct exec 103 -- env DEBIAN_FRONTEND=noninteractive \
 echo "=== Read pinned signing script into CT103 ==="
 pct exec 103 -- curl --fail --show-error --silent --location \
   --max-time 30 \
-  "https://raw.githubusercontent.com/tomekjel/fastapi/2438b0ce54191f7fba31fe1dbd0d107653ac5753/embedded-multiguard/scripts/sign-multiservis-android-110.sh" \
+  "https://raw.githubusercontent.com/tomekjel/fastapi/3b49f49a7c74cd350493a753f4eb3122b213eaa2/embedded-multiguard/scripts/sign-multiservis-android-110.sh" \
   -o /root/multiservis-release-staging/sign-android-110.sh
 
 echo "=== Sign with root-only original JKS; compare signature to 1.9 ==="
@@ -49,6 +49,6 @@ pct pull 103 /root/multiservis-signing/signed-android-1.10/SHA256.txt \
   "$STAGE/SHA256.txt"
 chmod 0600 "$STAGE/multi-servis-1.10.apk" "$STAGE/SHA256.txt"
 (cd "$STAGE" && sha256sum -c SHA256.txt)
-echo "PASS: signed 1.10 APK ready for SCP download from PVE."
+echo "PASS: signed 1.10 APK on PVE (copy to Windows via Taildrop or secure link)."
 echo "SERVER FILE: $STAGE/multi-servis-1.10.apk"
 echo "No update manifest changed. Nothing installed on phone."
