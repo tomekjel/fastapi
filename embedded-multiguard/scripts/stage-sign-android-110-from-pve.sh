@@ -7,6 +7,14 @@ umask 077
 [[ ${EUID} -eq 0 ]] || { echo "BLOCKED: root on Proxmox required"; exit 1; }
 command -v pct >/dev/null || { echo "BLOCKED: pct only available on Proxmox"; exit 1; }
 STAGE=/root/multiservis-android110-transfer
+install -d -m 0700 "$STAGE"
+if [[ ! -s "$STAGE/app-release-unsigned.apk" ||
+      ! -s "$STAGE/app-release-unsigned.apk.sha256" ]]; then
+    echo "=== Odbieram niepodpisany APK przez Tailscale Taildrop ==="
+    command -v tailscale >/dev/null ||
+      { echo "BLOCKED: Tailscale is not installed on PVE"; exit 1; }
+    tailscale file get "$STAGE"
+fi
 for f in "$STAGE/app-release-unsigned.apk" "$STAGE/app-release-unsigned.apk.sha256"; do
     [[ -s "$f" && ! -L "$f" ]] || { echo "BLOCKED: missing unsigned upload $f"; exit 1; }
 done
@@ -28,7 +36,7 @@ pct exec 103 -- env DEBIAN_FRONTEND=noninteractive \
 echo "=== Read pinned signing script into CT103 ==="
 pct exec 103 -- curl --fail --show-error --silent --location \
   --max-time 30 \
-  "https://raw.githubusercontent.com/tomekjel/fastapi/489950594f1170799a9950eb05324e68c37dde55/embedded-multiguard/scripts/sign-multiservis-android-110.sh" \
+  "https://raw.githubusercontent.com/tomekjel/fastapi/2438b0ce54191f7fba31fe1dbd0d107653ac5753/embedded-multiguard/scripts/sign-multiservis-android-110.sh" \
   -o /root/multiservis-release-staging/sign-android-110.sh
 
 echo "=== Sign with root-only original JKS; compare signature to 1.9 ==="
