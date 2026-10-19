@@ -231,11 +231,36 @@ def simulate_one_warranty(cur, baseline):
         cur.execute("RELEASE SAVEPOINT warranty_sim")
 
 
+def _pg18_client_binaries():
+    """Locate ONLY PostgreSQL 18 clients; Debian packages may not be in PATH."""
+    import glob
+    known = ["/usr/lib/postgresql/18/bin"]
+    for found in glob.glob("/usr/local/pgsql*/bin"):
+        known.append(found)
+    if shutil.which("pg_dump") and shutil.which("pg_restore"):
+        known.append(str(Path(shutil.which("pg_dump")).resolve().parent))
+    for folder in known:
+        dump, restore = Path(folder) / "pg_dump", Path(folder) / "pg_restore"
+        if not (dump.is_file() and restore.is_file()
+                and os.access(dump, os.X_OK)
+                and os.access(restore, os.X_OK)):
+            continue
+        version = subprocess.run(
+            [str(dump), "--version"], capture_output=True,
+            text=True, timeout=10, check=True
+        ).stdout
+        match = re.search(r"(?:PostgreSQL\\) )?(18)\\.", version)
+        if match:
+            return str(dump), str(restore)
+    raise RuntimeError(
+        "PostgreSQL 18 client tools are not installed in LXC103. "
+        "Install only postgresql-client-18 (not a PostgreSQL server). "
+        "DATABASE NOT MODIFIED."
+    )
+
+
 def full_backup():
-    pg_dump = shutil.which("pg_dump")
-    pg_restore = shutil.which("pg_restore")
-    if not pg_dump or not pg_restore:
-        raise RuntimeError("No pg_dump/pg_restore; database NOT modified.")
+    pg_dump, pg_restore = _pg18_client_binaries()
     url = engine.url
     if not url.database or not url.username:
         raise RuntimeError("Unknown PostgreSQL DSN for pg_dump.")
