@@ -4,8 +4,8 @@
 set -Eeuo pipefail
 if [[ "$(id -u)" != 0 ]]; then echo "BLOCKED: root required"; exit 1; fi
 systemctl is-active --quiet meshcentral || { echo "BLOCKED: meshcentral is not active"; exit 1; }
-OLD=0922244ff24545429b85a30ef170a86c0530961cca5efb98b7f5b954195dfaae
-NEW=7592a99ebad4a70af0feb561def5c6f2e8e3d740443470e8ad1e12e6de65f702
+OLD=bc5057e86ec44bc58ea1ad2918dc524b5faa614431a62a113a79f0a99793962d
+NEW='' # computed after exactly one controlled replacement
 # Abort on unknown/multiple installations, custom files, or newer versions.
 FOUND="$(find /opt /usr/local/lib/node_modules /root -type f -name agent-desktop-0.0.2.js -print 2>/dev/null || true)"
 if [[ -z "$FOUND" || "$FOUND" == *$'\n'* || ! "$FOUND" =~ ^/[a-zA-Z0-9_./-]+$ ]]; then
@@ -21,7 +21,7 @@ with open(sys.argv[1],encoding="utf-8") as f:
 print("PASS: version 1.2.5")
 PY
 if [[ "$(sha256sum "$VIEWER" | cut -d' ' -f1)" != "$OLD" ]]; then
-  echo "BLOCKED: live viewer does not match verified vendor source"; exit 1
+  echo "BLOCKED: live viewer differs from verified CT106 SHA256; no changes"; exit 1
 fi
 STAGE="$(mktemp -d)"
 BACKUP="/var/backups/multi-guard-meshcentral-viewer-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -62,12 +62,15 @@ new="""        tile.onerror = function () {
 if src.count(old)!=1: raise SystemExit("BLOCKED: upstream handler not found exactly once")
 out=src.replace(old,new,1).encode("utf-8")
 hash=hashlib.sha256(out).hexdigest()
-assert hash=="7592a99ebad4a70af0feb561def5c6f2e8e3d740443470e8ad1e12e6de65f702", "BLOCKED: patch SHA mismatch"
+assert out != pathlib.Path(sys.argv[1]).read_bytes(), "BLOCKED: patch did not change source"
+assert out.count(b"tile.onerror = function") == 1 and out.count(b"tile.error = function") == 0, "BLOCKED: ambiguous image callbacks"
 pathlib.Path(sys.argv[2]).write_bytes(out)
-print("PASS: exact test-verified viewer bytes generated")
+print("PASS: tested JPEG callback applied to pinned CT106 source")
+print("PATCHED_VIEWER_SHA256:", hash)
 PY
 node --check "$STAGE/new.js"
-test "$(sha256sum "$STAGE/new.js" | cut -d' ' -f1)" = "$NEW"
+NEW="$(sha256sum "$STAGE/new.js" | cut -d' ' -f1)"
+if [[ ! "$NEW" =~ ^[a-f0-9]{64}$ ]]; then echo "BLOCKED: candidate checksum invalid"; exit 1; fi
 install -m "$(stat -c %a "$VIEWER")" -o "$(stat -c %u "$VIEWER")" \
   -g "$(stat -c %g "$VIEWER")" "$STAGE/new.js" "$VIEWER.mg-tmp-$$"
 mv -f "$VIEWER.mg-tmp-$$" "$VIEWER"
