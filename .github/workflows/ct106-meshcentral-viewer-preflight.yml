@@ -1,0 +1,51 @@
+name: CT106 MeshCentral viewer recovery - read-only production gate
+on:
+  push:
+    branches: [fix/ct106-meshcentral-viewer-deploy-20261020]
+    paths: [.github/workflows/ct106-meshcentral-viewer-preflight.yml]
+permissions:
+  contents: read
+jobs:
+  ct106-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+      SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+      SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+      SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
+    steps:
+      - name: Verify existing authorized SSH target and CT106, no writes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${SSH_HOST:-}" || -z "${SSH_USER:-}" || -z "${SSH_KEY:-}" ]]; then
+            echo 'BLOCKED: existing backend production SSH credentials unavailable'
+            exit 0
+          fi
+          SSH_PORT="${SSH_PORT:-22}"
+          mkdir -m 700 -p ~/.ssh
+          KEY_FILE="$RUNNER_TEMP/ct106-sshkey"
+          KH_FILE="$RUNNER_TEMP/ct106-knownhosts"
+          trap 'rm -f "$KEY_FILE" "$KH_FILE"' EXIT
+          printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          if ! ssh-keyscan -T 8 -p "$SSH_PORT" "$SSH_HOST" 2>/dev/null > "$KH_FILE"; then
+            echo 'BLOCKED: configured SSH endpoint unreachable from this runner'
+            exit 0
+          fi
+          chmod 600 "$KH_FILE"
+          if ! ssh-keygen -lf "$KH_FILE" | grep -Fq 'SHA256:FKVw7X3YT5R4KW81o82xjgGDMJkE8R+OqJszXGvUaDo'; then
+            echo 'BLOCKED: endpoint is NOT the previously pinned PVE host'
+            exit 0
+          fi
+          echo 'PASS: pinned PVE server fingerprint'
+          SSH_OPTS=(-i "$KEY_FILE" -p "$SSH_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KH_FILE" -o ConnectTimeout=10)
+          if ! ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_HOST" 'test "$(hostname -s)" = pve && command -v pct >/dev/null && pct status 106 >/dev/null'; then
+            echo 'BLOCKED: no authorized container management access to PVE'
+            exit 0
+          fi
+          echo 'PASS: authenticated read-only PVE container access'
+          ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_HOST" "pct exec 106 -- bash -lc 'systemctl is-active meshcentral; find /opt /usr/local/lib/node_modules -type f -name agent-desktop-0.0.2.js -print 2>/dev/null | head -5'"
+          echo 'PREFLIGHT_COMPLETE: no files or services changed'
