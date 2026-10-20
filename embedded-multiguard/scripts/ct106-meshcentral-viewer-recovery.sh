@@ -41,9 +41,10 @@ trap cleanup EXIT
 install -d -m 0700 "$BACKUP"
 cp -p "$VIEWER" "$BACKUP/original.js"
 python3 - "$VIEWER" "$STAGE/new.js" <<'PY'
-import hashlib,pathlib,sys
-src=pathlib.Path(sys.argv[1]).read_bytes().decode("utf-8")
-old="        tile.error = function () { console.log('DecodeTileError'); }"
+import hashlib,pathlib,re,sys
+before=pathlib.Path(sys.argv[1]).read_bytes()
+src=before.decode("utf-8")
+old=r"""(?m)^[ \t]*tile\.error[ \t]*=[ \t]*function[ \t]*\([ \t]*\)[ \t]*\{[ \t]*console\.log\([ \t]*['"]DecodeTileError['"][ \t]*\)[ \t]*;?[ \t]*\}"""
 new="""        tile.onerror = function () {
             // A failed JPEG decode must still consume its ordered picture slot;
             // otherwise every later tile waits forever for this sequence id.
@@ -59,10 +60,15 @@ new="""        tile.onerror = function () {
                 }
             }
         }"""
-if src.count(old)!=1: raise SystemExit("BLOCKED: upstream handler not found exactly once")
-out=src.replace(old,new,1).encode("utf-8")
+matches=list(re.finditer(old,src))
+if len(matches)!=1:
+    raise SystemExit("BLOCKED: expected exactly one original JPEG error handler, got "+str(len(matches)))
+# Match whitespace and retain vendor newline style without altering the rest.
+newline="\r\n" if b"\r\n" in before else "\n"
+new=new.replace("\n",newline)
+out=(src[:matches[0].start()]+new+src[matches[0].end():]).encode("utf-8")
 hash=hashlib.sha256(out).hexdigest()
-assert out != pathlib.Path(sys.argv[1]).read_bytes(), "BLOCKED: patch did not change source"
+assert out != before, "BLOCKED: patch did not change source"
 assert out.count(b"tile.onerror = function") == 1 and out.count(b"tile.error = function") == 0, "BLOCKED: ambiguous image callbacks"
 pathlib.Path(sys.argv[2]).write_bytes(out)
 print("PASS: tested JPEG callback applied to pinned CT106 source")
