@@ -18,6 +18,16 @@ install -d -m 0700 "$STAGE"
 for old in "$STAGE/app-release-unsigned.apk" "$STAGE/app-release-unsigned.apk.sha256"; do
     [[ ! -e "$old" ]] || { echo "BLOCKED: file already exists: $old. Do not overwrite."; exit 1; }
 done
+# Previous upload attempts may have left an active single-use receiver.
+# Restart only OUR transient units, making any previous shared/incorrect
+# token invalid, and then start a new 20-minute receiver.
+while IFS= read -r unit; do
+    [[ "$unit" =~ ^multiservis-android110-upload-[0-9]+[.]service$ ]] || continue
+    systemctl stop "$unit" >/dev/null || true
+done < <(
+    systemctl list-units --all --plain --no-legend 'multiservis-android110-upload-*.service' 2>/dev/null |
+       awk '{print $1}'
+)
 TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 printf '%s' "$TOKEN" > "$STAGE/.upload-token"
 chmod 0600 "$STAGE/.upload-token"
