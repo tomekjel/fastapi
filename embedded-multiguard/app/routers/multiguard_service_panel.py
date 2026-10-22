@@ -210,7 +210,7 @@ def owner_order_media(
 _STATUS = {
     "active": ("W trakcie naprawy", "s.status='IN_SERVICE'"),
     "ready": ("Gotowe do odbioru", "s.status='READY_FOR_PICKUP'"),
-    "completed": ("Wydane", "s.status='COMPLETED'"),
+    "completed": ("Wydane (historia)", "EXISTS (SELECT 1 FROM service.service_order_visits hv WHERE hv.service_order_id=s.id AND hv.status='COMPLETED' AND hv.completed_at IS NOT NULL)"),
     "cancelled": ("Anulowane", "s.status='CANCELLED'"),
     "all": ("Wszystkie zlecenia", ""),
 }
@@ -241,12 +241,33 @@ def service_orders(
         raise HTTPException(400, "Dostępne rozmiary strony: 20 lub 50.")
     where = []
     params: dict[str, object] = {}
-    if _STATUS[status][1]:
-        where.append(_STATUS[status][1])
     query = q.strip()
+    # Searching by client/name/QR must include older issued orders too.
+    # Status tabs apply only when search is empty.
+    if _STATUS[status][1] and not query:
+        where.append(_STATUS[status][1])
     if query:
+        # Historical name searches ignore case, Polish diacritics and the
+        # order of forename/surname. Every user token is a bound SQL argument.
+        normalized = query.lower().translate(str.maketrans(
+            "ąćęłńóśźż", "acelnoszz"
+        ))
+        name_tokens = [
+            part.replace("%", "\\%").replace("_", "\\_")
+            for part in normalized.split()[:6] if part
+        ]
+        name_parts = []
+        for index, token in enumerate(name_tokens):
+            key = "name_token_" + str(index)
+            params[key] = "%" + token + "%"
+            name_parts.append(
+                "translate(lower(coalesce(s.display_name,'')), "
+                "'ąćęłńóśźż','acelnoszz') LIKE :" + key
+            )
+        name_clause = " AND ".join(name_parts) or "FALSE"
         where.append("""
             (s.reception_number ILIKE :query OR s.display_name ILIKE :query
+             OR (""" + name_clause + """)
              OR s.model ILIKE :query OR s.manufacturer ILIKE :query
              OR s.serial_number ILIKE :query OR s.phone_e164 ILIKE :query
              OR EXISTS (
@@ -260,12 +281,21 @@ def service_orders(
     # Guard against wildcard expansion and unbounded browser lists.
     sql = f"""
         SELECT s.id,s.reception_number,s.status,s.received_at,s.completed_at,
+               so.current_visit_received_at,so.is_warranty_repair,
+               last_issue.completed_at AS last_completed_visit_at,
                s.manufacturer,s.model,s.serial_number,s.device_type,
                s.display_name,s.phone_e164,
                latest_note.note_text AS latest_note_text,
                latest_note.visibility AS latest_note_visibility,
                latest_note.created_at AS latest_note_at
         FROM service.v_service_order_summary s
+        JOIN service.service_orders so ON so.id=s.id
+        LEFT JOIN LATERAL (
+          SELECT v.completed_at FROM service.service_order_visits v
+          WHERE v.service_order_id=s.id AND v.status='COMPLETED'
+            AND v.completed_at IS NOT NULL
+          ORDER BY v.completed_at DESC LIMIT 1
+        ) last_issue ON TRUE
         LEFT JOIN LATERAL (
           SELECT n.note_text,n.visibility,n.created_at
           FROM service.service_order_notes n
@@ -273,7 +303,7 @@ def service_orders(
           ORDER BY n.created_at DESC,n.id DESC LIMIT 1
         ) latest_note ON TRUE
         {where_sql}
-        ORDER BY s.received_at DESC
+        ORDER BY COALESCE(so.current_visit_received_at,s.received_at) DESC
         LIMIT :limit OFFSET :offset
     """
     with engine.connect() as con:
@@ -281,7 +311,8 @@ def service_orders(
             SELECT count(*) AS all_count,
                    count(*) FILTER (WHERE status='IN_SERVICE') AS active,
                    count(*) FILTER (WHERE status='READY_FOR_PICKUP') AS ready,
-                   count(*) FILTER (WHERE status='COMPLETED') AS completed,
+                   (SELECT count(DISTINCT service_order_id) FROM service.service_order_visits
+                     WHERE status='COMPLETED' AND completed_at IS NOT NULL) AS completed,
                    count(*) FILTER (WHERE status='CANCELLED') AS cancelled
             FROM service.service_orders
         """)).mappings().one()
@@ -317,12 +348,12 @@ def service_orders(
         trs.append(f"""
         <tr>
           <td><a class="strong-link" href="/multiguard/panel/service/{row['id']}">{esc(row['reception_number'])}</a></td>
-          <td>{status_badge(row['status'])}</td>
+          <td>{('<span class="badge mg-red">NAPRAWA GWARANCYJNA</span>' if row['is_warranty_repair'] and str(row['status']) in ('IN_SERVICE','READY_FOR_PICKUP') else status_badge(row['status']))}</td>
           <td><strong>{esc(model)}</strong><small class="row-sub">{esc(row['serial_number'] or '—')}</small></td>
           <td>{esc(row['display_name'] or '—')}<small class="row-sub">{esc(row['phone_e164'] or '')}</small></td>
           <td>{note_preview}</td>
-          <td class="numbers">{dt(row['received_at'])}</td>
-          <td class="numbers">{dt(row['completed_at'])}</td>
+          <td class="numbers">{dt(row['current_visit_received_at'] or row['received_at'])}</td>
+          <td class="numbers">{dt(row['last_completed_visit_at'])}</td>
           <td><a class="button-link compact" href="/multiguard/panel/service/{row['id']}">PODGLĄD</a></td>
         </tr>""")
     table = "".join(trs) or '<tr><td colspan="8" class="muted">Brak zleceń dla wybranych filtrów.</td></tr>'
@@ -334,7 +365,12 @@ def service_orders(
     <section class="card panel-hero service-hero">
       <div class="eyebrow">MULTI-SERVIS / SERWIS WŁAŚCICIELA</div>
       <h1>Zlecenia serwisowe</h1>
-      <p>Najpierw sprawy wymagające pracy. Finanse zbiorcze są dostępne w <a href="/multiguard/panel/statistics">zestawieniu właściciela</a>.</p>
+      <p>Operacyjne zlecenia i historia wydań, również gdy sprzęt wrócił na gwarancję.</p>
+      <details class="finance-disclosure">
+        <summary>Statystyki właściciela (poufne) ▾</summary>
+        <p>W osobnym chronionym widoku możesz sprawdzić kwoty po dacie wydania.</p>
+        <a class="button-link compact" href="/multiguard/panel/statistics">OTWÓRZ STATYSTYKI</a>
+      </details>
       <div class="metrics owner-kpis">{cards}</div>
     </section>
     <section class="card">
@@ -343,7 +379,7 @@ def service_orders(
       <form class="service-search" method="get" action="/multiguard/panel/service">
         <input type="hidden" name="status" value="{esc(status)}">
         <input type="hidden" name="page_size" value="{page_size}">
-        <label>Wyszukaj numer, klienta, telefon, model lub numer seryjny<input name="q" maxlength="120" value="{esc(query)}" placeholder="np. MS-2026-..., Lenovo, +48..."></label>
+        <label>Wyszukaj numer, imię, nazwisko, telefon, model lub numer seryjny (we wszystkich statusach)<input name="q" maxlength="120" value="{esc(query)}" placeholder="np. MS-2026-..., Lenovo, +48..."></label>
         <button type="submit">SZUKAJ</button>
       </form>
       <div class="table-wrap"><table>
@@ -462,38 +498,32 @@ def service_statistics(
     with engine.connect() as con:
         total = con.execute(text("""
             SELECT count(*) AS orders,
-                   COALESCE(sum(f.service_amount),0) AS revenue,
-                   COALESCE(sum(f.material_cost),0) AS material_cost,
-                   COALESCE(sum(f.donor_material_value),0) AS donor_material_value,
-                   COALESCE(sum(f.service_amount-f.material_cost),0) AS actual_profit,
-                   COALESCE(sum(f.service_amount-f.material_cost-f.donor_material_value),0)
-                       AS economic_profit
-            FROM service.service_orders s
-            LEFT JOIN service.owner_finances f ON f.service_order_id=s.id
-            WHERE s.status='COMPLETED'
-              AND s.completed_at >= :start_at AND s.completed_at < :end_at
+                   COALESCE(sum(v.service_amount),0) AS revenue,
+                   COALESCE(sum(v.material_cost),0) AS material_cost,
+                   COALESCE(sum(v.donor_material_value),0) AS donor_material_value,
+                   COALESCE(sum(v.actual_profit),0) AS actual_profit,
+                   COALESCE(sum(v.economic_profit),0) AS economic_profit
+            FROM service.v_owner_completed_visit_profit v
+            WHERE v.completed_at >= :start_at AND v.completed_at < :end_at
         """), query_params).mappings().one()
         breakdown = con.execute(text("""
-            SELECT date_trunc(:grouping, s.completed_at AT TIME ZONE 'Europe/Warsaw')
+            SELECT date_trunc(:grouping, v.completed_at AT TIME ZONE 'Europe/Warsaw')
                        AS bucket,
                    count(*) AS orders,
-                   COALESCE(sum(f.service_amount),0) AS revenue,
-                   COALESCE(sum(f.material_cost),0) AS material_cost,
-                   COALESCE(sum(f.donor_material_value),0) AS donor_material_value,
-                   COALESCE(sum(f.service_amount-f.material_cost),0) AS actual_profit,
-                   COALESCE(sum(f.service_amount-f.material_cost-f.donor_material_value),0)
-                       AS economic_profit
-            FROM service.service_orders s
-            LEFT JOIN service.owner_finances f ON f.service_order_id=s.id
-            WHERE s.status='COMPLETED'
-              AND s.completed_at >= :start_at AND s.completed_at < :end_at
+                   COALESCE(sum(v.service_amount),0) AS revenue,
+                   COALESCE(sum(v.material_cost),0) AS material_cost,
+                   COALESCE(sum(v.donor_material_value),0) AS donor_material_value,
+                   COALESCE(sum(v.actual_profit),0) AS actual_profit,
+                   COALESCE(sum(v.economic_profit),0) AS economic_profit
+            FROM service.v_owner_completed_visit_profit v
+            WHERE v.completed_at >= :start_at AND v.completed_at < :end_at
             GROUP BY bucket ORDER BY bucket
         """), {**query_params, "grouping": grouping}).mappings().all()
 
     # The number of issued orders is operational data and may be visible.
     # All monetary data below lives inside a closed <details> element.
     public_metrics = (
-        '<div class="metric accent-blue"><b>Wydane zlecenia</b>'
+        '<div class="metric accent-blue"><b>Wydania sprzętu</b>'
         f'<strong>{int(total["orders"] or 0)}</strong></div>'
     )
     finance_items = [
@@ -617,6 +647,57 @@ def service_statistics(
     """)
 
 
+
+@router.post("/multiguard/panel/service/{order_id}/ready")
+def service_order_mark_ready(
+    order_id: uuid.UUID, csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """Owner-controlled status update; DB visit and history triggers apply."""
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowe potwierdzenie zmiany statusu.")
+    with engine.begin() as con:
+        row = con.execute(text("SELECT status FROM service.service_orders WHERE id=:id FOR UPDATE"),
+                          {"id":order_id}).mappings().first()
+        if row is None:
+            raise HTTPException(404, "Nie znaleziono zlecenia.")
+        if str(row["status"]) != "IN_SERVICE":
+            raise HTTPException(409, "Tylko sprzęt W NAPRAWIE można oznaczyć jako GOTOWY.")
+        con.execute(text("""
+            UPDATE service.service_orders
+            SET status='READY_FOR_PICKUP', client_notified_at=NULL
+            WHERE id=:id AND status='IN_SERVICE'
+        """), {"id":order_id})
+    return RedirectResponse(f"/multiguard/panel/service/{order_id}?ready=1",
+                            status_code=303,headers={"Cache-Control":"private, no-store"})
+
+
+@router.post("/multiguard/panel/service/{order_id}/client-notified")
+def service_order_mark_client_notified(
+    order_id: uuid.UUID, csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """Log manual client contact; does not send a message."""
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowe potwierdzenie powiadomienia.")
+    with engine.begin() as con:
+        row = con.execute(text("""
+            SELECT status,client_notified_at FROM service.service_orders
+            WHERE id=:id FOR UPDATE
+        """), {"id":order_id}).mappings().first()
+        if row is None:
+            raise HTTPException(404, "Nie znaleziono zlecenia.")
+        if str(row["status"]) != "READY_FOR_PICKUP":
+            raise HTTPException(409, "Powiadomienie oznacza się przy statusie GOTOWE DO ODBIORU.")
+        if row["client_notified_at"] is None:
+            con.execute(text("""
+                UPDATE service.service_orders SET client_notified_at=now()
+                WHERE id=:id AND client_notified_at IS NULL
+            """), {"id":order_id})
+    return RedirectResponse(f"/multiguard/panel/service/{order_id}?notified=1",
+                            status_code=303,headers={"Cache-Control":"private, no-store"})
+
+
 @router.post("/multiguard/panel/service/{order_id}/issue")
 def issue_service_order_from_web(
     order_id: uuid.UUID,
@@ -673,10 +754,49 @@ def issue_service_order_from_web(
     )
 
 
+@router.post("/multiguard/panel/service/{order_id}/warranty-return")
+def reopen_service_warranty_from_web(
+    order_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """Reopen an issued order, retaining its printed number and payment history."""
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowe potwierdzenie naprawy gwarancyjnej.")
+    with engine.begin() as con:
+        migration_ready=con.execute(text("""
+            SELECT
+              to_regclass('service.service_order_visits') IS NOT NULL
+              AND to_regprocedure('service.reopen_warranty_return(uuid,uuid)')
+                  IS NOT NULL
+        """)).scalar_one()
+        if not migration_ready:
+            raise HTTPException(503, "Obsługa wizyt gwarancyjnych nie została wdrożona.")
+        row=con.execute(text("""
+            SELECT status FROM service.service_orders
+            WHERE id=:id FOR UPDATE
+        """),{"id":order_id}).mappings().first()
+        if row is None:
+            raise HTTPException(404, "Nie znaleziono zlecenia.")
+        if str(row["status"]) != "COMPLETED":
+            raise HTTPException(409, "Naprawę gwarancyjną można przyjąć tylko po wydaniu.")
+        con.execute(text(
+            "SELECT service.reopen_warranty_return(:id,NULL::uuid)"
+        ),{"id":order_id})
+    return RedirectResponse(
+        f"/multiguard/panel/service/{order_id}?warranty=1",
+        status_code=303,
+        headers={"Cache-Control":"private, no-store"},
+    )
+
+
 @router.get("/multiguard/panel/service/{order_id}", response_class=HTMLResponse)
 def service_order_detail(
     order_id: uuid.UUID,
     issued: int = Query(0),
+    warranty: int = Query(0),
+    ready: int = Query(0),
+    notified: int = Query(0),
     _: None = Depends(_panel_auth),
 ):
     with engine.connect() as con:
@@ -686,6 +806,8 @@ def service_order_detail(
                    COALESCE(f.donor_material_value,0) AS donor_material_value,
                    COALESCE(f.service_amount-f.material_cost,0) AS actual_profit,
                    so.intake_description,so.fault_description,
+                   so.current_visit_received_at,so.is_warranty_repair,
+                   so.client_notified_at AS current_client_notified_at,
                    so.technician_notes,so.customer_notes,so.accessories_received
             FROM service.v_service_order_summary s
             JOIN service.service_orders so ON so.id=s.id
@@ -695,6 +817,13 @@ def service_order_detail(
         """),{"id":order_id}).mappings().first()
         if not row:
             raise HTTPException(404, "Nie znaleziono zlecenia.")
+        visit_history=con.execute(text("""
+            SELECT visit_number,is_current,is_warranty_return,received_at,completed_at,
+                   status,service_amount,material_cost,donor_material_value
+            FROM service.service_order_visits
+            WHERE service_order_id=:id
+            ORDER BY visit_number DESC
+        """),{"id":order_id}).mappings().all()
         history=con.execute(text("""
             SELECT old_status,new_status,changed_at FROM service.service_order_status_history
             WHERE service_order_id=:id ORDER BY changed_at DESC LIMIT 25
@@ -719,8 +848,10 @@ def service_order_detail(
         fact("Telefon",row["phone_e164"]),
         fact("Sprzęt"," ".join(x for x in [row["manufacturer"],row["model"]] if x)),
         fact("Numer seryjny",row["serial_number"]),
-        fact("Przyjęto",dt(row["received_at"])),
+        fact("Pierwsze przyjęcie",dt(row["received_at"])),
+        fact("Bieżące przyjęcie",dt(row["current_visit_received_at"] or row["received_at"])),
         fact("Gotowe do odbioru",dt(row["ready_at"])),
+        fact("Klient powiadomiony",dt(row["current_client_notified_at"])),
         fact("Wydano",dt(row["completed_at"])),
     ])
     def note(label: str,value: object) -> str:
@@ -769,6 +900,36 @@ def service_order_detail(
                 f'<td><a{controls} href="{url}">'
                 f'{action}</a></td></tr>')
     media_rows="".join(media_row(x) for x in media)
+    management_action = ""
+    if row["status"] == "IN_SERVICE":
+        token = _csrf_token(int(time.time() // 3600))
+        management_action = f"""
+        <section class="card service-release-card"><div class="section-head">
+        <div><div class="eyebrow">OBSŁUGA ZLECENIA WWW</div>
+        <h2>Zmień status</h2><p>Bez księgowania wydania ani płatności.</p></div>
+        <form method="post" action="/multiguard/panel/service/{order_id}/ready"
+         onsubmit="return confirm('Czy sprzęt jest gotowy do odbioru?');">
+         <input type="hidden" name="csrf_token" value="{esc(token)}">
+         <button type="submit">✓ GOTOWE DO ODBIORU</button></form></div></section>"""
+    elif row["status"] == "READY_FOR_PICKUP":
+        if row["current_client_notified_at"] is None:
+            token = _csrf_token(int(time.time() // 3600))
+            management_action = f"""
+            <section class="card service-release-card"><div class="section-head">
+            <div><div class="eyebrow">KONTAKT Z KLIENTEM</div>
+            <h2>Klient powiadomiony?</h2>
+            <p>Zapisuje datę faktycznie wykonanego kontaktu. Nie wysyła SMS ani e-maila.</p></div>
+            <form method="post" action="/multiguard/panel/service/{order_id}/client-notified"
+             onsubmit="return confirm('Potwierdzasz, że klient został już powiadomiony?');">
+             <input type="hidden" name="csrf_token" value="{esc(token)}">
+             <button type="submit">✓ KLIENT POWIADOMIONY</button></form></div></section>"""
+        else:
+            management_action = '<section class="card"><h2>Klient powiadomiony</h2><p>' + esc(dt(row["current_client_notified_at"])) + '</p></section>'
+    if ready:
+        management_action = '<p class="notice-success">Zapisano status GOTOWE DO ODBIORU.</p>' + management_action
+    if notified:
+        management_action = '<p class="notice-success">Zapisano datę powiadomienia klienta.</p>' + management_action
+
     issue_action = ""
     if row["status"] == "READY_FOR_PICKUP":
         token = _csrf_token(int(time.time() // 3600))
@@ -791,6 +952,69 @@ def service_order_detail(
                         ' teraz na akceptację dokumentów klienta, jeśli przypisano licencję.'
                         '</p>')
 
+    warranty_action = ""
+    if str(row["status"]) == "COMPLETED":
+        token=_csrf_token(int(time.time() // 3600))
+        warranty_action=f"""
+        <section class="card service-release-card">
+        <div class="section-head"><div>
+          <div class="eyebrow">PONOWNE PRZYJĘCIE</div>
+          <h2>Naprawa gwarancyjna</h2>
+          <p>Ten sam numer i kod QR; nowe przyjęcie i niezależne rozliczenie.
+             Ostateczną decyzję o odpłatności wpisz w notatkach.</p></div>
+          <form method="post" action="/multiguard/panel/service/{order_id}/warranty-return"
+                onsubmit="return confirm('Przyjąć sprzęt ponownie pod starym numerem?');">
+            <input type="hidden" name="csrf_token" value="{esc(token)}">
+            <button type="submit">NAPRAWA GWARANCYJNA</button>
+          </form>
+        </div></section>"""
+    if warranty:
+        warranty_action='<p class="notice-success">Ponowne przyjęcie gwarancyjne zostało zapisane.</p>' + warranty_action
+    # A warranty return clears current-visit finances, never the prior
+    # issue ledger. Show previous settled amounts before the current card.
+    closed_prior_visits = [
+        v for v in visit_history
+        if not v["is_current"] and v["completed_at"] is not None
+    ]
+    prior_finance_html = ""
+    if row["is_warranty_repair"] or closed_prior_visits:
+        if closed_prior_visits:
+            prior_billed = sum((v["service_amount"] for v in closed_prior_visits),Decimal(0))
+            prior_material = sum((v["material_cost"] for v in closed_prior_visits),Decimal(0))
+            prior_donor = sum((v["donor_material_value"] for v in closed_prior_visits),Decimal(0))
+            prior_finance_html = (
+                '<section class="card"><h2>Poprzednio rozliczono – naprawa gwarancyjna</h2>'
+                '<p>Pierwsze i wcześniejsze wydania nie znikają po ponownym przyjęciu.</p>'
+                '<div class="metrics">'
+                f'<div class="metric"><b>Poprzednie kwoty usług</b><strong>{money(prior_billed)}</strong></div>'
+                f'<div class="metric"><b>Poprzednie materiały</b><strong>{money(prior_material)}</strong></div>'
+                f'<div class="metric"><b>Wartość materiałów dawcy</b><strong>{money(prior_donor)}</strong></div>'
+                f'<div class="metric"><b>Bieżąca wizyta (kwota usługi)</b><strong>{money(row["service_amount"])}</strong></div>'
+                '</div><p>Kwoty rozliczone w systemie nie są dowodem zapłaty. '
+                'Dopłatę lub zwrot zapisuje się odrębnie.</p></section>'
+            )
+        else:
+            prior_finance_html = (
+                '<section class="card"><h2>Historia rozliczeń gwarancyjnych</h2>'
+                '<p>Nie znaleziono zamkniętej wcześniejszej wizyty. '
+                'Nie należy interpretować braku danych jako 0 zł pobranych od klienta.</p></section>'
+            )
+    visit_rows="".join(
+        '<tr><td>'+str(v["visit_number"])+'</td>'
+        '<td>'+("Gwarancyjna" if v["is_warranty_return"] else "Pierwsze przyjęcie")+'</td>'
+        '<td>'+dt(v["received_at"])+'</td>'
+        '<td>'+dt(v["completed_at"])+'</td>'
+        '<td>'+money(v["service_amount"])+'</td></tr>'
+        for v in visit_history
+    )
+    visits_html=f"""
+        <section class="card"><h2>Historia przyjęć – ten sam numer zlecenia</h2>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Przyjęcie</th><th>Rodzaj</th><th>Przyjęto</th>
+              <th>Wydano</th><th>Kwota usługi</th></tr></thead>
+            <tbody>{visit_rows}</tbody></table></div>
+        </section>"""
+
     fin=[("Kwota usługi",row["service_amount"]),
          ("Koszt materiałów",row["material_cost"]),
          ("Wartość materiałów z dawcy",row["donor_material_value"]),
@@ -802,10 +1026,14 @@ def service_order_detail(
       <a class="button-link compact" href="/multiguard/panel/service">← WRÓĆ DO ZLECEŃ</a>
       <div class="eyebrow" style="margin-top:14px">KARTA SERWISOWA</div>
       <h1>{esc(row["reception_number"])} {status_badge(row["status"])}</h1>
-      <p>Podgląd właściciela, bez edycji danych. Przyjmowanie urządzeń ze zdjęciami pozostaje w aplikacji Android.</p>
+      <p>Podgląd właściciela oraz zmiana statusu. Przyjmowanie urządzeń ze zdjęciami pozostaje w aplikacji Android.</p>
       <div class="detail-facts">{facts}</div>
     </section>
+    {management_action}
     {issue_action}
+    {warranty_action}
+    {prior_finance_html}
+    {visits_html}
     <section class="card owner-service-notes" id="service-notes">
       <div class="section-head"><div><div class="eyebrow">ZAPISY Z ANDROIDA</div>
         <h2>Notatki do zlecenia ({len(order_notes)})</h2></div></div>
