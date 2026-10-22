@@ -818,7 +818,7 @@ def service_order_detail(
         if not row:
             raise HTTPException(404, "Nie znaleziono zlecenia.")
         visit_history=con.execute(text("""
-            SELECT visit_number,is_warranty_return,received_at,completed_at,
+            SELECT visit_number,is_current,is_warranty_return,received_at,completed_at,
                    status,service_amount,material_cost,donor_material_value
             FROM service.service_order_visits
             WHERE service_order_id=:id
@@ -970,6 +970,35 @@ def service_order_detail(
         </div></section>"""
     if warranty:
         warranty_action='<p class="notice-success">Ponowne przyjęcie gwarancyjne zostało zapisane.</p>' + warranty_action
+    # A warranty return clears current-visit finances, never the prior
+    # issue ledger. Show previous settled amounts before the current card.
+    closed_prior_visits = [
+        v for v in visit_history
+        if not v["is_current"] and v["completed_at"] is not None
+    ]
+    prior_finance_html = ""
+    if row["is_warranty_repair"] or closed_prior_visits:
+        if closed_prior_visits:
+            prior_billed = sum((v["service_amount"] for v in closed_prior_visits),Decimal(0))
+            prior_material = sum((v["material_cost"] for v in closed_prior_visits),Decimal(0))
+            prior_donor = sum((v["donor_material_value"] for v in closed_prior_visits),Decimal(0))
+            prior_finance_html = (
+                '<section class="card"><h2>Poprzednio rozliczono – naprawa gwarancyjna</h2>'
+                '<p>Pierwsze i wcześniejsze wydania nie znikają po ponownym przyjęciu.</p>'
+                '<div class="metrics">'
+                f'<div class="metric"><b>Poprzednie kwoty usług</b><strong>{money(prior_billed)}</strong></div>'
+                f'<div class="metric"><b>Poprzednie materiały</b><strong>{money(prior_material)}</strong></div>'
+                f'<div class="metric"><b>Wartość materiałów dawcy</b><strong>{money(prior_donor)}</strong></div>'
+                f'<div class="metric"><b>Bieżąca wizyta (kwota usługi)</b><strong>{money(row["service_amount"])}</strong></div>'
+                '</div><p>Kwoty rozliczone w systemie nie są dowodem zapłaty. '
+                'Dopłatę lub zwrot zapisuje się odrębnie.</p></section>'
+            )
+        else:
+            prior_finance_html = (
+                '<section class="card"><h2>Historia rozliczeń gwarancyjnych</h2>'
+                '<p>Nie znaleziono zamkniętej wcześniejszej wizyty. '
+                'Nie należy interpretować braku danych jako 0 zł pobranych od klienta.</p></section>'
+            )
     visit_rows="".join(
         '<tr><td>'+str(v["visit_number"])+'</td>'
         '<td>'+("Gwarancyjna" if v["is_warranty_return"] else "Pierwsze przyjęcie")+'</td>'
@@ -1003,6 +1032,7 @@ def service_order_detail(
     {management_action}
     {issue_action}
     {warranty_action}
+    {prior_finance_html}
     {visits_html}
     <section class="card owner-service-notes" id="service-notes">
       <div class="section-head"><div><div class="eyebrow">ZAPISY Z ANDROIDA</div>
