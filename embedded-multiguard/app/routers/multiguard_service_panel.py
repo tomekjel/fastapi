@@ -634,6 +634,57 @@ def service_statistics(
     """)
 
 
+
+@router.post("/multiguard/panel/service/{order_id}/ready")
+def service_order_mark_ready(
+    order_id: uuid.UUID, csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """Owner-controlled status update; DB visit and history triggers apply."""
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowe potwierdzenie zmiany statusu.")
+    with engine.begin() as con:
+        row = con.execute(text("SELECT status FROM service.service_orders WHERE id=:id FOR UPDATE"),
+                          {"id":order_id}).mappings().first()
+        if row is None:
+            raise HTTPException(404, "Nie znaleziono zlecenia.")
+        if str(row["status"]) != "IN_SERVICE":
+            raise HTTPException(409, "Tylko sprzęt W NAPRAWIE można oznaczyć jako GOTOWY.")
+        con.execute(text("""
+            UPDATE service.service_orders
+            SET status='READY_FOR_PICKUP', client_notified_at=NULL
+            WHERE id=:id AND status='IN_SERVICE'
+        """), {"id":order_id})
+    return RedirectResponse(f"/multiguard/panel/service/{order_id}?ready=1",
+                            status_code=303,headers={"Cache-Control":"private, no-store"})
+
+
+@router.post("/multiguard/panel/service/{order_id}/client-notified")
+def service_order_mark_client_notified(
+    order_id: uuid.UUID, csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """Log manual client contact; does not send a message."""
+    if not _token_valid(csrf_token):
+        raise HTTPException(403, "Nieprawidłowe potwierdzenie powiadomienia.")
+    with engine.begin() as con:
+        row = con.execute(text("""
+            SELECT status,client_notified_at FROM service.service_orders
+            WHERE id=:id FOR UPDATE
+        """), {"id":order_id}).mappings().first()
+        if row is None:
+            raise HTTPException(404, "Nie znaleziono zlecenia.")
+        if str(row["status"]) != "READY_FOR_PICKUP":
+            raise HTTPException(409, "Powiadomienie oznacza się przy statusie GOTOWE DO ODBIORU.")
+        if row["client_notified_at"] is None:
+            con.execute(text("""
+                UPDATE service.service_orders SET client_notified_at=now()
+                WHERE id=:id AND client_notified_at IS NULL
+            """), {"id":order_id})
+    return RedirectResponse(f"/multiguard/panel/service/{order_id}?notified=1",
+                            status_code=303,headers={"Cache-Control":"private, no-store"})
+
+
 @router.post("/multiguard/panel/service/{order_id}/issue")
 def issue_service_order_from_web(
     order_id: uuid.UUID,
@@ -731,6 +782,8 @@ def service_order_detail(
     order_id: uuid.UUID,
     issued: int = Query(0),
     warranty: int = Query(0),
+    ready: int = Query(0),
+    notified: int = Query(0),
     _: None = Depends(_panel_auth),
 ):
     with engine.connect() as con:
@@ -741,6 +794,7 @@ def service_order_detail(
                    COALESCE(f.service_amount-f.material_cost,0) AS actual_profit,
                    so.intake_description,so.fault_description,
                    so.current_visit_received_at,so.is_warranty_repair,
+                   so.client_notified_at AS current_client_notified_at,
                    so.technician_notes,so.customer_notes,so.accessories_received
             FROM service.v_service_order_summary s
             JOIN service.service_orders so ON so.id=s.id
@@ -784,6 +838,7 @@ def service_order_detail(
         fact("Pierwsze przyjęcie",dt(row["received_at"])),
         fact("Bieżące przyjęcie",dt(row["current_visit_received_at"] or row["received_at"])),
         fact("Gotowe do odbioru",dt(row["ready_at"])),
+        fact("Klient powiadomiony",dt(row["current_client_notified_at"])),
         fact("Wydano",dt(row["completed_at"])),
     ])
     def note(label: str,value: object) -> str:
@@ -832,6 +887,36 @@ def service_order_detail(
                 f'<td><a{controls} href="{url}">'
                 f'{action}</a></td></tr>')
     media_rows="".join(media_row(x) for x in media)
+    management_action = ""
+    if row["status"] == "IN_SERVICE":
+        token = _csrf_token(int(time.time() // 3600))
+        management_action = f"""
+        <section class="card service-release-card"><div class="section-head">
+        <div><div class="eyebrow">OBSŁUGA ZLECENIA WWW</div>
+        <h2>Zmień status</h2><p>Bez księgowania wydania ani płatności.</p></div>
+        <form method="post" action="/multiguard/panel/service/{order_id}/ready"
+         onsubmit="return confirm('Czy sprzęt jest gotowy do odbioru?');">
+         <input type="hidden" name="csrf_token" value="{esc(token)}">
+         <button type="submit">✓ GOTOWE DO ODBIORU</button></form></div></section>"""
+    elif row["status"] == "READY_FOR_PICKUP":
+        if row["current_client_notified_at"] is None:
+            token = _csrf_token(int(time.time() // 3600))
+            management_action = f"""
+            <section class="card service-release-card"><div class="section-head">
+            <div><div class="eyebrow">KONTAKT Z KLIENTEM</div>
+            <h2>Klient powiadomiony?</h2>
+            <p>Zapisuje datę faktycznie wykonanego kontaktu. Nie wysyła SMS ani e-maila.</p></div>
+            <form method="post" action="/multiguard/panel/service/{order_id}/client-notified"
+             onsubmit="return confirm('Potwierdzasz, że klient został już powiadomiony?');">
+             <input type="hidden" name="csrf_token" value="{esc(token)}">
+             <button type="submit">✓ KLIENT POWIADOMIONY</button></form></div></section>"""
+        else:
+            management_action = '<section class="card"><h2>Klient powiadomiony</h2><p>' + esc(dt(row["current_client_notified_at"])) + '</p></section>'
+    if ready:
+        management_action = '<p class="notice-success">Zapisano status GOTOWE DO ODBIORU.</p>' + management_action
+    if notified:
+        management_action = '<p class="notice-success">Zapisano datę powiadomienia klienta.</p>' + management_action
+
     issue_action = ""
     if row["status"] == "READY_FOR_PICKUP":
         token = _csrf_token(int(time.time() // 3600))
@@ -899,9 +984,10 @@ def service_order_detail(
       <a class="button-link compact" href="/multiguard/panel/service">← WRÓĆ DO ZLECEŃ</a>
       <div class="eyebrow" style="margin-top:14px">KARTA SERWISOWA</div>
       <h1>{esc(row["reception_number"])} {status_badge(row["status"])}</h1>
-      <p>Podgląd właściciela, bez edycji danych. Przyjmowanie urządzeń ze zdjęciami pozostaje w aplikacji Android.</p>
+      <p>Podgląd właściciela oraz zmiana statusu. Przyjmowanie urządzeń ze zdjęciami pozostaje w aplikacji Android.</p>
       <div class="detail-facts">{facts}</div>
     </section>
+    {management_action}
     {issue_action}
     {warranty_action}
     {visits_html}
