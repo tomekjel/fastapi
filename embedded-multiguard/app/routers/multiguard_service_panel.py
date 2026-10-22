@@ -210,7 +210,7 @@ def owner_order_media(
 _STATUS = {
     "active": ("W trakcie naprawy", "s.status='IN_SERVICE'"),
     "ready": ("Gotowe do odbioru", "s.status='READY_FOR_PICKUP'"),
-    "completed": ("Wydane", "s.status='COMPLETED'"),
+    "completed": ("Wydane (historia)", "EXISTS (SELECT 1 FROM service.service_order_visits hv WHERE hv.service_order_id=s.id AND hv.status='COMPLETED' AND hv.completed_at IS NOT NULL)"),
     "cancelled": ("Anulowane", "s.status='CANCELLED'"),
     "all": ("Wszystkie zlecenia", ""),
 }
@@ -282,6 +282,7 @@ def service_orders(
     sql = f"""
         SELECT s.id,s.reception_number,s.status,s.received_at,s.completed_at,
                so.current_visit_received_at,so.is_warranty_repair,
+               last_issue.completed_at AS last_completed_visit_at,
                s.manufacturer,s.model,s.serial_number,s.device_type,
                s.display_name,s.phone_e164,
                latest_note.note_text AS latest_note_text,
@@ -289,6 +290,12 @@ def service_orders(
                latest_note.created_at AS latest_note_at
         FROM service.v_service_order_summary s
         JOIN service.service_orders so ON so.id=s.id
+        LEFT JOIN LATERAL (
+          SELECT v.completed_at FROM service.service_order_visits v
+          WHERE v.service_order_id=s.id AND v.status='COMPLETED'
+            AND v.completed_at IS NOT NULL
+          ORDER BY v.completed_at DESC LIMIT 1
+        ) last_issue ON TRUE
         LEFT JOIN LATERAL (
           SELECT n.note_text,n.visibility,n.created_at
           FROM service.service_order_notes n
@@ -304,7 +311,8 @@ def service_orders(
             SELECT count(*) AS all_count,
                    count(*) FILTER (WHERE status='IN_SERVICE') AS active,
                    count(*) FILTER (WHERE status='READY_FOR_PICKUP') AS ready,
-                   count(*) FILTER (WHERE status='COMPLETED') AS completed,
+                   (SELECT count(DISTINCT service_order_id) FROM service.service_order_visits
+                     WHERE status='COMPLETED' AND completed_at IS NOT NULL) AS completed,
                    count(*) FILTER (WHERE status='CANCELLED') AS cancelled
             FROM service.service_orders
         """)).mappings().one()
@@ -345,7 +353,7 @@ def service_orders(
           <td>{esc(row['display_name'] or '—')}<small class="row-sub">{esc(row['phone_e164'] or '')}</small></td>
           <td>{note_preview}</td>
           <td class="numbers">{dt(row['current_visit_received_at'] or row['received_at'])}</td>
-          <td class="numbers">{dt(row['completed_at'])}</td>
+          <td class="numbers">{dt(row['last_completed_visit_at'])}</td>
           <td><a class="button-link compact" href="/multiguard/panel/service/{row['id']}">PODGLĄD</a></td>
         </tr>""")
     table = "".join(trs) or '<tr><td colspan="8" class="muted">Brak zleceń dla wybranych filtrów.</td></tr>'
@@ -357,7 +365,12 @@ def service_orders(
     <section class="card panel-hero service-hero">
       <div class="eyebrow">MULTI-SERVIS / SERWIS WŁAŚCICIELA</div>
       <h1>Zlecenia serwisowe</h1>
-      <p>Najpierw sprawy wymagające pracy. Finanse zbiorcze są dostępne w <a href="/multiguard/panel/statistics">zestawieniu właściciela</a>.</p>
+      <p>Operacyjne zlecenia i historia wydań, również gdy sprzęt wrócił na gwarancję.</p>
+      <details class="finance-disclosure">
+        <summary>Statystyki właściciela (poufne) ▾</summary>
+        <p>W osobnym chronionym widoku możesz sprawdzić kwoty po dacie wydania.</p>
+        <a class="button-link compact" href="/multiguard/panel/statistics">OTWÓRZ STATYSTYKI</a>
+      </details>
       <div class="metrics owner-kpis">{cards}</div>
     </section>
     <section class="card">
