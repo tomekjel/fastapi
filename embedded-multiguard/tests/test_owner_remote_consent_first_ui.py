@@ -19,6 +19,14 @@ class OwnerRemoteConsentFirstTests(unittest.TestCase):
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
 
+    def test_one_click_workshop_routes_to_explicit_consent_not_unattended(self):
+        handler = ast.get_source_segment(
+            self.source, self.functions["owner_workshop_remote_request"]
+        )
+        self.assertIn("workshop.request_consent_for_owner(installation_id)", handler)
+        self.assertNotIn("workshop.request_for_owner(installation_id)", handler)
+        self.assertIn("_owner_remote_actor(csrf_token)", handler)
+
     def test_one_click_commercial_pro_handler_exists(self):
         handler = self.functions["owner_commercial_remote_request"]
         decorators = [
