@@ -3073,7 +3073,7 @@ def owner_workshop_remote_request(
     from fastapi.responses import RedirectResponse
     from app.routers import multiguard_workshop_remote as workshop
     _owner_remote_actor(csrf_token)
-    workshop.request_for_owner(installation_id)
+    workshop.request_consent_for_owner(installation_id)
     return RedirectResponse(f'/multiguard/panel/remote?selected={installation_id}',status_code=303)
 
 
