@@ -57,13 +57,40 @@ class DormantAgentConsentFirstTests(unittest.TestCase):
              patch.object(workshop, "_open", return_value=None), \
              patch.object(workshop, "_event") as event:
             engine.begin.return_value.__enter__.return_value = db
-            sid = workshop.request_for_owner(iid)
+            sid = workshop.request_consent_for_owner(iid)
             self.assertIsInstance(sid, uuid.UUID)
             db.execute.assert_called_once()
             sql, params = db.execute.call_args.args
             self.assertIn("INSERT INTO guard.workshop_remote_sessions", str(sql))
             self.assertEqual(params["iid"], iid)
             event.assert_called_once()
+
+    def test_workshop_request_does_not_bypass_pro_entitlement(self):
+        iid = uuid.uuid4()
+        db = MagicMock()
+        with patch.object(workshop, "_schema"), \
+             patch.object(workshop, "engine") as engine, \
+             patch.object(workshop, "_grant", return_value=None), \
+             patch.object(workshop, "_eligible", return_value=False):
+            engine.begin.return_value.__enter__.return_value = db
+            with self.assertRaises(Exception) as rejected:
+                workshop.request_consent_for_owner(iid)
+            self.assertEqual(rejected.exception.status_code, 403)
+            db.execute.assert_not_called()
+
+    def test_no_second_workshop_request_when_previous_is_active(self):
+        iid = uuid.uuid4()
+        db = MagicMock()
+        with patch.object(workshop, "_schema"), \
+             patch.object(workshop, "engine") as engine, \
+             patch.object(workshop, "_grant", return_value={"edition": "PRO", "enabled": True}), \
+             patch.object(workshop, "_eligible", return_value=True), \
+             patch.object(workshop, "_open", return_value={"status": "REQUESTED"}):
+            engine.begin.return_value.__enter__.return_value = db
+            with self.assertRaises(Exception) as rejected:
+                workshop.request_consent_for_owner(iid)
+            self.assertEqual(rejected.exception.status_code, 409)
+            db.execute.assert_not_called()
 
     def test_workshop_cannot_connect_without_verified_mesh_identity(self):
         sid = uuid.uuid4()
