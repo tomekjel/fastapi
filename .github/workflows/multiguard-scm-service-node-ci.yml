@@ -1,0 +1,43 @@
+name: MultiGuard persistent MeshAgent SCM node verification
+
+on:
+  push:
+    branches: [fix/owner-pro-remote-first-consent-20261018]
+    paths:
+      - '.github/workflows/multiguard-scm-service-node-ci.yml'
+      - 'embedded-multiguard/app/routers/multiguard_meshcentral.py'
+      - 'embedded-multiguard/app/routers/multiguard_remote.py'
+      - 'embedded-multiguard/app/routers/multiguard_workshop_remote.py'
+      - 'embedded-multiguard/tests/test_meshcentral_persistent_service.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile native service backend integration (no live server)
+        run: |
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_meshcentral.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_workshop_remote.py
+          python3 -m py_compile embedded-multiguard/tests/test_meshcentral_persistent_service.py
+      - name: Verify the new permanent service node and consent-group checks
+        run: python3 -m unittest discover -s embedded-multiguard/tests -p 'test_meshcentral_persistent_service.py' -v
+      - name: Reject legacy ephemeral-only verification on both remote routes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for path in (
+              Path("embedded-multiguard/app/routers/multiguard_remote.py"),
+              Path("embedded-multiguard/app/routers/multiguard_workshop_remote.py"),
+          ):
+              assert "persistent_service=True" in path.read_text(), path
+          print("PASS: commercial PRO and workshop require online permanent MeshAgent")
+          PY
