@@ -172,11 +172,13 @@ def verify_registered_node(node_id: str) -> bool:
     return found
 
 
-def verify_session_node(local_id: str, session_id: str) -> str:
-    """Exact live node + explicitly configured consent group + session marker.
+def verify_session_node(local_id: str, session_id: str, *, persistent_service: bool = False) -> str:
+    """Check exact live MeshCentral node in the pinned consent-only group.
 
-    Used only by authenticated, consented sessions. No hostname matching,
-    automatic group discovery, or adoption of pre-existing agents.
+    With persistent_service=True a Windows SCM agent survives many sessions,
+    so its display name is not the session UUID. Only a separately authenticated
+    installation, accepted backend session and one-to-one node binding may
+    invoke this verifier. Group, online state and node identity remain mandatory.
     """
     import json
     import uuid
@@ -218,9 +220,14 @@ def verify_session_node(local_id: str, session_id: str) -> str:
     # MeshCtrl --json can omit the transient 'conn' field even while the
     # text listing includes it. Check identity/group/name in JSON first;
     # absent connectivity requires an independent, exact-ID text check.
+    name = record.get("name")
     if (record.get("meshid") != group
-            or record.get("name") != f"MultiGuard-{session_id}"):
-        raise MeshCentralError("Agent nie potwierdził grupy lub sesji.")
+            or not isinstance(name, str)
+            or not name.strip()
+            or len(name) > 160):
+        raise MeshCentralError("Agent nie potwierdził grupy i własnej tożsamości.")
+    if not persistent_service and name != f"MultiGuard-{session_id}":
+        raise MeshCentralError("Agent nie potwierdził identyfikatora sesji.")
     connected = record.get("conn")
     if connected is None:
         import csv
@@ -231,7 +238,7 @@ def verify_session_node(local_id: str, session_id: str) -> str:
         for fields in csv.reader(listing.splitlines(), skipinitialspace=True):
             if len(fields) != 5 or fields[0].strip() != local_id:
                 continue
-            if fields[1].strip() != f"MultiGuard-{session_id}":
+            if fields[1].strip() != name:
                 raise MeshCentralError("Niespójna tożsamość agenta MeshCentral.")
             value = fields[3].strip()
             if not re.fullmatch(r"[0-9]+", value):
