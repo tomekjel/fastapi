@@ -256,6 +256,35 @@ def close_before_rights_change(db, iid: uuid.UUID):
     _open(db, iid, entitlement_lost=True)
 
 
+def request_consent_for_owner(iid: uuid.UUID):
+    """OWNER's explicit one-click request; NEVER unattended and no preexisting node.
+
+    The dormant MeshAgent is enrolled only after the client independently
+    accepts this specific server-created session. OWNER cannot set CONSENTED.
+    """
+    _schema()
+    with engine.begin() as db:
+        grant = _grant(db, iid)
+        if not _eligible(grant):
+            raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
+        # Expire/revoke a stale session and forbid a second concurrent request.
+        # A pre-consent MeshCentral node is deliberately NOT required.
+        if _open(db, iid):
+            raise HTTPException(409, "Dla komputera istnieje już otwarta sesja.")
+        now = _now()
+        sid = uuid.uuid4()
+        db.execute(text("""
+            INSERT INTO guard.workshop_remote_sessions(
+                id,installation_id,status,expires_at,last_activity_at)
+            VALUES (:sid,:iid,'REQUESTED',:expires,:now)
+        """), {
+            "sid": sid, "iid": iid,
+            "expires": now + timedelta(minutes=5), "now": now,
+        })
+        _event(db, sid, "OWNER_REQUESTED", "TECHNICIAN")
+        return sid
+
+
 def request_for_owner(iid: uuid.UUID):
     """Unattended OWNER access requires independent ownership attestation.
 
