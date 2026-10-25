@@ -1,14 +1,7 @@
 name: MultiGuard persistent MeshAgent SCM node verification
 
+# Budget control: run this short regression explicitly when backend changes are ready.
 on:
-  push:
-    branches: [fix/owner-pro-remote-first-consent-20261018]
-    paths:
-      - '.github/workflows/multiguard-scm-service-node-ci.yml'
-      - 'embedded-multiguard/app/routers/multiguard_meshcentral.py'
-      - 'embedded-multiguard/app/routers/multiguard_remote.py'
-      - 'embedded-multiguard/app/routers/multiguard_workshop_remote.py'
-      - 'embedded-multiguard/tests/test_meshcentral_persistent_service.py'
   workflow_dispatch:
 
 permissions:
