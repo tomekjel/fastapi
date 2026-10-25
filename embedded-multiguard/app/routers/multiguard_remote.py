@@ -358,7 +358,7 @@ def agent_session_mesh_enroll(body: AgentSessionMeshBody):
     with engine.connect() as db:
         validate(db)
     try:
-        node = meshcentral.verify_session_node(body.meshNodeId, str(body.sessionId))
+        node = meshcentral.verify_session_node(body.meshNodeId, str(body.sessionId), persistent_service=True)
     except meshcentral.MeshCentralError as exc:
         raise HTTPException(409, "Serwer nie potwierdził jeszcze agenta tej sesji.") from exc
     with engine.begin() as db:
