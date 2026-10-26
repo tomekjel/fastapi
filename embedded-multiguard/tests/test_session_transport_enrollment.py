@@ -221,11 +221,49 @@ class SessionTransportTests(unittest.TestCase):
         self.assertIn("WHERE mesh_node_id=:node AND id<>:iid",general_src)
         self.assertIn("WHERE mesh_node_id=:node AND installation_id<>:iid",paid_src)
         self.assertIn("SELECT pg_advisory_xact_lock(hashtext(:node))",general_src)
-        self.assertIn("THEN guard.workshop_mesh_nodes.session_id ELSE NULL END",general_src)
+        self.assertIn("THEN owned.session_id ELSE NULL END",general_src)
         # A still-active opposite-mode share must be revoked/ended first.
         self.assertIn("SELECT 1 FROM guard.remote_sessions",session_src)
         self.assertIn("SELECT 1 FROM guard.remote_sessions",general_src)
         self.assertIn("SELECT 1 FROM guard.workshop_remote_sessions",paid_src)
+
+    def test_workshop_pre_enroll_allows_own_commercial_node_not_foreign(self):
+        body=workshop.WorkshopMeshEnrollment(**{
+            key: val for key,val in self.auth().items() if key != "sessionId"
+        }, discoveryCredential="x"*32)
+        def run(foreign_owner=None, active_commercial=False):
+            db=MagicMock()
+            def execute(statement, params=None):
+                sql=str(statement)
+                result=MagicMock()
+                if "SELECT enabled,edition FROM guard.workshop_grants" in sql:
+                    result.mappings.return_value.first.return_value={"enabled":True,"edition":"PRO"}
+                elif "SELECT 1 FROM guard.installations" in sql:
+                    self.assertEqual(params["iid"],self.iid)
+                    result.first.return_value=((1,) if foreign_owner and foreign_owner != self.iid else None)
+                elif "SELECT 1 FROM guard.remote_sessions" in sql:
+                    result.first.return_value=((1,) if active_commercial else None)
+                elif "SELECT mesh_node_id FROM guard.workshop_mesh_nodes" in sql:
+                    result.scalar_one_or_none.return_value=self.node
+                return result
+            db.execute.side_effect=execute
+            grant={"mesh_node_id":self.node,"edition":"PRO","enabled":True,"status":"NEW"}
+            with patch.object(workshop,"_schema"), patch.object(workshop,"_authenticate"), \
+                 patch.object(workshop,"_grant",return_value=grant), \
+                 patch.object(workshop,"_eligible",return_value=True), \
+                 patch.object(workshop,"engine") as engine, \
+                 patch.object(mesh,"verify_registered_node",return_value=True):
+                engine.connect.return_value.__enter__.return_value=db
+                engine.begin.return_value.__enter__.return_value=db
+                result=workshop.workshop_mesh_enroll(body)
+            return result
+        self.assertTrue(run(foreign_owner=self.iid)["accepted"])
+        with self.assertRaises(HTTPException) as caught:
+            run(foreign_owner=uuid.uuid4())
+        self.assertEqual(caught.exception.status_code,409)
+        with self.assertRaises(HTTPException) as caught:
+            run(foreign_owner=self.iid,active_commercial=True)
+        self.assertEqual(caught.exception.status_code,409)
 
     def test_workshop_consent_refreshes_enrollment_deadline(self):
         # Consent near the end of the original request must still allow agent enrollment.
