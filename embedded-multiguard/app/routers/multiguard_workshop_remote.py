@@ -330,7 +330,12 @@ def workshop_session_mesh_enroll(request: WorkshopSessionMeshEnrollment):
         elif grant.get("mesh_node_id") not in (None, "", node):
             raise HTTPException(409, "Bieżąca sesja ma już innego agenta.")
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:node))"), {"node":node})
-        if db.execute(text("SELECT 1 FROM guard.installations WHERE mesh_node_id=:node"), {"node":node}).first():
+        # Same physical installation uses ONE long-lived MeshAgent SCM node
+        # across both licence modes. Do not accept a different installation.
+        if db.execute(text("""
+            SELECT 1 FROM guard.installations
+            WHERE mesh_node_id=:node AND id<>:iid LIMIT 1
+        """), {"node":node, "iid":request.installationId}).first():
             raise HTTPException(409, "Agent jest przypisany do innej instalacji.")
         if db.execute(text("""SELECT 1 FROM guard.workshop_mesh_nodes
                 WHERE mesh_node_id=:node AND installation_id<>:iid"""),
@@ -380,12 +385,23 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
         grant = _grant(db, request.installationId)
         if not _eligible(grant):
             raise HTTPException(403, "Instalacja nie ma aktywnego serwisowego Pro.")
+        # Serialize the cross-mode association with commercial enrollment
+        # using exactly the same advisory lock on the full MeshCentral node.
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:node))"), {"node":node})
         commercial = db.execute(text("""
             SELECT 1 FROM guard.installations
-            WHERE mesh_node_id=:node AND is_current=TRUE LIMIT 1
-        """), {"node":node}).first()
+            WHERE mesh_node_id=:node AND id<>:iid LIMIT 1
+        """), {"node":node, "iid":request.installationId}).first()
         if commercial:
             raise HTTPException(409, "Węzeł należy do innego typu instalacji.")
+        # Avoid destroying an already active commercial viewer when an
+        # installation switches to workshop mode with the same service.
+        if db.execute(text("""
+            SELECT 1 FROM guard.remote_sessions
+            WHERE installation_id=:iid AND mesh_public_id IS NOT NULL
+              AND status IN ('CONNECT_READY','ACTIVE') LIMIT 1
+        """), {"iid":request.installationId}).first():
+            raise HTTPException(409, "Najpierw zakończ aktywne udostępnienie komercyjne.")
         assigned = db.execute(text("""
             SELECT mesh_node_id FROM guard.workshop_mesh_nodes
             WHERE installation_id=:iid FOR UPDATE
@@ -403,7 +419,10 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
             INSERT INTO guard.workshop_mesh_nodes (installation_id,mesh_node_id)
             VALUES (:iid,:node)
             ON CONFLICT (installation_id) DO UPDATE
-            SET mesh_node_id=EXCLUDED.mesh_node_id,session_id=NULL,updated_at=now()
+            SET mesh_node_id=EXCLUDED.mesh_node_id,
+                session_id=CASE WHEN guard.workshop_mesh_nodes.mesh_node_id=EXCLUDED.mesh_node_id
+                    THEN guard.workshop_mesh_nodes.session_id ELSE NULL END,
+                updated_at=now()
         """), {"iid":request.installationId, "node":node})
     return {"requestId":request.requestId,"accepted":True,
             "meshReady":True,"serverTime":_now().isoformat()}
