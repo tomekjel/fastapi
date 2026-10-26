@@ -341,6 +341,15 @@ def workshop_session_mesh_enroll(request: WorkshopSessionMeshEnrollment):
                 WHERE mesh_node_id=:node AND installation_id<>:iid"""),
                 {"node":node,"iid":request.installationId}).first():
             raise HTTPException(409, "Agent jest przypisany do innej instalacji serwisowej.")
+        # A commercial session belonging to this same installation may
+        # have an active public share: do not silently reuse the transport
+        # while that viewer is still connected/authorized.
+        if db.execute(text("""
+            SELECT 1 FROM guard.remote_sessions
+            WHERE installation_id=:iid AND mesh_public_id IS NOT NULL
+              AND status IN ('CONNECT_READY','ACTIVE') LIMIT 1
+        """), {"iid":request.installationId}).first():
+            raise HTTPException(409, "Najpierw zakończ aktywne udostępnienie komercyjne.")
         db.execute(text("""INSERT INTO guard.workshop_mesh_nodes(installation_id,mesh_node_id,session_id)
             VALUES (:iid,:node,:sid) ON CONFLICT(installation_id) DO UPDATE
             SET mesh_node_id=EXCLUDED.mesh_node_id,session_id=EXCLUDED.session_id,updated_at=now()"""),
