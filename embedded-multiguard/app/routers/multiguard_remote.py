@@ -366,8 +366,21 @@ def agent_session_mesh_enroll(body: AgentSessionMeshBody):
         if installation.get("mesh_node_id") not in (None, "", node):
             raise HTTPException(409, "Instalacja ma już innego agenta; wymagana kontrola OWNER.")
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:node))"), {"node":node})
-        if db.execute(text("SELECT 1 FROM guard.workshop_mesh_nodes WHERE mesh_node_id=:node"), {"node":node}).first():
+        # One bundled SCM MeshAgent retains its node across PRO license
+        # modes. Never adopt a node bound to a DIFFERENT installation.
+        if db.execute(text("""
+            SELECT 1 FROM guard.workshop_mesh_nodes
+            WHERE mesh_node_id=:node AND installation_id<>:iid LIMIT 1
+        """), {"node":node, "iid":installation["id"]}).first():
             raise HTTPException(409, "Agent jest przypisany do innej instalacji.")
+        # An old workshop viewer must be explicitly ended/revoked before
+        # reusing this identity for commercial remote access.
+        if db.execute(text("""
+            SELECT 1 FROM guard.workshop_remote_sessions
+            WHERE installation_id=:iid AND mesh_public_id IS NOT NULL
+              AND status IN ('CONNECT_READY','ACTIVE') LIMIT 1
+        """), {"iid":installation["id"]}).first():
+            raise HTTPException(409, "Najpierw zakończ aktywne udostępnienie serwisowe.")
         db.execute(text("UPDATE guard.installations SET mesh_node_id=:node WHERE id=:iid"),
                    {"node":node,"iid":installation["id"]})
         _audit(db, body.sessionId, "SESSION_AGENT_VERIFIED", "CLIENT")
