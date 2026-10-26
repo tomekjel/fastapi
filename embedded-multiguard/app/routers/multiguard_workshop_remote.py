@@ -425,12 +425,12 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
             if open_session:
                 raise HTTPException(409, "Nie można zmieniać węzła podczas sesji.")
         db.execute(text("""
-            INSERT INTO guard.workshop_mesh_nodes (installation_id,mesh_node_id)
+            INSERT INTO guard.workshop_mesh_nodes AS owned (installation_id,mesh_node_id)
             VALUES (:iid,:node)
             ON CONFLICT (installation_id) DO UPDATE
             SET mesh_node_id=EXCLUDED.mesh_node_id,
-                session_id=CASE WHEN guard.workshop_mesh_nodes.mesh_node_id=EXCLUDED.mesh_node_id
-                    THEN guard.workshop_mesh_nodes.session_id ELSE NULL END,
+                session_id=CASE WHEN owned.mesh_node_id=EXCLUDED.mesh_node_id
+                    THEN owned.session_id ELSE NULL END,
                 updated_at=now()
         """), {"iid":request.installationId, "node":node})
     return {"requestId":request.requestId,"accepted":True,
