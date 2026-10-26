@@ -171,6 +171,62 @@ class SessionTransportTests(unittest.TestCase):
             with self.assertRaises(HTTPException): workshop.workshop_session_mesh_enroll(body)
             self.assertFalse(any("INSERT INTO guard.workshop_mesh_nodes" in str(c.args[0]) for c in db.execute.call_args_list))
 
+    def test_commercial_mode_reuses_own_workshop_node_but_never_a_foreign_one(self):
+        # The single installer/service keeps the same node across PRO modes.
+        # Any other installation's binding remains an explicit HTTP 409.
+        body=paid.AgentSessionMeshBody(**self.auth(),installationCredential="x"*32)
+        own_id=self.iid
+        install={"id":own_id,"service_device_id":None,"mesh_node_id":self.node}
+        self.row["installation_id"]=own_id
+        def run(foreign_owner=None, active_workshop_share=False):
+            db=MagicMock()
+            def execute(query, params=None):
+                statement=str(query)
+                result=MagicMock()
+                if "SELECT * FROM guard.installations" in statement:
+                    result.mappings.return_value.first.return_value=install
+                elif "SELECT * FROM guard.remote_sessions WHERE id=:sid" in statement:
+                    result.mappings.return_value.first.return_value=self.row
+                elif "SELECT 1 FROM guard.workshop_mesh_nodes" in statement:
+                    self.assertEqual(params["iid"], own_id)
+                    result.first.return_value=((1,) if foreign_owner and foreign_owner != own_id else None)
+                elif "SELECT 1 FROM guard.workshop_remote_sessions" in statement:
+                    result.first.return_value=((1,) if active_workshop_share else None)
+                return result
+            db.execute.side_effect=execute
+            with patch.object(workshop,"_schema"), patch.object(paid,"engine") as engine, \
+                 patch.object(paid,"_require_agent",return_value=install), \
+                 patch.object(paid,"_has_active_remote_pro",return_value=True), \
+                 patch.object(paid,"_plan_change_pending",return_value=False), \
+                 patch.object(mesh,"verify_session_node",return_value=self.node), \
+                 patch.object(paid,"_audit"):
+                engine.connect.return_value.__enter__.return_value=db
+                engine.begin.return_value.__enter__.return_value=db
+                return paid.agent_session_mesh_enroll(body)
+        self.assertTrue(run(foreign_owner=own_id)["accepted"])
+        with self.assertRaises(HTTPException) as caught:
+            run(foreign_owner=uuid.uuid4())
+        self.assertEqual(caught.exception.status_code,409)
+        with self.assertRaises(HTTPException) as caught:
+            run(foreign_owner=own_id, active_workshop_share=True)
+        self.assertEqual(caught.exception.status_code,409)
+
+    def test_workshop_cross_mode_binds_same_install_only_and_preserves_session(self):
+        # Validate both session enrollment and pre-enrollment SQL guards.
+        import inspect
+        session_src=inspect.getsource(workshop.workshop_session_mesh_enroll)
+        general_src=inspect.getsource(workshop.workshop_mesh_enroll)
+        paid_src=inspect.getsource(paid.agent_session_mesh_enroll)
+        self.assertIn("WHERE mesh_node_id=:node AND id<>:iid",session_src)
+        self.assertIn("WHERE mesh_node_id=:node AND id<>:iid",general_src)
+        self.assertIn("WHERE mesh_node_id=:node AND installation_id<>:iid",paid_src)
+        self.assertIn("SELECT pg_advisory_xact_lock(hashtext(:node))",general_src)
+        self.assertIn("THEN guard.workshop_mesh_nodes.session_id ELSE NULL END",general_src)
+        # A still-active opposite-mode share must be revoked/ended first.
+        self.assertIn("SELECT 1 FROM guard.remote_sessions",session_src)
+        self.assertIn("SELECT 1 FROM guard.remote_sessions",general_src)
+        self.assertIn("SELECT 1 FROM guard.workshop_remote_sessions",paid_src)
+
     def test_workshop_consent_refreshes_enrollment_deadline(self):
         # Consent near the end of the original request must still allow agent enrollment.
         body = workshop.WorkshopDecision(**self.auth(), discoveryCredential="x"*32,
