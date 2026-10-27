@@ -91,6 +91,93 @@ class SessionTransportTests(unittest.TestCase):
             with self.subTest(lines=lines[:16]), self.assertRaises(mesh.MeshCentralError):
                 check(lines)
 
+    def test_local_standing_opt_in_requires_explicit_user_action_and_exact_owner_receipt(self):
+        now=datetime.now(timezone.utc)
+        req=workshop.WorkshopStandingAttestation(
+            requestId=str(uuid.uuid4()),nonce=str(uuid.uuid4()),sentAt=now,
+            installationId=self.iid,deviceId="d"*32,
+            discoveryCredential="c"*64,explicitConsent=True,
+            acknowledgedConsentSha256="a"*64,
+        )
+        # Pydantic must reject an absent or false interactive confirmation.
+        with self.assertRaises(Exception):
+            workshop.WorkshopStandingAttestation(
+                requestId=req.requestId,nonce=req.nonce,sentAt=now,
+                installationId=self.iid,deviceId=req.deviceId,
+                discoveryCredential=req.discoveryCredential,
+                explicitConsent=False,acknowledgedConsentSha256="a"*64)
+        grant={"status":"WAITING","edition":"PRO","enabled":True,
+               "mesh_node_id":self.node}
+        valid={
+            "approved_mesh_node_id":self.node,"device_scope":"CLIENT_DIAGNOSTIC",
+            "owner_approved_at":now,"local_opt_in_attested_at":None,
+            "prior_consent_sha256":"a"*64,"revoked_at":None,
+        }
+        def check(record, grant_value=grant, expected=None):
+            db=MagicMock()
+            statements=[]
+            def execute(statement,params=None):
+                sql=str(statement);statements.append(sql)
+                result=MagicMock()
+                if "FROM guard.workshop_standing_remote_authorizations" in sql:
+                    result.mappings.return_value.first.return_value=record
+                return result
+            db.execute.side_effect=execute
+            with patch.object(workshop,"_schema"), patch.object(workshop,"_authenticate") as auth, \
+                 patch.object(workshop,"engine") as engine, \
+                 patch.object(workshop,"_grant",return_value=grant_value):
+                engine.begin.return_value.__enter__.return_value=db
+                if expected is not None:
+                    with self.assertRaises(HTTPException) as caught:
+                        workshop.workshop_standing_attest(req)
+                    self.assertEqual(caught.exception.status_code,expected)
+                else:
+                    result=workshop.workshop_standing_attest(req)
+                    self.assertEqual(result,{"requestId":req.requestId,
+                        "localOptInAttested":True,"unattendedReady":False})
+                auth.assert_called_once_with(req)
+            return statements
+        statements=check(valid)
+        self.assertTrue(any("local_opt_in_attested_at=:now" in x for x in statements))
+        self.assertTrue(any("'LOCAL_OPT_IN_ATTESTED'" in x for x in statements))
+        for record in (
+            None,
+            {**valid,"owner_approved_at":None},
+            {**valid,"revoked_at":now},
+            {**valid,"approved_mesh_node_id":"node//"+"B"*64},
+            {**valid,"prior_consent_sha256":"b"*64},
+        ):
+            with self.subTest(record=record):
+                self.assertFalse(any("UPDATE" in x for x in check(record,expected=403)))
+        check({**valid,"local_opt_in_attested_at":now},expected=409)
+        check(valid,grant_value={**grant,"edition":"STANDARD"},expected=403)
+        check(valid,grant_value={**grant,"status":"ASSIGNED"},expected=403)
+
+    def test_local_standing_status_is_read_only_and_never_declares_ready(self):
+        req=workshop.WorkshopAuth(
+            requestId=str(uuid.uuid4()),nonce=str(uuid.uuid4()),
+            sentAt=datetime.now(timezone.utc),installationId=self.iid,
+            deviceId="d"*32,discoveryCredential="c"*64)
+        grant={"status":"WAITING","edition":"PRO","enabled":True,
+               "mesh_node_id":self.node}
+        record={"approved_mesh_node_id":self.node,
+                "device_scope":"CLIENT_DIAGNOSTIC",
+                "owner_approved_at":datetime.now(timezone.utc),
+                "revoked_at":None,"local_opt_in_attested_at":None,
+                "prior_consent_sha256":"a"*64}
+        db=MagicMock()
+        with patch.object(workshop,"_schema"),patch.object(workshop,"_authenticate"), \
+             patch.object(workshop,"_grant",return_value=grant), \
+             patch.object(workshop,"standing_authorization_record",return_value=record), \
+             patch.object(workshop,"engine") as engine:
+            engine.connect.return_value.__enter__.return_value=db
+            result=workshop.workshop_standing_status(req)
+        self.assertEqual(result["deviceScope"],"CLIENT_DIAGNOSTIC")
+        self.assertTrue(result["ownerPrepared"])
+        self.assertFalse(result["localOptInAttested"])
+        self.assertFalse(result["unattendedReady"])
+        self.assertEqual(db.execute.call_count,0)
+
     def test_owner_documented_prior_consent_requires_device_binding_and_local_opt_in(self):
         grant={"status":"WAITING","edition":"PRO","enabled":True,
                "mesh_node_id":self.node}
