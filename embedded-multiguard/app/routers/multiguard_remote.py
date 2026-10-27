@@ -1362,6 +1362,34 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
 
 
 
+@router.get("/panel/remote-api/entitlement/{installation_id}")
+def panel_remote_entitlement_diagnostic(
+    installation_id: uuid.UUID, _: None = Depends(_panel_auth),
+):
+    """Owner-only mode diagnosis; read backend licence truth, never issue access."""
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    with engine.connect() as db:
+        grant = workshop._grant(db, installation_id)
+    mode = workshop.remote_entitlement_mode(grant)
+    return JSONResponse({
+        "mode": mode,
+        "serviceRemoteEligible": mode == "SERVICE_PRO",
+        "customerLicenceRoute": mode == "CUSTOMER_LICENSE",
+        # No standing-access share is enabled until independent signed
+        # device authorization, owner attestation and dedicated MeshCentral
+        # group are wired and checked at connection time.
+        "unattendedReady": False,
+        "reasonCode": (
+            "CHECK_CUSTOMER_PRO_AND_USE_PER_SESSION_CONSENT"
+            if mode == "CUSTOMER_LICENSE"
+            else "SERVICE_PRO_NEEDS_DEVICE_BOUND_STANDING_AUTHORIZATION"
+            if mode == "SERVICE_PRO"
+            else "REMOTE_NOT_ELIGIBLE"
+        ),
+    }, headers={"Cache-Control": "private, no-store"})
+
+
 @router.get("/panel/remote-api/workshop/active/{installation_id}")
 def panel_workshop_active(installation_id: uuid.UUID, _: None = Depends(_panel_auth)):
     """Resume a workshop session from server state, never from browser storage."""
