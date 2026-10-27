@@ -6,6 +6,7 @@ on:
     paths:
       - embedded-multiguard/app/routers/multiguard_remote_policy.py
       - embedded-multiguard/app/routers/multiguard_workshop_remote.py
+      - embedded-multiguard/app/routers/multiguard_meshcentral.py
       - embedded-multiguard/app/routers/multiguard_remote.py
       - embedded-multiguard/tests/test_remote_consent_policy.py
       - embedded-multiguard/tests/test_session_transport_enrollment.py
@@ -23,7 +24,7 @@ jobs:
           persist-credentials: false
       - name: Python modules compile (no server access)
         run: |
-          python3 -m compileall -q embedded-multiguard/app/routers/multiguard_remote_policy.py embedded-multiguard/app/routers/multiguard_workshop_remote.py embedded-multiguard/app/routers/multiguard_remote.py
+          python3 -m compileall -q embedded-multiguard/app/routers/multiguard_remote_policy.py embedded-multiguard/app/routers/multiguard_workshop_remote.py embedded-multiguard/app/routers/multiguard_remote.py embedded-multiguard/app/routers/multiguard_meshcentral.py
       - name: Pure authorization matrix (no deps, no server)
         run: |
           python3 -m unittest discover -s embedded-multiguard/tests -p 'test_remote_consent_policy.py' -v
