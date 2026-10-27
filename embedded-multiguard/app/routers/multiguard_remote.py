@@ -4,7 +4,7 @@ import json
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Header
 from fastapi.responses import JSONResponse
@@ -59,6 +59,12 @@ class AgentSessionMeshBody(AgentRemoteAuthBody):
 class OwnerRemoteCreateBody(BaseModel):
     supportRequestId: uuid.UUID
     requestFiles: bool = False
+
+
+class OwnerStandingApprovalBody(BaseModel):
+    deviceScope: Literal["OWNED_WORKSHOP", "CLIENT_DIAGNOSTIC"]
+    priorConsentSha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    explicitConfirmation: Literal["CONFIRM_PRIOR_WRITTEN_CONSENT"]
 
 
 class MeshBindBody(BaseModel):
@@ -1400,6 +1406,23 @@ def panel_remote_entitlement_diagnostic(
             else "REMOTE_NOT_ELIGIBLE"
         ),
     }, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/panel/remote-api/standing/{installation_id}/prepare")
+def panel_owner_prepare_standing_remote_authorization(
+    installation_id: uuid.UUID,
+    body: OwnerStandingApprovalBody,
+    _: None = Depends(_panel_auth),
+    __: None = Depends(_owner_panel_csrf),
+):
+    """Record independent OWNER prior-consent document, never grant access."""
+    from app.routers import multiguard_workshop_remote as workshop
+    return JSONResponse(
+        workshop.prepare_standing_authorization_for_owner(
+            installation_id, body.deviceScope, body.priorConsentSha256
+        ),
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.post("/panel/remote-api/standing/{installation_id}/revoke")
