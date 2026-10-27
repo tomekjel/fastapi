@@ -91,6 +91,35 @@ class SessionTransportTests(unittest.TestCase):
             with self.subTest(lines=lines[:16]), self.assertRaises(mesh.MeshCentralError):
                 check(lines)
 
+    def test_paid_pro_is_never_treated_as_service_pro_by_remote_poll(self):
+        body = workshop.WorkshopAuth(
+            requestId="test-request-id", nonce="test-nonce-id",
+            sentAt=datetime.now(timezone.utc), installationId=self.iid,
+            deviceId="test-device-123456789", discoveryCredential="x"*32,
+        )
+        for status in ("ASSIGNED", "PROVISIONED"):
+            with self.subTest(status=status), patch.object(
+                workshop.license, "_authenticate_pending",
+                return_value={"status":status},
+            ):
+                with self.assertRaises(HTTPException) as caught:
+                    workshop._authenticate(body)
+                self.assertEqual(caught.exception.status_code, 409)
+                self.assertIn("licencję klienta", caught.exception.detail)
+        for status in ("ARCHIVED", "UNINSTALLED", "IGNORED"):
+            with self.subTest(status=status), patch.object(
+                workshop.license, "_authenticate_pending",
+                return_value={"status":status},
+            ):
+                with self.assertRaises(HTTPException) as caught:
+                    workshop._authenticate(body)
+                self.assertEqual(caught.exception.status_code, 403)
+        with patch.object(
+            workshop.license, "_authenticate_pending",
+            return_value={"status":"WAITING"},
+        ):
+            self.assertEqual(workshop._authenticate(body)["status"], "WAITING")
+
     def test_unattended_blocked_without_independent_owner_attestation(self):
         with self.assertRaises(mesh.MeshCentralError):
             mesh.create_workshop_share(self.node, "Workshop", ["desktop"])
