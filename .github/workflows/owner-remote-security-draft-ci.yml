@@ -5,6 +5,8 @@ on:
       - fix/owner-pro-remote-first-consent-20261018
     paths:
       - embedded-multiguard/app/routers/multiguard_remote_policy.py
+      - embedded-multiguard/app/routers/multiguard_license.py
+      - embedded-multiguard/tests/test_standing_consent_rights_changes.py
       - embedded-multiguard/app/routers/multiguard_workshop_remote.py
       - embedded-multiguard/app/routers/multiguard_meshcentral.py
       - embedded-multiguard/app/routers/multiguard_remote.py
@@ -24,7 +26,7 @@ jobs:
           persist-credentials: false
       - name: Python modules compile (no server access)
         run: |
-          python3 -m compileall -q embedded-multiguard/app/routers/multiguard_remote_policy.py embedded-multiguard/app/routers/multiguard_workshop_remote.py embedded-multiguard/app/routers/multiguard_remote.py embedded-multiguard/app/routers/multiguard_meshcentral.py
+          python3 -m compileall -q embedded-multiguard/app/routers/multiguard_license.py embedded-multiguard/app/routers/multiguard_remote_policy.py embedded-multiguard/app/routers/multiguard_workshop_remote.py embedded-multiguard/app/routers/multiguard_remote.py embedded-multiguard/app/routers/multiguard_meshcentral.py
       - name: Pure authorization matrix (no deps, no server)
         run: |
           python3 -m unittest discover -s embedded-multiguard/tests -p 'test_remote_consent_policy.py' -v
@@ -32,5 +34,8 @@ jobs:
         run: |
           python3 -m pip install -q --disable-pip-version-check 'fastapi>=0.110,<1' 'sqlalchemy>=2,<3' 'httpx>=0.27,<1' 'python-multipart>=0.0.12,<1'
           python3 -m unittest discover -s embedded-multiguard/tests -p 'test_session_transport_enrollment.py' -v
+      - name: Verify revocation for all service-to-paid and Pro-to-Standard transitions
+        run: |
+          python3 -m unittest discover -s embedded-multiguard/tests -p 'test_standing_consent_rights_changes.py' -v
       - name: End of offline-only test
         run: echo 'No production, database, MeshCentral or client computer touched.'
