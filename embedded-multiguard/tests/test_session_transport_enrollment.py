@@ -91,6 +91,69 @@ class SessionTransportTests(unittest.TestCase):
             with self.subTest(lines=lines[:16]), self.assertRaises(mesh.MeshCentralError):
                 check(lines)
 
+    def test_owner_revocation_is_audited_and_persists_on_mesh_revoke_failure(self):
+        def run(mesh_fails):
+            db=MagicMock()
+            statements=[]
+            def execute(statement, params=None):
+                sql=str(statement)
+                statements.append(sql)
+                result=MagicMock()
+                if "FROM guard.workshop_standing_remote_authorizations" in sql:
+                    result.mappings.return_value.first.return_value={"revoked_at":None}
+                return result
+            db.execute.side_effect=execute
+            with patch.object(workshop,"_schema"), \
+                 patch.object(workshop,"engine") as engine, \
+                 patch.object(workshop,"_open",
+                              side_effect=HTTPException(502,"Mesh revoke failed")
+                              if mesh_fails else None) as close:
+                engine.begin.return_value.__enter__.return_value=db
+                if mesh_fails:
+                    with self.assertRaises(HTTPException) as caught:
+                        workshop.revoke_standing_authorization_for_owner(self.iid)
+                    self.assertEqual(caught.exception.status_code,502)
+                    self.assertIn("cofnięte",caught.exception.detail)
+                else:
+                    reply=workshop.revoke_standing_authorization_for_owner(self.iid)
+                    self.assertEqual(reply,{"revoked":True,
+                        "previouslyActive":True,"shareRevokeConfirmed":True})
+                close.assert_called_once_with(db,self.iid,entitlement_lost=True)
+            self.assertTrue(any("UPDATE guard.workshop_standing_remote_authorizations" in q
+                                and "revoked_at=:now" in q for q in statements))
+            self.assertTrue(any("INSERT INTO guard.workshop_standing_remote_audit" in q
+                                for q in statements))
+        run(mesh_fails=False)
+        run(mesh_fails=True)
+
+    def test_standing_revocation_is_idempotent_and_downgrade_invalidates(self):
+        db=MagicMock()
+        seen=[]
+        def execute(statement,params=None):
+            sql=str(statement)
+            seen.append(sql)
+            result=MagicMock()
+            if "FROM guard.workshop_standing_remote_authorizations" in sql:
+                result.mappings.return_value.first.return_value={"revoked_at":datetime.now(timezone.utc)}
+            return result
+        db.execute.side_effect=execute
+        with patch.object(workshop,"_schema"),patch.object(workshop,"engine") as engine, \
+             patch.object(workshop,"_open") as close:
+            engine.begin.return_value.__enter__.return_value=db
+            reply=workshop.revoke_standing_authorization_for_owner(self.iid)
+            self.assertEqual(reply,{"revoked":True,
+                "previouslyActive":False,"shareRevokeConfirmed":True})
+            close.assert_not_called()
+        self.assertFalse(any("INSERT INTO guard.workshop_standing_remote_audit" in q
+                             for q in seen))
+        with patch.object(workshop,"_open") as close, \
+             patch.object(workshop,"invalidate_standing_authorization") as invalidate:
+            workshop.close_before_rights_change(db,self.iid)
+            close.assert_called_once_with(db,self.iid,entitlement_lost=True)
+            invalidate.assert_called_once_with(db,self.iid,"SERVICE_RIGHTS_CHANGED")
+        with self.assertRaises(ValueError):
+            workshop.invalidate_standing_authorization(db,self.iid,"ALLOW_ALL")
+
     def test_standing_permission_needs_separate_prior_consent_and_exact_node(self):
         now=datetime.now(timezone.utc)
         grant={
