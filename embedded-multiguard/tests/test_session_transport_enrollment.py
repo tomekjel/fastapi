@@ -443,6 +443,25 @@ class SessionTransportTests(unittest.TestCase):
             verify.assert_not_called()
         self.assertEqual(caught.exception.status_code,403)
 
+    def test_workshop_poll_wire_distinguishes_standing_service_from_interactive(self):
+        # GUI must NOT attempt transient group MeshAgent enrollment for a
+        # standing service session; interactive PRO still uses local popup.
+        complete={
+            **self.row,"requested_by_name":"Multi-Servis",
+            "subject":"Diagnostyka","requested_capabilities":["desktop"],
+            "granted_capabilities":["desktop"],
+            "requested_at":datetime.now(timezone.utc),
+            "connected_at":None,"reconnect_until":None,
+            "last_error":None,
+        }
+        self.assertEqual(workshop._public({
+            **complete,"authorization_kind":"STANDING_SERVICE",
+        })["authorizationKind"],"STANDING_SERVICE")
+        self.assertEqual(workshop._public({
+            **complete,"authorization_kind":"SESSION_CONSENT",
+        })["authorizationKind"],"SESSION_CONSENT")
+        self.assertEqual(workshop._public(complete)["authorizationKind"],"SESSION_CONSENT")
+
     def test_independently_approved_and_live_service_pro_can_request_desktop_only(self):
         grant={"status":"WAITING","edition":"PRO","enabled":True,
                "mesh_node_id":self.node}
