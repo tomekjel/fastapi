@@ -30,6 +30,12 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("consent.disabled = true;", self.ui)
         self.assertIn("consent.disabled = false;", self.ui)
 
+    def test_pending_session_blocks_second_consent_request(self):
+        self.assertIn("consent.disabled = true;", self.ui)
+        self.assertIn("status.textContent = 'Oczekiwanie na decyzję klienta lub przygotowanie sesji…';", self.ui)
+        self.assertIn("start.disabled = true;", self.ui)
+        self.assertIn("connect.disabled = true;", self.ui)
+
     def test_confirmation_before_network_request(self):
         handler = self.ui[self.ui.index("start.onclick = async () => {"):]
         self.assertLess(handler.index("window.confirm("), handler.index("start.disabled = true;"))
