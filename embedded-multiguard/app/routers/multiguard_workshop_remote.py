@@ -141,6 +141,14 @@ def _schema():
                    revoked_at TIMESTAMPTZ,
                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
+                """CREATE TABLE IF NOT EXISTS guard.workshop_standing_remote_audit (
+                   id BIGSERIAL PRIMARY KEY,
+                   installation_id UUID NOT NULL
+                     REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+                   action TEXT NOT NULL
+                     CHECK (action IN ('OWNER_REVOKED','SERVICE_RIGHTS_CHANGED')),
+                   actor_type TEXT NOT NULL DEFAULT 'OWNER',
+                   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
             ):
                 db.execute(text(query))
         _ready = True
@@ -312,6 +320,70 @@ def _open(db, iid, *, entitlement_lost=False):
     return active
 
 
+def invalidate_standing_authorization(db, iid, reason):
+    """Durably invalidate any prior authorization, never erase the audit trail.
+
+    Called by OWNER explicit revocation or as part of the SAME transaction
+    that removes service PRO rights. A future re-enablement requires entirely
+    new independent approvals and an up-to-date local attestation.
+    """
+    if reason not in ("OWNER_REVOKED", "SERVICE_RIGHTS_CHANGED"):
+        raise ValueError("Unrecognized standing authorization invalidation.")
+    record = db.execute(text("""
+        SELECT revoked_at
+        FROM guard.workshop_standing_remote_authorizations
+        WHERE installation_id=:iid FOR UPDATE
+    """), {"iid": iid}).mappings().first()
+    if not record or record["revoked_at"] is not None:
+        return False
+    db.execute(text("""
+        UPDATE guard.workshop_standing_remote_authorizations
+        SET revoked_at=:now,updated_at=:now
+        WHERE installation_id=:iid AND revoked_at IS NULL
+    """), {"iid":iid,"now":_now()})
+    db.execute(text("""
+        INSERT INTO guard.workshop_standing_remote_audit
+          (installation_id,action,actor_type)
+        VALUES (:iid,:action,'OWNER')
+    """), {"iid":iid,"action":reason})
+    return True
+
+
+def revoke_standing_authorization_for_owner(iid):
+    """OWNER may always revoke; MeshCentral failure is reported, never hidden.
+
+    The database revocation COMMMITS even when an external share fails to
+    revoke, so no later request can rely on this standing authorization.
+    """
+    _schema()
+    share_failure = False
+    with engine.begin() as db:
+        # This locks the specific authorization before inspecting sessions.
+        prior = db.execute(text("""
+            SELECT revoked_at
+            FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid":iid}).mappings().first()
+        if prior is None or prior["revoked_at"] is not None:
+            return {"revoked":True,"previouslyActive":False,"shareRevokeConfirmed":True}
+        try:
+            _open(db,iid,entitlement_lost=True)
+        except HTTPException as exc:
+            # Do not rollback revocation just because MeshCentral is offline.
+            # Clearly disclose to OWNER that old links may remain alive.
+            if exc.status_code not in (502, 503):
+                raise
+            share_failure = True
+        invalidate_standing_authorization(db,iid,"OWNER_REVOKED")
+    if share_failure:
+        raise HTTPException(
+            502,
+            "Stałe upoważnienie zapisano jako cofnięte, ale MeshCentral nie "
+            "potwierdził zamknięcia poprzedniego linku. Wymagana kontrola sesji.",
+        )
+    return {"revoked":True,"previouslyActive":True,"shareRevokeConfirmed":True}
+
+
 def close_before_rights_change(db, iid: uuid.UUID):
     """Called with guard.workshop_grants row locked in one DB transaction.
 
@@ -320,6 +392,7 @@ def close_before_rights_change(db, iid: uuid.UUID):
     claiming remote access was disabled.
     """
     _open(db, iid, entitlement_lost=True)
+    invalidate_standing_authorization(db,iid,"SERVICE_RIGHTS_CHANGED")
 
 
 def request_consent_for_owner(iid: uuid.UUID):
