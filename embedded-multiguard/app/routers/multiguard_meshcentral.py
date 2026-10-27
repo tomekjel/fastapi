@@ -331,6 +331,43 @@ def verify_standing_service_node(node_id: str, device_scope: str) -> str:
         connected = statuses[0]
     if type(connected) is not int or not (connected & 1):
         raise MeshCentralError("Agent serwisowy jest offline.")
+    # MeshCentral accumulates consent from domain, group, device AND user.
+    # Group enrollment alone cannot guarantee unattended access: a forced
+    # desktop consent prompt at ANY layer will block an absent client.
+    # This flag may be set ONLY after an independent on-server examination
+    # of domain/user/group consent policy; default is FAIL-CLOSED.
+    if os.getenv("MESH_CENTRAL_STANDING_POLICY_ATTESTED","") != "1":
+        raise MeshCentralError("Nie potwierdzono skutecznej polityki zgód MeshCentral.")
+    device_consent=record.get("consent",0)
+    if type(device_consent) is not int or device_consent & 8:
+        raise MeshCentralError("Urządzenie wymusza dodatkową zgodę na pulpit.")
+    groups_command=list(_base_command())
+    groups_command[groups_command.index("DeviceSharing")]="ListDeviceGroups"
+    groups_output=_run(groups_command+["--json"])
+    if len(groups_output)>2_000_000:
+        raise MeshCentralError("Zbyt duży spis grup serwisowych.")
+    try:
+        group_data=json.loads(groups_output)
+    except ValueError as exc:
+        raise MeshCentralError("Niespójna odpowiedź listy grup MeshCentral.") from exc
+    if isinstance(group_data,dict) and "meshes" in group_data:
+        group_data=group_data["meshes"]
+    if isinstance(group_data,dict):
+        groups=[dict(value, _id=value.get("_id",key))
+                for key,value in group_data.items() if isinstance(value,dict)]
+    elif isinstance(group_data,list):
+        groups=group_data
+    else:
+        raise MeshCentralError("Nierozpoznany spis grup MeshCentral.")
+    matched=[item for item in groups
+             if isinstance(item,dict) and item.get("_id")==group]
+    if len(matched)!=1:
+        raise MeshCentralError("Nie potwierdzono dokładnie jednej grupy serwisowej.")
+    group_record=matched[0]
+    group_consent=group_record.get("consent",0)
+    if (type(group_consent) is not int or group_consent & 8
+            or group_record.get("mtype") != 2):
+        raise MeshCentralError("Grupa MeshCentral wymusza dodatkową zgodę lub ma zły typ.")
     return node_id
 
 
