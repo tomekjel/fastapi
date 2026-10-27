@@ -1612,6 +1612,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         try {
           const data = await api('active/' + installation);
           if (data.session) {
+            consent.disabled = true;
             sid = data.session.sessionId;
             end.disabled = false;
             timer = setInterval(refresh, 3000);
@@ -1659,6 +1660,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
             connect.disabled = true;
             end.disabled = true;
             start.disabled = !standingEligible;
+            consent.disabled = false;
             sid = null;
             clearInterval(timer);
             timer = null;
@@ -1736,7 +1738,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         try {
           await api('sessions/' + sid + '/end','POST');
           clearInterval(timer); timer=null; sid=null;
-          connect.disabled=true; end.disabled=true; start.disabled=true;
+          connect.disabled=true; end.disabled=true; start.disabled=true; consent.disabled=true;
           await refreshApproval();
           status.textContent=standingEligible
             ?'Sesja zakończona. Możesz rozpocząć kolejne połączenie.'
