@@ -146,7 +146,7 @@ def _schema():
                    installation_id UUID NOT NULL
                      REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
                    action TEXT NOT NULL
-                     CHECK (action IN ('OWNER_REVOKED','SERVICE_RIGHTS_CHANGED')),
+                     CHECK (action IN ('OWNER_APPROVED','OWNER_REVOKED','SERVICE_RIGHTS_CHANGED')),
                    actor_type TEXT NOT NULL DEFAULT 'OWNER',
                    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
             ):
@@ -318,6 +318,72 @@ def _open(db, iid, *, entitlement_lost=False):
         _event(db, active["id"], "ENTITLEMENT_LOST" if entitlement_lost else "EXPIRED")
         return None
     return active
+
+
+def prepare_standing_authorization_for_owner(iid,device_scope,receipt_sha256):
+    """OWNER records prior written consent; cannot activate remote access.
+
+    Requires separate on-device confirmation and the correct live MeshCentral
+    group before unattended access can ever be enabled. Never accept a node
+    identifier from this request: bind exclusively to the saved installation.
+    """
+    if device_scope not in ("OWNED_WORKSHOP","CLIENT_DIAGNOSTIC"):
+        raise HTTPException(400,"Nieprawidłowy zakres zgody serwisowej.")
+    if not isinstance(receipt_sha256,str) or not re.fullmatch(r"[0-9a-f]{64}",receipt_sha256):
+        raise HTTPException(400,"Wymagany SHA-256 dokumentu zgody.")
+    _schema()
+    with engine.connect() as db:
+        grant=_grant(db,iid)
+    if not _eligible(grant) or not grant.get("mesh_node_id"):
+        raise HTTPException(403,"Wymagana aktywna instalacja serwisowa Pro powiązana z MeshAgent.")
+    pinned_node=grant["mesh_node_id"]
+    try:
+        if not meshcentral.verify_registered_node(pinned_node):
+            raise HTTPException(409,"Nie potwierdzono węzła urządzenia w MeshCentral.")
+    except meshcentral.MeshCentralError as exc:
+        raise HTTPException(502,"Nie można potwierdzić urządzenia w MeshCentral.") from exc
+    with engine.begin() as db:
+        # Lock before writing and revalidate against a concurrent licence
+        # conversion or MeshAgent node change.
+        db.execute(text("""
+            SELECT installation_id FROM guard.pending_installations
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":iid}).first()
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":iid}).first()
+        grant=_grant(db,iid)
+        if not _eligible(grant) or grant.get("mesh_node_id")!=pinned_node:
+            raise HTTPException(409,"Uprawnienia lub węzeł zmieniły się podczas potwierdzania.")
+        previous=db.execute(text("""
+            SELECT revoked_at FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":iid}).mappings().first()
+        if previous and previous["revoked_at"] is None:
+            raise HTTPException(409,"Upoważnienie jest już zapisane; najpierw je cofnij.")
+        db.execute(text("""
+            INSERT INTO guard.workshop_standing_remote_authorizations
+              (installation_id,approved_mesh_node_id,device_scope,
+               owner_approved_at,local_opt_in_attested_at,
+               prior_consent_sha256,revoked_at)
+            VALUES (:iid,:node,:scope,:now,NULL,:receipt,NULL)
+            ON CONFLICT (installation_id) DO UPDATE SET
+              approved_mesh_node_id=EXCLUDED.approved_mesh_node_id,
+              device_scope=EXCLUDED.device_scope,
+              owner_approved_at=EXCLUDED.owner_approved_at,
+              local_opt_in_attested_at=NULL,
+              prior_consent_sha256=EXCLUDED.prior_consent_sha256,
+              revoked_at=NULL,updated_at=now()
+        """),{"iid":iid,"node":pinned_node,"scope":device_scope,
+               "receipt":receipt_sha256,"now":_now()})
+        db.execute(text("""
+            INSERT INTO guard.workshop_standing_remote_audit
+              (installation_id,action,actor_type)
+            VALUES (:iid,'OWNER_APPROVED','OWNER')
+        """),{"iid":iid})
+    return {"recorded":True,"localDeviceConsentPending":True,
+            "meshGroupVerificationPending":True,"unattendedReady":False}
 
 
 def invalidate_standing_authorization(db, iid, reason):
