@@ -53,24 +53,19 @@ class RemoteConsentPolicy(unittest.TestCase):
         self.assertEqual(result.mesh_consent, "notify,bar")
         self.assertTrue(result.desktop_only)
         for missing in (
-            {"owner_approved_unattended":False},
-            {"local_opt_in_attested":False},
+            {"owner_approved_unattended": False},
+            {"local_opt_in_attested": False},
             {"mesh_group": MeshGroupClass.CONSENT},
             {"mesh_group": MeshGroupClass.OWNER_OWNED},
-            {"mesh_node_verified_live":False},
-            {"current_installation":False},
-            {"license_revoked":True},
-            {"enabled":False},
+            {"mesh_node_verified_live": False},
+            {"current_installation": False},
+            {"license_revoked": True},
+            {"enabled": False},
         ):
-            self.assert_denied(
-                RemoteMode.OWNER_UNATTENDED,
-                scope=DeviceScope.CLIENT_WORKSHOP_PRO,
-                mesh_group=MeshGroupClass.SERVICE_DIAGNOSTICS,
-                **{k:v for k,v in missing.items() if k!="mesh_group"}
-            ) if "mesh_group" not in missing else self.assert_denied(
-                RemoteMode.OWNER_UNATTENDED,
-                scope=DeviceScope.CLIENT_WORKSHOP_PRO, **missing
-            )
+            with self.subTest(missing=missing):
+                with self.assertRaises(PermissionError):
+                    authorize_share(RemoteMode.OWNER_UNATTENDED,
+                                    replace(allowed, **missing))
 
     def test_paid_pro_standard_and_unlicensed_never_get_unattended(self):
         for scope in (DeviceScope.PAID_PRO, DeviceScope.UNLICENSED):
