@@ -434,9 +434,107 @@ class SessionTransportTests(unittest.TestCase):
     def test_unattended_blocked_without_independent_owner_attestation(self):
         with self.assertRaises(mesh.MeshCentralError):
             mesh.create_workshop_share(self.node, "Workshop", ["desktop"])
-        with self.assertRaises(HTTPException) as caught:
-            workshop.request_for_owner(self.iid)
-        self.assertEqual(caught.exception.status_code, 503)
+        with patch.object(workshop,"_schema"), \
+             patch.object(workshop,"_grant",return_value=None), \
+             patch.object(workshop,"engine") as engine, \
+             patch.object(mesh,"verify_standing_service_node") as verify:
+            with self.assertRaises(HTTPException) as caught:
+                workshop.request_for_owner(self.iid)
+            verify.assert_not_called()
+        self.assertEqual(caught.exception.status_code,403)
+
+    def test_independently_approved_and_live_service_pro_can_request_desktop_only(self):
+        grant={"status":"WAITING","edition":"PRO","enabled":True,
+               "mesh_node_id":self.node}
+        approval={"approved_mesh_node_id":self.node,
+                  "device_scope":"CLIENT_DIAGNOSTIC",
+                  "owner_approved_at":datetime.now(timezone.utc),
+                  "local_opt_in_attested_at":datetime.now(timezone.utc),
+                  "prior_consent_sha256":"a"*64,"revoked_at":None}
+        def execute(statement,params=None):
+            result=MagicMock()
+            sql=str(statement)
+            if "UPDATE guard.workshop_mesh_nodes" in sql:
+                result.first.return_value=(self.iid,)
+            elif "FROM guard.remote_sessions" in sql:
+                result.first.return_value=None
+            return result
+        db=MagicMock()
+        db.execute.side_effect=execute
+        with patch.object(workshop,"_schema"), \
+             patch.object(workshop,"engine") as engine, \
+             patch.object(workshop,"_grant",return_value=grant), \
+             patch.object(workshop,"standing_authorization_record",return_value=approval), \
+             patch.object(workshop,"_open",return_value=None) as active, \
+             patch.object(workshop,"_event") as audit, \
+             patch.object(mesh,"verify_standing_service_node",return_value=self.node) as verify, \
+             patch.object(mesh,"create_share") as paid_share, \
+             patch.object(mesh,"create_standing_service_share") as service_share:
+            engine.connect.return_value.__enter__.return_value=db
+            engine.begin.return_value.__enter__.return_value=db
+            session=workshop.request_for_owner(self.iid)
+            self.assertIsInstance(session,uuid.UUID)
+            verify.assert_called_once_with(self.node,"CLIENT_DIAGNOSTIC")
+            paid_share.assert_not_called()
+            service_share.assert_not_called()
+            active.assert_called_once_with(db,self.iid)
+            audit.assert_called_once_with(db,session,"STANDING_OWNER_REQUESTED","TECHNICIAN")
+            insert=next(call for call in db.execute.call_args_list
+                        if "INSERT INTO guard.workshop_remote_sessions" in str(call.args[0]))
+            self.assertIn("'STANDING_SERVICE'",str(insert.args[0]))
+            self.assertIn("'[\"desktop\"]'::jsonb",str(insert.args[0]))
+            self.assertNotIn("files",str(insert.args[0]))
+        with patch.object(workshop,"_schema"), \
+             patch.object(workshop,"engine") as engine, \
+             patch.object(workshop,"_grant",return_value=grant), \
+             patch.object(workshop,"standing_authorization_record",
+                          return_value={**approval,"local_opt_in_attested_at":None}), \
+             patch.object(mesh,"verify_standing_service_node") as verify:
+            engine.connect.return_value.__enter__.return_value=db
+            with self.assertRaises(HTTPException) as caught:
+                workshop.request_for_owner(self.iid)
+            self.assertEqual(caught.exception.status_code,403)
+            verify.assert_not_called()
+
+    def test_standing_service_connect_rejects_revocation_after_share_creation(self):
+        row={**self.row,
+             "authorization_kind":"STANDING_SERVICE",
+             "status":"CONSENTED","requested_capabilities":["desktop"],
+             "granted_capabilities":["desktop"],"mesh_share_expires_at":None}
+        grant={"status":"WAITING","edition":"PRO","enabled":True,
+               "mesh_node_id":self.node,"mesh_session_id":self.sid}
+        approval={"approved_mesh_node_id":self.node,
+                  "device_scope":"CLIENT_DIAGNOSTIC",
+                  "owner_approved_at":datetime.now(timezone.utc),
+                  "local_opt_in_attested_at":datetime.now(timezone.utc),
+                  "prior_consent_sha256":"a"*64,"revoked_at":None}
+        db=MagicMock()
+        def execute(statement,params=None):
+            result=MagicMock()
+            if "SELECT * FROM guard.workshop_remote_sessions" in str(statement):
+                result.mappings.return_value.first.return_value=row
+            return result
+        db.execute.side_effect=execute
+        # First read valid; after external MeshCtrl creation the owner revoked.
+        with patch.object(workshop,"_schema"), \
+             patch.object(workshop,"engine") as engine, \
+             patch.object(workshop,"_grant",return_value=grant), \
+             patch.object(workshop,"standing_authorization_record",
+                          side_effect=[approval,{**approval,"revoked_at":datetime.now(timezone.utc)}]), \
+             patch.object(mesh,"create_standing_service_share",
+                          return_value=mesh.MeshShare("new-share",
+                             "https://mesh.multi-servis.pl/guest")) as create, \
+             patch.object(mesh,"verify_standing_service_node",
+                          return_value=self.node), \
+             patch.object(mesh,"revoke_share") as revoke, \
+             patch.object(mesh,"create_share") as paid_create:
+            engine.begin.return_value.__enter__.return_value=db
+            with self.assertRaises(HTTPException) as caught:
+                workshop.connect_for_owner(self.sid)
+            self.assertEqual(caught.exception.status_code,403)
+            create.assert_called_once()
+            paid_create.assert_not_called()
+            revoke.assert_called_once_with(self.node,"new-share")
 
     def test_future_service_share_is_not_silent_and_never_exposes_files(self):
         with patch.object(mesh, "_base_command", return_value=["meshctrl","DeviceSharing"]), \
