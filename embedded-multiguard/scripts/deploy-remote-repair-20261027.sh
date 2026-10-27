@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 ROOT=/opt/multiservis
+cd "$ROOT"
 ROUTERS="$ROOT/app/routers"
 SOURCE=efbf1ff607aef70042c51b861d4324dab26e777f
 BASE="https://raw.githubusercontent.com/tomekjel/fastapi/$SOURCE/embedded-multiguard/app/routers"
