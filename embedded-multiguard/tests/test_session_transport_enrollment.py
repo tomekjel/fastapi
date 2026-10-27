@@ -91,6 +91,42 @@ class SessionTransportTests(unittest.TestCase):
             with self.subTest(lines=lines[:16]), self.assertRaises(mesh.MeshCentralError):
                 check(lines)
 
+    def test_standing_permission_needs_separate_prior_consent_and_exact_node(self):
+        now=datetime.now(timezone.utc)
+        grant={
+            "status":"WAITING", "edition":"PRO", "enabled":True,
+            "mesh_node_id":self.node,
+        }
+        receipt={
+            "approved_mesh_node_id":self.node,
+            "device_scope":"CLIENT_DIAGNOSTIC",
+            "owner_approved_at":now,
+            "local_opt_in_attested_at":now,
+            "prior_consent_sha256":"a"*64,
+            "revoked_at":None,
+        }
+        valid=workshop.standing_authorization_record_valid
+        self.assertFalse(valid(grant,None))
+        self.assertTrue(valid(grant,receipt))
+        for changed in (
+            {"approved_mesh_node_id":"node//"+"Z"*64},
+            {"device_scope":"PAID_PRO"},
+            {"owner_approved_at":None},
+            {"local_opt_in_attested_at":None},
+            {"prior_consent_sha256":"not-a-digest"},
+            {"revoked_at":now},
+        ):
+            with self.subTest(changed=changed):
+                self.assertFalse(valid(grant,{**receipt,**changed}))
+        for changed in (
+            {"status":"ASSIGNED"},
+            {"enabled":False},
+            {"edition":"STANDARD"},
+            {"mesh_node_id":None},
+        ):
+            with self.subTest(changed=changed):
+                self.assertFalse(valid({**grant,**changed},receipt))
+
     def test_authoritative_backend_entitlement_modes_are_separate(self):
         base={"status":"WAITING","edition":"PRO","enabled":True}
         cases=[
