@@ -116,7 +116,7 @@ class SessionTransportTests(unittest.TestCase):
         )
         for status in ("ASSIGNED", "PROVISIONED"):
             with self.subTest(status=status), patch.object(
-                workshop.license, "_authenticate_pending",
+                workshop.license, "_authenticate_pending", create=True,
                 return_value={"status":status},
             ):
                 with self.assertRaises(HTTPException) as caught:
@@ -125,14 +125,14 @@ class SessionTransportTests(unittest.TestCase):
                 self.assertIn("licencję klienta", caught.exception.detail)
         for status in ("ARCHIVED", "UNINSTALLED", "IGNORED"):
             with self.subTest(status=status), patch.object(
-                workshop.license, "_authenticate_pending",
+                workshop.license, "_authenticate_pending", create=True,
                 return_value={"status":status},
             ):
                 with self.assertRaises(HTTPException) as caught:
                     workshop._authenticate(body)
                 self.assertEqual(caught.exception.status_code, 403)
         with patch.object(
-            workshop.license, "_authenticate_pending",
+            workshop.license, "_authenticate_pending", create=True,
             return_value={"status":"WAITING"},
         ):
             self.assertEqual(workshop._authenticate(body)["status"], "WAITING")
