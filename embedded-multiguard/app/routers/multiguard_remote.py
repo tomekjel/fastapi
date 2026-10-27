@@ -1493,9 +1493,30 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         #ws-connect{background:#16834a}
         #ws-end{background:#be3030}
         #ws-revoke{background:#823a3a}
+        #ws-prepare{background:#1764b0}
+        .ws-prior-consent{border:1px solid #8592a0;border-radius:10px;padding:15px;margin:16px 0;display:grid;gap:10px}
+        .ws-prior-consent label{display:grid;gap:5px}
+        .ws-prior-consent input[type=file],.ws-prior-consent select{max-width:100%;padding:9px}
+        .ws-prior-consent small{display:block}
         .ws-controls button:disabled{background:#737b87!important;color:#fff;cursor:not-allowed;opacity:.65}
         .ws-controls button:focus-visible{outline:3px solid #72baff;outline-offset:3px}
       </style>
+      <div class="ws-prior-consent">
+        <h2>Upoważnienie do stałej diagnostyki</h2>
+        <p>Najpierw zapisz dokument wcześniejszej zgody osoby uprawnionej do tego komputera. Plik pozostanie na Twoim komputerze: do serwera trafi jedynie SHA-256 dokumentu. Po tej operacji MultiGuard na komputerze klienta musi osobno potwierdzić upoważnienie.</p>
+        <label>Rodzaj komputera
+          <select id="ws-scope">
+            <option value="CLIENT_DIAGNOSTIC">Komputer klienta — wcześniej uzgodniona diagnostyka</option>
+            <option value="OWNED_WORKSHOP">Komputer serwisowy Multi-Servis</option>
+          </select>
+        </label>
+        <label>Plik dokumentujący wcześniejsze upoważnienie
+          <input type="file" id="ws-proof" accept=".pdf,.txt,.png,.jpg,.jpeg" />
+        </label>
+        <label><input type="checkbox" id="ws-confirm-proof" /> Potwierdzam, że właściciel lub osoba upoważniona wyraziła świadomą zgodę na dostęp zdalny do wskazanego urządzenia również podczas nieobecności.</label>
+        <button type="button" id="ws-prepare">ZAPISZ WCZEŚNIEJSZE UPOWAŻNIENIE</button>
+        <small role="status" aria-live="polite" id="ws-approval-status">Upoważnienie wymaga niezależnego potwierdzenia w aplikacji MultiGuard na tym urządzeniu.</small>
+      </div>
       <div class="ws-controls">
         <button type="button" id="ws-start">POŁĄCZ Z KOMPUTEREM</button>
         <button type="button" id="ws-connect" disabled>OTWÓRZ PULPIT</button>
@@ -1512,8 +1533,53 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       const connect = document.getElementById('ws-connect');
       const end = document.getElementById('ws-end');
       const revoke = document.getElementById('ws-revoke');
+      const prepare = document.getElementById('ws-prepare');
+      const proof = document.getElementById('ws-proof');
+      const scope = document.getElementById('ws-scope');
+      const proofConfirmed = document.getElementById('ws-confirm-proof');
+      const approvalStatus = document.getElementById('ws-approval-status');
       const status = document.getElementById('ws-status');
       let sid = null, timer = null;
+      async function refreshApproval() {
+        const r = await fetch('/multiguard/panel/remote-api/entitlement/' + installation,{
+          credentials:'same-origin',cache:'no-store'
+        });
+        if(!r.ok) throw Error('HTTP '+r.status+': '+(await r.text()).slice(0,150));
+        const state = await r.json();
+        approvalStatus.textContent = state.localOptInAttested
+          ? 'Upoważnienie potwierdzone na urządzeniu; oczekuje na weryfikację grupy MeshCentral. Dostęp bez pytania nadal jest zablokowany.'
+          : state.ownerPriorConsentPrepared
+          ? 'Dokument zgody zapisany. Oczekuje na jednorazowe potwierdzenie w aplikacji MultiGuard na wskazanym komputerze.'
+          : 'Nie zapisano bieżącego wcześniejszego upoważnienia dla tego komputera.';
+      }
+      prepare.onclick = async () => {
+        if(!proof.files || proof.files.length!==1 || !proofConfirmed.checked) {
+          approvalStatus.textContent='Wybierz dokument zgody i osobno potwierdź wcześniejsze upoważnienie.';
+          return;
+        }
+        const file=proof.files[0];
+        if(!file.size || file.size>8000000) {
+          approvalStatus.textContent='Dokument musi mieć wielkość od 1 bajtu do 8 MB.';
+          return;
+        }
+        prepare.disabled=true;
+        try {
+          const digest=await crypto.subtle.digest('SHA-256',await file.arrayBuffer());
+          const hash=Array.from(new Uint8Array(digest)).map(v=>v.toString(16).padStart(2,'0')).join('');
+          const r=await fetch('/multiguard/panel/remote-api/standing/'+installation+'/prepare',{
+            method:'POST',credentials:'same-origin',cache:'no-store',
+            headers:{'Content-Type':'application/json','X-Owner-CSRF':csrf},
+            body:JSON.stringify({deviceScope:scope.value,priorConsentSha256:hash,
+              explicitConfirmation:'CONFIRM_PRIOR_WRITTEN_CONSENT'})
+          });
+          if(!r.ok) throw Error('HTTP '+r.status+': '+(await r.text()).slice(0,220));
+          const result=await r.json();
+          if(!result.recorded||result.unattendedReady!==false)throw Error('Brak potwierdzenia zapisu dokumentu.');
+          proof.value='';proofConfirmed.checked=false;
+          await refreshApproval();
+        }catch(e){approvalStatus.textContent='Nie udało się zapisać wcześniejszej zgody: '+e.message;}
+        finally{prepare.disabled=false;}
+      };
       async function recover() {
         start.disabled = true;
         connect.disabled = true;
@@ -1632,6 +1698,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           if (timer) clearInterval(timer);
           timer=null; sid=null; connect.disabled=true; end.disabled=true;
           await recover();
+          await refreshApproval();
         } catch(e) {
           status.textContent = 'Nie można potwierdzić zamknięcia zdalnego dostępu: ' + e.message;
           connect.disabled = true;
@@ -1639,6 +1706,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           revoke.disabled = false;
         }
       };
+      void refreshApproval().catch(e=>{approvalStatus.textContent='Brak informacji o zgodzie: '+e.message;});
       recover();
     })();
     </script>
