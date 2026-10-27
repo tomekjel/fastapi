@@ -1402,6 +1402,20 @@ def panel_remote_entitlement_diagnostic(
     }, headers={"Cache-Control": "private, no-store"})
 
 
+@router.post("/panel/remote-api/standing/{installation_id}/revoke")
+def panel_owner_revoke_standing_remote_authorization(
+    installation_id: uuid.UUID,
+    _: None = Depends(_panel_auth),
+    __: None = Depends(_owner_panel_csrf),
+):
+    """Explicit OWNER revocation; never inferred from a browser checkbox."""
+    from app.routers import multiguard_workshop_remote as workshop
+    return JSONResponse(
+        workshop.revoke_standing_authorization_for_owner(installation_id),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
 @router.get("/panel/remote-api/workshop/active/{installation_id}")
 def panel_workshop_active(installation_id: uuid.UUID, _: None = Depends(_panel_auth)):
     """Resume a workshop session from server state, never from browser storage."""
