@@ -353,7 +353,7 @@ class SessionTransportTests(unittest.TestCase):
 
     def test_future_service_share_is_not_silent_and_never_exposes_files(self):
         with patch.object(mesh, "_base_command", return_value=["meshctrl","DeviceSharing"]), \
-             patch.object(mesh, "_run", return_value="ID: test-share\\nURL: https://mesh.multi-servis.pl/guest\\n") as run:
+             patch.object(mesh, "_run", return_value="ID: test-share\nURL: https://mesh.multi-servis.pl/guest\n") as run:
             mesh._create_share(self.node, "Standing service diagnostics",
                                ["desktop"], workshop_unattended=True)
         cmd=run.call_args.args[0]
