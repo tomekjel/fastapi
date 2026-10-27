@@ -1393,6 +1393,17 @@ def panel_remote_entitlement_diagnostic(
         and standing["approved_mesh_node_id"] == grant.get("mesh_node_id")
     )
     standing_recorded = workshop.standing_authorization_record_valid(grant, standing)
+    group_online = False
+    if standing_recorded:
+        try:
+            group_online = (
+                meshcentral.verify_standing_service_node(
+                    grant["mesh_node_id"], standing["device_scope"]
+                ) == grant["mesh_node_id"]
+            )
+        except meshcentral.MeshCentralError:
+            # No configured group, offline or foreign node => deny.
+            group_online = False
     return JSONResponse({
         "mode": mode,
         "serviceRemoteEligible": mode == "SERVICE_PRO",
@@ -1405,12 +1416,16 @@ def panel_remote_entitlement_diagnostic(
             owner_prepared and standing["local_opt_in_attested_at"] is not None
         ),
         "standingAuthorizationRecorded": standing_recorded,
-        "unattendedReady": False,
+        "unattendedReady": bool(standing_recorded and group_online),
         "reasonCode": (
-            "CHECK_CUSTOMER_PRO_AND_USE_PER_SESSION_CONSENT"
+            "SERVICE_PRO_STANDING_SESSION_READY"
+            if standing_recorded and group_online
+            else "CHECK_CUSTOMER_PRO_AND_USE_PER_SESSION_CONSENT"
             if mode == "CUSTOMER_LICENSE"
             else "SERVICE_PRO_AWAITS_LIVE_MESH_GROUP_VERIFICATION"
             if mode == "SERVICE_PRO" and standing_recorded
+            else "SERVICE_PRO_AWAITS_LOCAL_CONFIRMATION"
+            if mode == "SERVICE_PRO" and owner_prepared
             else "SERVICE_PRO_NEEDS_DEVICE_BOUND_STANDING_AUTHORIZATION"
             if mode == "SERVICE_PRO"
             else "REMOTE_NOT_ELIGIBLE"
