@@ -91,6 +91,23 @@ class SessionTransportTests(unittest.TestCase):
             with self.subTest(lines=lines[:16]), self.assertRaises(mesh.MeshCentralError):
                 check(lines)
 
+    def test_authoritative_backend_entitlement_modes_are_separate(self):
+        base={"status":"WAITING","edition":"PRO","enabled":True}
+        cases=[
+            (base,"SERVICE_PRO"),
+            ({**base,"edition":"STANDARD"},"SERVICE_STANDARD"),
+            ({**base,"enabled":False},"SERVICE_DISABLED"),
+            ({**base,"status":"ASSIGNED"},"CUSTOMER_LICENSE"),
+            ({**base,"status":"PROVISIONED"},"CUSTOMER_LICENSE"),
+            ({**base,"status":"UNINSTALLED"},"INACTIVE_INSTALLATION"),
+            ({**base,"status":"ARCHIVED"},"INACTIVE_INSTALLATION"),
+            (None,"UNREGISTERED"),
+        ]
+        for grant,mode in cases:
+            with self.subTest(mode=mode,grant=grant):
+                self.assertEqual(workshop.remote_entitlement_mode(grant),mode)
+                self.assertEqual(workshop._eligible(grant),mode=="SERVICE_PRO")
+
     def test_paid_pro_is_never_treated_as_service_pro_by_remote_poll(self):
         body = workshop.WorkshopAuth(
             requestId="test-request-id", nonce="test-nonce-id",
