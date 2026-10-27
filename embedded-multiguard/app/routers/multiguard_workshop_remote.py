@@ -127,7 +127,7 @@ def _schema():
                    event_type TEXT NOT NULL,actor_type TEXT NOT NULL,
                    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
                 # SERVICE PRO assignment alone never activates remote sharing.
-                # Separate recorded approval + local opt-in must bind same node.
+                # Separate recorded approval and opt-in must bind the same node.
                 """CREATE TABLE IF NOT EXISTS guard.workshop_standing_remote_authorizations (
                    installation_id UUID PRIMARY KEY
                      REFERENCES guard.workshop_grants(installation_id) ON DELETE CASCADE,
@@ -137,7 +137,13 @@ def _schema():
                    owner_approved_at TIMESTAMPTZ,
                    local_opt_in_attested_at TIMESTAMPTZ,
                    prior_consent_sha256 TEXT NOT NULL
-                     CHECK (prior_consent_sha256 ~ '^[0-9a-f]{64}
+                     CHECK (char_length(prior_consent_sha256) = 64),
+                   revoked_at TIMESTAMPTZ,
+                   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                   updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
+            ):
+                db.execute(text(query))
+        _ready = True
 
 
 def _grant(db, iid):
