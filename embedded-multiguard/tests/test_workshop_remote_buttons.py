@@ -21,6 +21,15 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("workshop.request_for_owner(installation_id)", unattended_route)
         self.assertIn("Depends(_owner_panel_csrf)", consent_route)
 
+    def test_service_pro_has_distinct_consent_and_standing_buttons(self):
+        self.assertIn('id="ws-consent" disabled', self.ui)
+        self.assertIn("const consent = document.getElementById('ws-consent');", self.ui)
+        self.assertIn("consent.onclick = async () => {", self.ui)
+        self.assertIn("api('request-consent/' + installation, 'POST')", self.ui)
+        self.assertIn("api('request/' + installation, 'POST')", self.ui)
+        self.assertIn("consent.disabled = true;", self.ui)
+        self.assertIn("consent.disabled = false;", self.ui)
+
     def test_confirmation_before_network_request(self):
         handler = self.ui[self.ui.index("start.onclick = async () => {"):]
         self.assertLess(handler.index("window.confirm("), handler.index("start.disabled = true;"))
