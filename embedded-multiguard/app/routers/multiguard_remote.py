@@ -1558,6 +1558,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       const status = document.getElementById('ws-status');
       let sid = null, timer = null, standingEligible = false;
       start.disabled = true;
+      consent.disabled = true;
       async function refreshApproval() {
         const r = await fetch('/multiguard/panel/remote-api/entitlement/' + installation,{
           credentials:'same-origin',cache:'no-store'
@@ -1605,6 +1606,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         finally{prepare.disabled=false;}
       };
       async function recover() {
+        consent.disabled = true;
         start.disabled = true;
         connect.disabled = true;
         end.disabled = true;
@@ -1649,6 +1651,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         try {
           const info = await api('sessions/' + sid);
           if (['CONSENTED','CONNECT_READY','ACTIVE'].includes(info.status)) {
+            consent.disabled = true;
             start.disabled = true;
             const ready = info.meshLinked === true;
             connect.disabled = !ready;
@@ -1664,7 +1667,12 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
             sid = null;
             clearInterval(timer);
             timer = null;
-          } else status.textContent = 'Przygotowywanie sesji serwisowej…';
+          } else {
+            consent.disabled = true;
+            start.disabled = true;
+            connect.disabled = true;
+            status.textContent = 'Oczekiwanie na decyzję klienta lub przygotowanie sesji…';
+          }
         } catch (e) {
           connect.disabled = true;
           status.textContent = 'Utracono potwierdzenie stanu MeshCentral: ' + e.message;
