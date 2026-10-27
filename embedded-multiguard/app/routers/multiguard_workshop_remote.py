@@ -863,6 +863,16 @@ def connect_for_owner(sid):
         grant=_grant(db,row["installation_id"])
         if not _eligible(grant):
             raise HTTPException(403,"Tryb serwisowy Pro jest nieaktywny.")
+        if row.get("authorization_kind") not in ("SESSION_CONSENT","STANDING_SERVICE"):
+            raise HTTPException(403,"Nieznany sposób autoryzacji sesji.")
+        scope = None
+        if row["authorization_kind"] == "STANDING_SERVICE":
+            standing = standing_authorization_record(db,row["installation_id"])
+            if (not standing_authorization_record_valid(grant,standing)
+                    or grant["mesh_node_id"] != standing["approved_mesh_node_id"]
+                    or list(row["granted_capabilities"] or []) != ["desktop"]):
+                raise HTTPException(403,"Cofnięto lub zmieniono stałe upoważnienie dla pulpitu.")
+            scope = standing["device_scope"]
         if row["status"] not in ("CONSENTED","CONNECT_READY","ACTIVE"):
             raise HTTPException(409,"Klient nie wyraził zgody na pulpit.")
         if (row["status"] in ("CONNECT_READY", "ACTIVE")
@@ -890,15 +900,34 @@ def connect_for_owner(sid):
     # expiry than the remote service can guarantee.
     share_expires = _now() + timedelta(minutes=60)
     try:
-        share=meshcentral.create_share(node,f"Multi-Servis {str(sid)[:8]}",caps,60)
+        share = (
+            meshcentral.create_standing_service_share(
+                node,scope,f"Multi-Servis diagnostyka {str(sid)[:8]}",60
+            ) if scope is not None else
+            meshcentral.create_share(node,f"Multi-Servis {str(sid)[:8]}",caps,60)
+        )
     except meshcentral.MeshCentralError as exc:
         raise HTTPException(502, f"MeshCentral: {exc}") from exc
     try:
+        # Stop even a just-created link if it no longer belongs to the exact
+        # approved diagnostic MeshCentral group.
+        if scope is not None:
+            meshcentral.verify_standing_service_node(node,scope)
         with engine.begin() as db:
             row=db.execute(text("""
                 SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid FOR UPDATE
             """),{"sid":sid}).mappings().first()
             grant=_grant(db,iid)
+            current_kind = row.get("authorization_kind") if row else None
+            standing = standing_authorization_record(db,iid) if scope is not None else None
+            if (scope is not None and
+                    (current_kind != "STANDING_SERVICE"
+                     or not standing_authorization_record_valid(grant,standing)
+                     or standing["device_scope"] != scope
+                     or standing["approved_mesh_node_id"] != node)):
+                raise HTTPException(403,"Stałe upoważnienie zmieniono podczas tworzenia udostępnienia.")
+            if scope is None and current_kind != "SESSION_CONSENT":
+                raise HTTPException(403,"Tryb zgody zmienił się podczas tworzenia sesji.")
             if share_expires <= _now():
                 raise HTTPException(410, "Nowy link MeshCentral wygasł przed zapisem.")
             if (not row or not _eligible(grant) or not session_node_ready(grant, row)
