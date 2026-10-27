@@ -1342,8 +1342,9 @@ def owner_remote_overview(_: None = Depends(_panel_auth)):
     body = (
         '<section class="card"><div class="eyebrow">MULTI-SERVIS / ZDALNA POMOC</div>'
         '<h1>Komputery PRO</h1><p>Lista urządzeń i zgłoszeń. Kwoty napraw '
-        'nie są pokazywane na tym ekranie. Zdalny pulpit wymaga zgody '
-        'klienta na każdą sesję.</p>'
+        'nie są pokazywane na tym ekranie. PRO klienta wymaga zgody '
+        'na każdą sesję; serwisowy PRO wymaga wcześniejszego '
+        'upoważnienia zapisanego dla danego komputera.</p>'
         '<h2>1. PRO · tryb serwisowy</h2>'
         '<div class="table-wrap"><table><thead><tr>'
         '<th>ID komputera</th><th>Komputer</th><th>Licencja</th>'
@@ -1437,7 +1438,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
     body = """
     <section class="card" style="max-width:none;min-height:65vh">
       <h1>Zdalny pulpit · PRO / tryb serwisowy</h1>
-      <p>Tryb serwisowy PRO umożliwia połączenie bez obecności obsługi w warsztacie. Potwierdzasz połączenie wyłącznie w swoim panelu.</p>
+      <p>Serwisowy PRO może działać bez pytania przy każdej sesji dopiero po zapisanym upoważnieniu do tego konkretnego komputera i potwierdzeniu MeshCentral. Do czasu aktywacji tej procedury dostęp bez zgody pozostaje zablokowany.</p>
       <style>
         .ws-controls{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}
         .ws-controls button{border:0;border-radius:9px;padding:13px 18px;color:#fff;font-size:15px;font-weight:500;cursor:pointer;min-height:46px}
