@@ -1533,7 +1533,8 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         <small role="status" aria-live="polite" id="ws-approval-status">Upoważnienie wymaga niezależnego potwierdzenia w aplikacji MultiGuard na tym urządzeniu.</small>
       </div>
       <div class="ws-controls">
-        <button type="button" id="ws-start">POŁĄCZ Z KOMPUTEREM</button>
+        <button type="button" id="ws-start">POŁĄCZ BEZ KOLEJNEJ ZGODY</button>
+        <button type="button" id="ws-consent" disabled>POŁĄCZ ZA ZGODĄ KLIENTA</button>
         <button type="button" id="ws-connect" disabled>OTWÓRZ PULPIT</button>
         <button type="button" id="ws-end" disabled>ROZŁĄCZ</button>
         <button type="button" id="ws-revoke">COFNIJ STAŁE UPOWAŻNIENIE</button>
@@ -1545,6 +1546,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       const installation = """ + json.dumps(str(installation_id)) + """;
       const csrf = """ + json.dumps(csrf) + """;
       const start = document.getElementById('ws-start');
+      const consent = document.getElementById('ws-consent');
       const connect = document.getElementById('ws-connect');
       const end = document.getElementById('ws-end');
       const revoke = document.getElementById('ws-revoke');
@@ -1565,7 +1567,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         standingEligible = state.unattendedReady === true
           && state.mode === 'SERVICE_PRO'
           && state.standingAuthorizationRecorded === true;
-        if(!sid) start.disabled = !standingEligible;
+        if(!sid) { start.disabled = !standingEligible; consent.disabled = false; }
         approvalStatus.textContent = standingEligible
           ? 'Zweryfikowano ważną zgodę i dedykowaną grupę online. Możesz rozpocząć połączenie serwisowe bez kolejnego pytania.'
           : state.localOptInAttested
@@ -1686,6 +1688,23 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           start.disabled=true; connect.disabled=true; end.disabled=true;
           status.textContent='Nie udało się rozpocząć sesji: '+e.message;
           try{await refreshApproval();}catch(_){standingEligible=false;start.disabled=true;}
+        }
+      };
+      consent.onclick = async () => {
+        if (sid || !window.confirm('Wysłać prośbę o zgodę na jedną sesję?')) return;
+        consent.disabled = true;
+        start.disabled = true;
+        try {
+          const reply = await api('request-consent/' + installation, 'POST');
+          sid = reply.sessionId;
+          end.disabled = false;
+          status.textContent = 'Oczekiwanie na zgodę klienta w MultiGuard…';
+          if (timer) clearInterval(timer);
+          timer = setInterval(refresh, 3000);
+          await refresh();
+        } catch(e) {
+          status.textContent = 'Prośba o zgodę nie powiodła się: ' + e.message;
+          await recover();
         }
       };
       connect.onclick = async () => {
