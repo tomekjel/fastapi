@@ -65,7 +65,7 @@ class SessionTransportTests(unittest.TestCase):
         source = inspect.getsource(mesh.verify_session_node)
         self.assertIn("csv.reader(listing.splitlines(), skipinitialspace=True)", source)
         self.assertIn("fields[0].strip() != local_id", source)
-        self.assertIn("fields[1].strip() != f\"MultiGuard-{session_id}\"", source)
+        self.assertIn("fields[1].strip() != name", source)
         self.assertIn("if len(statuses) != 1:", source)
         self.assertIn("not (connected & 1)", source)
 
