@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   offline:
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, mg-local-dev]
     timeout-minutes: 8
     defaults:
       run:
@@ -20,8 +20,14 @@ jobs:
       - name: Compile and test OWNER remote source without production access
         run: |
           @echo off
-          if /I not "%RUNNER_NAME%"=="ROG" exit /b 1
+          if /I not "%RUNNER_NAME%"=="MultiGuard-Dev" exit /b 1
           python -m py_compile embedded-multiguard\app\routers\multiguard_remote.py embedded-multiguard\app\routers\multiguard_license.py embedded-multiguard\app\routers\multiguard_updates.py embedded-multiguard\scripts\sync_multiguard_releases.py
+          if errorlevel 1 exit /b 1
+          python -m py_compile embedded-multiguard\app\routers\multiguard_remote_policy.py embedded-multiguard\app\routers\multiguard_workshop_remote.py
+          if errorlevel 1 exit /b 1
+          python -m unittest discover -s embedded-multiguard\tests -p test_remote_consent_policy.py -v
+          if errorlevel 1 exit /b 1
+          python -m unittest discover -s embedded-multiguard\tests -p test_session_transport_enrollment.py -v
           if errorlevel 1 exit /b 1
           python -m unittest discover -s embedded-multiguard\tests -p test_owner_remote_fleet_ui.py -v
           if errorlevel 1 exit /b 1
