@@ -557,6 +557,39 @@ class SessionTransportTests(unittest.TestCase):
             verify.assert_called_once_with(self.node,"CLIENT_DIAGNOSTIC")
             event.assert_called_once_with(db,self.sid,"MESH_CREATED","MESH")
 
+    def test_owner_browser_workspace_javascript_parses_and_never_sends_consent_document(self):
+        # Catch regressions in the exact JS delivered to the browser, not
+        # merely in Python source parsing. This is an offline render test.
+        import re
+        import shutil
+        import subprocess
+        import tempfile
+        if not shutil.which("node"):
+            self.skipTest("Node.js not installed for browser script syntax validation")
+        from app.routers import multiguard_remote as paid
+        grant={"status":"WAITING","edition":"PRO","enabled":True,
+               "mesh_node_id":self.node}
+        with patch.object(workshop,"_schema"), \
+             patch.object(workshop,"_grant",return_value=grant), \
+             patch.object(paid,"engine") as engine, \
+             patch.object(paid,"_panel_html",side_effect=lambda html: html), \
+             patch.object(paid,"_csrf_token",return_value="signed-csrf"):
+            engine.connect.return_value.__enter__.return_value=MagicMock()
+            response=paid.owner_workshop_workspace(self.iid)
+        html=response.body.decode("utf-8")
+        script=re.search(r"<script>(.*?)</script>",html,re.DOTALL)
+        self.assertIsNotNone(script)
+        self.assertIn("crypto.subtle.digest('SHA-256'",script.group(1))
+        self.assertIn("'/multiguard/panel/remote-api/standing/'",script.group(1))
+        self.assertIn("standingEligible",script.group(1))
+        self.assertNotIn("FormData(",script.group(1))
+        with tempfile.TemporaryDirectory() as directory:
+            file=Path(directory)/"owner_browser_remote.js"
+            file.write_text(script.group(1),encoding="utf-8")
+            result=subprocess.run(["node","--check",str(file)],capture_output=True,
+                                  text=True,timeout=15)
+            self.assertEqual(result.returncode,0,result.stderr[:400])
+
     def test_owner_preflight_only_ready_for_attested_online_service_node(self):
         from app.routers import multiguard_remote as paid
         grant={"status":"WAITING","edition":"PRO","enabled":True,
