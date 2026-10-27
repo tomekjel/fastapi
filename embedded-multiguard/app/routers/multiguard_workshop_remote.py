@@ -172,8 +172,16 @@ def _authenticate(request: WorkshopAuth):
     pending = license._authenticate_pending(
         str(request.installationId), request.deviceId, request.discoveryCredential
     )
-    if pending["status"] in ("ASSIGNED", "PROVISIONED", "ARCHIVED", "UNINSTALLED", "IGNORED"):
-        raise HTTPException(403, "Instalacja nie ma aktywnego trybu serwisowego.")
+    # The identity token does not authorize the service-license API. Paid
+    # customer PRO uses a separate KeyGate path with fresh local consent.
+    if pending["status"] in ("ASSIGNED", "PROVISIONED"):
+        raise HTTPException(
+            409,
+            "Ta instalacja ma licencję klienta. Zdalna pomoc wymaga ścieżki "
+            "klienta Pro i każdorazowej zgody; sprawdź tryb licencji w MultiGuard.",
+        )
+    if pending["status"] in ("ARCHIVED", "UNINSTALLED", "IGNORED"):
+        raise HTTPException(403, "Instalacja nieaktywna lub wycofana; zdalny dostęp zablokowany.")
     return pending
 
 
