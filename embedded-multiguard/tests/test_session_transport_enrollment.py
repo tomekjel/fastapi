@@ -341,13 +341,39 @@ class SessionTransportTests(unittest.TestCase):
         diagnostic_group="mesh//"+"D"*64
         node="node//"+"A"*64
         row={"_id":node,"meshid":diagnostic_group,"name":"PersistentSCM","conn":1}
+        group_record={"_id":diagnostic_group,"mtype":2,"consent":64}
+        def inventory(cmd):
+            if "ListDeviceGroups" in cmd:
+                return json.dumps([group_record])
+            return json.dumps([row])
         with patch.dict(os.environ,{
             "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID":diagnostic_group,
             "MESH_CENTRAL_OWNER_OWNED_MESH_ID":"mesh//"+"E"*64,
+            "MESH_CENTRAL_STANDING_POLICY_ATTESTED":"1",
         }), patch.object(mesh,"_base_command",return_value=["meshctrl","DeviceSharing"]), \
-             patch.object(mesh,"_run",return_value=json.dumps([row])):
+             patch.object(mesh,"_run",side_effect=inventory):
             self.assertEqual(
                 mesh.verify_standing_service_node(node,"CLIENT_DIAGNOSTIC"),node)
+            for group_setting in (
+                {"consent":8},
+                {"consent":72},
+                {"mtype":1},
+                {"consent":True},
+            ):
+                with self.subTest(setting=group_setting), patch.object(
+                    mesh,"_run",
+                    side_effect=lambda cmd: json.dumps([{**group_record,**group_setting}])
+                    if "ListDeviceGroups" in cmd else json.dumps([row])
+                ), self.assertRaises(mesh.MeshCentralError):
+                    mesh.verify_standing_service_node(node,"CLIENT_DIAGNOSTIC")
+            with patch.dict(os.environ,{"MESH_CENTRAL_STANDING_POLICY_ATTESTED":""}), \
+                 self.assertRaises(mesh.MeshCentralError):
+                mesh.verify_standing_service_node(node,"CLIENT_DIAGNOSTIC")
+            with patch.object(
+                mesh,"_run",side_effect=lambda cmd: json.dumps([group_record])
+                if "ListDeviceGroups" in cmd else json.dumps([{**row,"consent":8}])
+            ), self.assertRaises(mesh.MeshCentralError):
+                mesh.verify_standing_service_node(node,"CLIENT_DIAGNOSTIC")
             for wrong in (
                 [{**row,"meshid":"mesh//"+"Z"*64}],
                 [{**row,"conn":0}],
@@ -373,9 +399,12 @@ class SessionTransportTests(unittest.TestCase):
         node="node//"+"A"*64
         row={"_id":node,"meshid":group,"name":"SCM Service"}
         text_online="A"*64+', "SCM Service", 2, 1, 0\n'
-        with patch.dict(os.environ,{"MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID":group}), \
-             patch.object(mesh,"_base_command",return_value=["meshctrl","DeviceSharing"]), \
-             patch.object(mesh,"_run",side_effect=[json.dumps([row]),text_online]):
+        group_json=json.dumps([{"_id":group,"mtype":2,"consent":64}])
+        with patch.dict(os.environ,{
+            "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID":group,
+            "MESH_CENTRAL_STANDING_POLICY_ATTESTED":"1",
+        }), patch.object(mesh,"_base_command",return_value=["meshctrl","DeviceSharing"]), \
+             patch.object(mesh,"_run",side_effect=[json.dumps([row]),text_online,group_json]):
             self.assertEqual(mesh.verify_standing_service_node(node,"CLIENT_DIAGNOSTIC"),node)
         for bad in (text_online+text_online, text_online.replace(", 1, 0",", 0, 0"),
                     text_online.replace("SCM Service","foreign agent")):
