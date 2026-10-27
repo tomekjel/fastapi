@@ -127,6 +127,54 @@ class SessionTransportTests(unittest.TestCase):
             with self.subTest(changed=changed):
                 self.assertFalse(valid({**grant,**changed},receipt))
 
+    def test_standing_service_node_requires_exact_online_dedicated_group(self):
+        diagnostic_group="mesh//"+"D"*64
+        node="node//"+"A"*64
+        row={"_id":node,"meshid":diagnostic_group,"name":"PersistentSCM","conn":1}
+        with patch.dict(os.environ,{
+            "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID":diagnostic_group,
+            "MESH_CENTRAL_OWNER_OWNED_MESH_ID":"mesh//"+"E"*64,
+        }), patch.object(mesh,"_base_command",return_value=["meshctrl","DeviceSharing"]), \
+             patch.object(mesh,"_run",return_value=json.dumps([row])):
+            self.assertEqual(
+                mesh.verify_standing_service_node(node,"CLIENT_DIAGNOSTIC"),node)
+            for wrong in (
+                [{**row,"meshid":"mesh//"+"Z"*64}],
+                [{**row,"conn":0}],
+                [{**row,"conn":True}],
+                [row,row],
+                [{**row,"_id":"node//"+"B"*64}],
+            ):
+                with self.subTest(wrong=wrong), patch.object(
+                    mesh,"_run",return_value=json.dumps(wrong)
+                ), self.assertRaises(mesh.MeshCentralError):
+                    mesh.verify_standing_service_node(node,"CLIENT_DIAGNOSTIC")
+            with self.assertRaises(mesh.MeshCentralError):
+                mesh.verify_standing_service_node(node,"OWNED_WORKSHOP")
+            with self.assertRaises(mesh.MeshCentralError):
+                mesh.verify_standing_service_node(node,"PAID_PRO")
+        with patch.dict(os.environ,{"MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID":""}), \
+             patch.object(mesh,"_run") as run, self.assertRaises(mesh.MeshCentralError):
+            mesh.verify_standing_service_node(node,"CLIENT_DIAGNOSTIC")
+        run.assert_not_called()
+
+    def test_standing_scm_node_text_online_fallback_requires_exact_identity(self):
+        group="mesh//"+"D"*64
+        node="node//"+"A"*64
+        row={"_id":node,"meshid":group,"name":"SCM Service"}
+        text_online="A"*64+', "SCM Service", 2, 1, 0\n'
+        with patch.dict(os.environ,{"MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID":group}), \
+             patch.object(mesh,"_base_command",return_value=["meshctrl","DeviceSharing"]), \
+             patch.object(mesh,"_run",side_effect=[json.dumps([row]),text_online]):
+            self.assertEqual(mesh.verify_standing_service_node(node,"CLIENT_DIAGNOSTIC"),node)
+        for bad in (text_online+text_online, text_online.replace(", 1, 0",", 0, 0"),
+                    text_online.replace("SCM Service","foreign agent")):
+            with patch.dict(os.environ,{"MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID":group}), \
+                 patch.object(mesh,"_base_command",return_value=["meshctrl","DeviceSharing"]), \
+                 patch.object(mesh,"_run",side_effect=[json.dumps([row]),bad]), \
+                 self.assertRaises(mesh.MeshCentralError):
+                mesh.verify_standing_service_node(node,"CLIENT_DIAGNOSTIC")
+
     def test_authoritative_backend_entitlement_modes_are_separate(self):
         base={"status":"WAITING","edition":"PRO","enabled":True}
         cases=[
