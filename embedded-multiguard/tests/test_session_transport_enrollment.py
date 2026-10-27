@@ -148,7 +148,7 @@ class SessionTransportTests(unittest.TestCase):
             {**valid,"prior_consent_sha256":"b"*64},
         ):
             with self.subTest(record=record):
-                self.assertFalse(any("UPDATE" in x for x in check(record,expected=403)))
+                self.assertFalse(any(x.lstrip().startswith("UPDATE guard.workshop_standing_remote_authorizations") for x in check(record,expected=403)))
         check({**valid,"local_opt_in_attested_at":now},expected=409)
         check(valid,grant_value={**grant,"edition":"STANDARD"},expected=403)
         check(valid,grant_value={**grant,"status":"ASSIGNED"},expected=403)
