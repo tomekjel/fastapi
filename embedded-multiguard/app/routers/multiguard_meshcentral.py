@@ -359,7 +359,10 @@ def _create_share(
     # OWNER workshop path is allowed only after an explicit PRO workshop grant
     # was checked by request_for_owner/connect_for_owner.
     if workshop_unattended:
-        consent = "bar"
+        # MeshCtrl upstream accepts combined 'notify,bar' flags. Preserve
+        # an on-device notification and visible toolbar for any future
+        # separately attested service-PRO guest share (never 'none').
+        consent = "notify,bar"
     else:
         configured = os.getenv("MESH_CENTRAL_SHARE_CONSENT", "prompt,bar").strip() or "prompt,bar"
         if configured != "prompt,bar":
