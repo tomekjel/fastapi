@@ -1459,6 +1459,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         #ws-start{background:#1764b0}
         #ws-connect{background:#16834a}
         #ws-end{background:#be3030}
+        #ws-revoke{background:#823a3a}
         .ws-controls button:disabled{background:#737b87!important;color:#fff;cursor:not-allowed;opacity:.65}
         .ws-controls button:focus-visible{outline:3px solid #72baff;outline-offset:3px}
       </style>
@@ -1466,6 +1467,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         <button type="button" id="ws-start">POŁĄCZ Z KOMPUTEREM</button>
         <button type="button" id="ws-connect" disabled>OTWÓRZ PULPIT</button>
         <button type="button" id="ws-end" disabled>ROZŁĄCZ</button>
+        <button type="button" id="ws-revoke">COFNIJ STAŁE UPOWAŻNIENIE</button>
       </div>
       <p role="status" aria-live="polite" id="ws-status">Gotowy do połączenia.</p>
     </section>
@@ -1476,6 +1478,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       const start = document.getElementById('ws-start');
       const connect = document.getElementById('ws-connect');
       const end = document.getElementById('ws-end');
+      const revoke = document.getElementById('ws-revoke');
       const status = document.getElementById('ws-status');
       let sid = null, timer = null;
       async function recover() {
@@ -1579,6 +1582,29 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           connect.disabled=true; end.disabled=true; start.disabled=false;
           status.textContent='Sesja zakończona. Możesz rozpocząć kolejne połączenie.';
         } catch(e) {end.disabled=false;status.textContent=e.message;}
+      };
+      revoke.onclick = async () => {
+        if (!window.confirm('Cofnąć wcześniejsze upoważnienie do zdalnej diagnostyki tego komputera? Aktywne udostępnienie również zostanie zakończone.')) return;
+        revoke.disabled = true;
+        try {
+          const result = await fetch('/multiguard/panel/remote-api/standing/' + installation + '/revoke', {
+            method:'POST', credentials:'same-origin', cache:'no-store',
+            headers:{'X-Owner-CSRF':csrf}
+          });
+          if (!result.ok) throw Error('HTTP ' + result.status + ': ' + (await result.text()).slice(0,220));
+          const record = await result.json();
+          status.textContent = record.previouslyActive
+            ? 'Stałe upoważnienie cofnięte. Poprzednia sesja została zamknięta.'
+            : 'Brak aktywnego stałego upoważnienia do cofnięcia.';
+          if (timer) clearInterval(timer);
+          timer=null; sid=null; connect.disabled=true; end.disabled=true;
+          await recover();
+        } catch(e) {
+          status.textContent = 'Nie można potwierdzić zamknięcia zdalnego dostępu: ' + e.message;
+          connect.disabled = true;
+        } finally {
+          revoke.disabled = false;
+        }
       };
       recover();
     })();
