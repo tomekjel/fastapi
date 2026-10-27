@@ -141,11 +141,26 @@ def _grant(db, iid):
     """), {"id": iid}).mappings().first()
 
 
+def remote_entitlement_mode(grant):
+    """Read-only server truth, separate from Windows' possibly stale licence."""
+    if not grant:
+        return "UNREGISTERED"
+    status = grant["status"]
+    if status in ("ASSIGNED", "PROVISIONED"):
+        return "CUSTOMER_LICENSE"
+    if status in ("ARCHIVED", "UNINSTALLED", "IGNORED"):
+        return "INACTIVE_INSTALLATION"
+    if not grant["enabled"]:
+        return "SERVICE_DISABLED"
+    if grant["edition"] == "STANDARD":
+        return "SERVICE_STANDARD"
+    if grant["edition"] == "PRO":
+        return "SERVICE_PRO"
+    return "UNKNOWN_DENIED"
+
+
 def _eligible(grant):
-    return bool(
-        grant and grant["edition"] == "PRO" and grant["enabled"]
-        and grant["status"] not in ("ASSIGNED", "PROVISIONED", "ARCHIVED", "UNINSTALLED", "IGNORED")
-    )
+    return remote_entitlement_mode(grant) == "SERVICE_PRO"
 
 
 def session_node_ready(grant, row):
