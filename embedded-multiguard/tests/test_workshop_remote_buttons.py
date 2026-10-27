@@ -12,6 +12,15 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         cls.active = src[src.index("def panel_workshop_active("):src.index('@router.get("/panel/remote/workshop/',src.index("def panel_workshop_active("))]
         cls.status = src[src.index("def panel_workshop_status("):src.index('@router.post("/panel/remote-api/workshop/sessions/', src.index("def panel_workshop_status("))]
 
+    def test_explicit_consent_endpoint_is_separate_from_unattended(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        consent_route = source.split('@router.post("/panel/remote-api/workshop/request-consent/{installation_id}")', 1)[1].split('@router.post("/panel/remote-api/workshop/request/{installation_id}")', 1)[0]
+        unattended_route = source.split('@router.post("/panel/remote-api/workshop/request/{installation_id}")', 1)[1].split('@router.get("/panel/remote-api/workshop/sessions/', 1)[0]
+        self.assertIn("workshop.request_consent_for_owner(installation_id)", consent_route)
+        self.assertNotIn("request_for_owner(installation_id)", consent_route)
+        self.assertIn("workshop.request_for_owner(installation_id)", unattended_route)
+        self.assertIn("Depends(_owner_panel_csrf)", consent_route)
+
     def test_confirmation_before_network_request(self):
         handler = self.ui[self.ui.index("start.onclick = async () => {"):]
         self.assertLess(handler.index("window.confirm("), handler.index("start.disabled = true;"))
