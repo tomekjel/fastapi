@@ -351,6 +351,15 @@ class SessionTransportTests(unittest.TestCase):
             workshop.request_for_owner(self.iid)
         self.assertEqual(caught.exception.status_code, 503)
 
+    def test_future_service_share_is_not_silent_and_never_exposes_files(self):
+        with patch.object(mesh, "_base_command", return_value=["meshctrl","DeviceSharing"]), \
+             patch.object(mesh, "_run", return_value="ID: test-share\\nURL: https://mesh.multi-servis.pl/guest\\n") as run:
+            mesh._create_share(self.node, "Standing service diagnostics",
+                               ["desktop"], workshop_unattended=True)
+        cmd=run.call_args.args[0]
+        self.assertEqual(cmd[cmd.index("--consent")+1], "notify,bar")
+        self.assertEqual(cmd[cmd.index("--type")+1], "desktop")
+
     def test_commercial_share_remains_prompt_and_bar(self):
         with patch.object(mesh, "_base_command", return_value=["meshctrl", "DeviceSharing"]), \
              patch.object(mesh, "_run", return_value="ID: share\nURL: https://mesh.multi-servis.pl/guest\n") as run:
