@@ -12,6 +12,13 @@ KEYS=(
     "MESH_CENTRAL_OWNER_OWNED_MESH_ID",
     "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID",
 )
+# Internal adapters only; never include values in output.
+PRIVATE_CONFIG_KEYS=(
+    "MESH_CENTRAL_TOKEN_FILE",
+    "MESH_CENTRAL_URL",
+    "MESH_CENTRAL_NODE_BIN",
+    "MESH_CENTRAL_MESHCTRL_PATH",
+)
 PATTERN=re.compile(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}")
 ROUTER=Path("/opt/multiservis/app/routers")
 API=ROUTER/"multiguard_workshop_remote.py"
@@ -30,7 +37,7 @@ def read_service_env():
     values={}
     for record in Path("/proc/"+pid+"/environ").read_bytes().split(b"\0"):
         name,sep,value=record.partition(b"=")
-        if sep and name.decode("ascii","ignore") in KEYS:
+        if sep and name.decode("ascii","ignore") in (KEYS+PRIVATE_CONFIG_KEYS):
             values[name.decode("ascii")]=value.decode("ascii","ignore").strip()
     return values
 
@@ -50,6 +57,9 @@ def main():
            "STANDING_OWNER_REQUESTED" in API.read_text(encoding="utf-8")
            else "NOT_DEPLOYED")
     values=read_service_env()
+    for name in PRIVATE_CONFIG_KEYS:
+        if values.get(name):
+            os.environ[name]=values[name]
     groups={}
     for name in KEYS:
         value=values.get(name,"")
