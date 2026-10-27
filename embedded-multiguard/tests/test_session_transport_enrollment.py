@@ -721,6 +721,32 @@ class SessionTransportTests(unittest.TestCase):
             with self.assertRaises(HTTPException): paid.agent_session_mesh_enroll(body)
             self.assertFalse(any("UPDATE guard.installations" in str(c.args[0]) for c in db.execute.call_args_list))
 
+    def test_standing_session_cannot_reenroll_into_interactive_mesh_group(self):
+        body=workshop.WorkshopSessionMeshEnrollment(
+            **self.auth(),discoveryCredential="x"*32
+        )
+        db=MagicMock()
+        db.execute.return_value.mappings.return_value.first.return_value={
+            **self.row,"authorization_kind":"STANDING_SERVICE"
+        }
+        with patch.object(workshop,"_schema"), \
+             patch.object(workshop,"_authenticate"), \
+             patch.object(workshop,"_eligible",return_value=True), \
+             patch.object(workshop,"_grant",return_value={"mesh_node_id":self.node}), \
+             patch.object(workshop,"engine") as engine, \
+             patch.object(mesh,"verify_session_node") as transient, \
+             patch.object(mesh,"verify_standing_service_node") as standing:
+            engine.connect.return_value.__enter__.return_value=db
+            with self.assertRaises(HTTPException) as caught:
+                workshop.workshop_session_mesh_enroll(body)
+            self.assertEqual(caught.exception.status_code,409)
+            transient.assert_not_called()
+            standing.assert_not_called()
+            self.assertFalse(any(
+                "INSERT INTO guard.workshop_mesh_nodes" in str(c.args[0])
+                for c in db.execute.call_args_list
+            ))
+
     def test_workshop_registration_and_rejection_of_foreign_existing_agent(self):
         body=workshop.WorkshopSessionMeshEnrollment(**self.auth(),discoveryCredential="x"*32)
         db=MagicMock()
