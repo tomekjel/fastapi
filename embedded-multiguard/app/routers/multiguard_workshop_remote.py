@@ -192,7 +192,7 @@ def _authenticate(request: WorkshopAuth):
     if pending["status"] in ("ASSIGNED", "PROVISIONED"):
         raise HTTPException(
             409,
-            "Ta instalacja ma licencję klienta. Zdalna pomoc wymaga ścieżki "
+            "REMOTE_MODE_CUSTOMER_LICENSE: Ta instalacja ma licencję klienta. Zdalna pomoc wymaga ścieżki "
             "klienta Pro i każdorazowej zgody; sprawdź tryb licencji w MultiGuard.",
         )
     if pending["status"] in ("ARCHIVED", "UNINSTALLED", "IGNORED"):
