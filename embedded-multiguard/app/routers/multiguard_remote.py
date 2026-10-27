@@ -1759,6 +1759,19 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
     return HTMLResponse(_panel_html(body),headers={"Cache-Control":"private, no-store"})
 
 
+@router.post("/panel/remote-api/workshop/request-consent/{installation_id}")
+def panel_workshop_request_consent(installation_id: uuid.UUID,
+                                   _: None = Depends(_panel_auth),
+                                   __: None = Depends(_owner_panel_csrf)):
+    """Explicit per-session customer consent; never unattended or auto-fallback.
+
+    This path remains available when a standing service authorization is
+    absent, pending or revoked. Only the authenticated OWNER can invoke it.
+    """
+    from app.routers import multiguard_workshop_remote as workshop
+    return {"sessionId": str(workshop.request_consent_for_owner(installation_id))}
+
+
 @router.post("/panel/remote-api/workshop/request/{installation_id}")
 def panel_workshop_request(installation_id: uuid.UUID,
                            _: None = Depends(_panel_auth),
