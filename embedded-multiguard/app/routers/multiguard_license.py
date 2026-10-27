@@ -913,6 +913,8 @@ def _set_workshop_grant(
     enabled: bool,
 ) -> dict[str, Any]:
     _ensure_schema()
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
     edition = edition.strip().upper()
     channel = channel.strip().upper()
     if edition not in {"STANDARD", "PRO"}:
@@ -937,6 +939,10 @@ def _set_workshop_grant(
         """), {"id": installation_id}).mappings().first()
         previous = dict(existing) if existing else None
         current = {"edition":edition,"release_channel":channel,"enabled":enabled}
+        if (previous and previous["enabled"] and previous["edition"]=="PRO"
+                and (edition!="PRO" or not enabled)):
+            # Revoke active shares and standing consent before changing rights.
+            workshop.close_before_rights_change(con,installation_id)
         con.execute(text("""
             INSERT INTO guard.workshop_grants(
                 installation_id,edition,release_channel,enabled
@@ -1057,7 +1063,11 @@ def _assign_pending_to_reception(
             release_channel=release_channel,
         )
 
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
     with engine.begin() as connection:
+        # Paid assignment must remove old workshop remote access first.
+        workshop.close_before_rights_change(connection,installation_id)
         connection.execute(
             text(
                 """
@@ -1100,6 +1110,8 @@ def _assign_direct_customer_license(
     if channel not in {"STABLE", "PILOT", "BETA"}:
         raise HTTPException(400, "Kanał musi być STABLE, PILOT albo BETA.")
     _ensure_schema()
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
     with engine.begin() as con:
         pending = con.execute(text("""
             SELECT * FROM guard.pending_installations
@@ -1160,6 +1172,8 @@ def _assign_direct_customer_license(
         """), {"id":installation_id,"license_id":str(created["id"])})
     try:
         with engine.begin() as con:
+            # Never retain a permanent diagnostic grant after paid conversion.
+            workshop.close_before_rights_change(con,installation_id)
             lic = con.execute(text("""
                 INSERT INTO guard.license_links(
                     reception_id,reception_number,service_device_id,
