@@ -252,6 +252,87 @@ def verify_session_node(local_id: str, session_id: str, *, persistent_service: b
     return node
 
 
+def verify_standing_service_node(node_id: str, device_scope: str) -> str:
+    """Read-only verification of a previously authorized, exact online SCM node.
+
+    Only a trusted server-side standing authorization record may supply
+    device_scope/node_id. A customer consent-group agent cannot satisfy the
+    separate unattended service group. Failure never creates/changes a share.
+    """
+    import csv
+    import json
+
+    group_var = {
+        "OWNED_WORKSHOP": "MESH_CENTRAL_OWNER_OWNED_MESH_ID",
+        "CLIENT_DIAGNOSTIC": "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID",
+    }.get(device_scope)
+    if group_var is None:
+        raise MeshCentralError("Nieznany zakres dostępu serwisowego.")
+    group = _required(group_var)
+    if not re.fullmatch(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", group):
+        raise MeshCentralError("Nieprawidłowy identyfikator grupy serwisowej.")
+    if not re.fullmatch(r"node/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", node_id):
+        raise MeshCentralError("Nieprawidłowy identyfikator węzła serwisowego.")
+    if node_id.split("/")[1] != group.split("/")[1]:
+        raise MeshCentralError("Węzeł jest w innej domenie MeshCentral.")
+
+    command = _base_command()
+    command[command.index("DeviceSharing")] = "ListDevices"
+    output = _run(command + ["--json"])
+    if len(output) > 2_000_000:
+        raise MeshCentralError("Zbyt duży spis urządzeń serwisowych.")
+    try:
+        devices = json.loads(output)
+    except ValueError as exc:
+        raise MeshCentralError("Niespójny spis MeshCentral.") from exc
+    matches = []
+    stack = [devices]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, dict):
+            if item.get("_id", item.get("id")) == node_id:
+                matches.append(item)
+            for key, value in item.items():
+                if isinstance(value, (dict, list)):
+                    if key == node_id and isinstance(value, dict) and "id" not in value and "_id" not in value:
+                        stack.append({**value, "_id": node_id})
+                    else:
+                        stack.append(value)
+    if len(matches) != 1:
+        raise MeshCentralError("Nie znaleziono dokładnie jednego węzła serwisowego.")
+    record = matches[0]
+    name = record.get("name")
+    if (record.get("meshid") != group
+            or not isinstance(name, str)
+            or not name.strip()
+            or len(name) > 160):
+        raise MeshCentralError("Węzeł nie należy do zatwierdzonej grupy serwisowej.")
+    connected = record.get("conn")
+    if connected is None:
+        listing = _run(command)
+        if len(listing) > 2_000_000:
+            raise MeshCentralError("Zbyt duży tekstowy spis węzłów.")
+        statuses = []
+        local_id = node_id.rsplit("/", 1)[1]
+        for fields in csv.reader(listing.splitlines(), skipinitialspace=True):
+            if len(fields) != 5 or fields[0].strip() != local_id:
+                continue
+            if fields[1].strip() != name:
+                raise MeshCentralError("Nieprawidłowa nazwa węzła w spisie.")
+            value = fields[3].strip()
+            if not re.fullmatch(r"[0-9]+", value):
+                raise MeshCentralError("Niespójny stan połączenia serwisowego.")
+            statuses.append(int(value))
+        if len(statuses) != 1:
+            raise MeshCentralError("Nie udało się potwierdzić jednego stanu agenta.")
+        connected = statuses[0]
+    if type(connected) is not int or not (connected & 1):
+        raise MeshCentralError("Agent serwisowy jest offline.")
+    return node_id
+
+
 def _create_share(
     node_id: str,
     session_label: str,
