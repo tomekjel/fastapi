@@ -91,6 +91,66 @@ class SessionTransportTests(unittest.TestCase):
             with self.subTest(lines=lines[:16]), self.assertRaises(mesh.MeshCentralError):
                 check(lines)
 
+    def test_owner_documented_prior_consent_requires_device_binding_and_local_opt_in(self):
+        grant={"status":"WAITING","edition":"PRO","enabled":True,
+               "mesh_node_id":self.node}
+        for scope,hash_value in (
+            ("PAID_PRO","a"*64),
+            ("CLIENT_DIAGNOSTIC","unverified"),
+        ):
+            with self.subTest(scope=scope),self.assertRaises(HTTPException):
+                workshop.prepare_standing_authorization_for_owner(self.iid,scope,hash_value)
+        statements=[]
+        db=MagicMock()
+        def execute(statement,params=None):
+            sql=str(statement)
+            statements.append((sql,params))
+            result=MagicMock()
+            if "FROM guard.workshop_standing_remote_authorizations" in sql:
+                result.mappings.return_value.first.return_value=None
+            return result
+        db.execute.side_effect=execute
+        with patch.object(workshop,"_schema"),patch.object(workshop,"engine") as engine, \
+             patch.object(workshop,"_grant",return_value=grant), \
+             patch.object(mesh,"verify_registered_node",return_value=True) as verify:
+            engine.connect.return_value.__enter__.return_value=db
+            engine.begin.return_value.__enter__.return_value=db
+            reply=workshop.prepare_standing_authorization_for_owner(
+                self.iid,"CLIENT_DIAGNOSTIC","b"*64)
+            verify.assert_called_once_with(self.node)
+        self.assertEqual(reply,{"recorded":True,"localDeviceConsentPending":True,
+                               "meshGroupVerificationPending":True,"unattendedReady":False})
+        insertion=next((query,params) for query,params in statements
+                       if "INSERT INTO guard.workshop_standing_remote_authorizations" in query)
+        self.assertIn("local_opt_in_attested_at=NULL",insertion[0])
+        self.assertEqual(insertion[1]["node"],self.node)
+        self.assertEqual(insertion[1]["receipt"],"b"*64)
+        self.assertTrue(any("OWNER_APPROVED" in query for query,_ in statements))
+        self.assertFalse(any("share" in query.lower() and "insert" in query.lower()
+                             for query,_ in statements))
+
+    def test_owner_cannot_reapprove_without_revoking_existing_authorization(self):
+        db=MagicMock()
+        def execute(statement,params=None):
+            result=MagicMock()
+            if "FROM guard.workshop_standing_remote_authorizations" in str(statement):
+                result.mappings.return_value.first.return_value={"revoked_at":None}
+            return result
+        db.execute.side_effect=execute
+        grant={"status":"WAITING","edition":"PRO","enabled":True,
+               "mesh_node_id":self.node}
+        with patch.object(workshop,"_schema"),patch.object(workshop,"engine") as engine, \
+             patch.object(workshop,"_grant",return_value=grant), \
+             patch.object(mesh,"verify_registered_node",return_value=True):
+            engine.connect.return_value.__enter__.return_value=db
+            engine.begin.return_value.__enter__.return_value=db
+            with self.assertRaises(HTTPException) as caught:
+                workshop.prepare_standing_authorization_for_owner(
+                    self.iid,"CLIENT_DIAGNOSTIC","a"*64)
+        self.assertEqual(caught.exception.status_code,409)
+        self.assertFalse(any("INSERT INTO guard.workshop_standing_remote_authorizations" in str(c.args[0])
+                             for c in db.execute.call_args_list))
+
     def test_owner_revocation_is_audited_and_persists_on_mesh_revoke_failure(self):
         def run(mesh_fails):
             db=MagicMock()
