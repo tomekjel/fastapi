@@ -1386,6 +1386,12 @@ def panel_remote_entitlement_diagnostic(
     # A durable record by itself is NOT an online authorization. The actual
     # share path must independently verify exact MeshCentral live node/group
     # and current, unrevoked scope. Until then never report ready.
+    owner_prepared = bool(
+        mode == "SERVICE_PRO" and standing
+        and standing["owner_approved_at"] is not None
+        and standing["revoked_at"] is None
+        and standing["approved_mesh_node_id"] == grant.get("mesh_node_id")
+    )
     standing_recorded = workshop.standing_authorization_record_valid(grant, standing)
     return JSONResponse({
         "mode": mode,
@@ -1394,6 +1400,10 @@ def panel_remote_entitlement_diagnostic(
         # No standing-access share is enabled until independent signed
         # device authorization, owner attestation and dedicated MeshCentral
         # group are wired and checked at connection time.
+        "ownerPriorConsentPrepared": owner_prepared,
+        "localOptInAttested": bool(
+            owner_prepared and standing["local_opt_in_attested_at"] is not None
+        ),
         "standingAuthorizationRecorded": standing_recorded,
         "unattendedReady": False,
         "reasonCode": (
