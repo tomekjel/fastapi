@@ -496,6 +496,76 @@ class SessionTransportTests(unittest.TestCase):
             self.assertEqual(caught.exception.status_code,403)
             verify.assert_not_called()
 
+    def test_standing_service_connect_returns_visible_desktop_only_link(self):
+        row={**self.row,
+             "authorization_kind":"STANDING_SERVICE",
+             "status":"CONSENTED","granted_capabilities":["desktop"],
+             "mesh_share_expires_at":None}
+        grant={"status":"WAITING","edition":"PRO","enabled":True,
+               "mesh_node_id":self.node,"mesh_session_id":self.sid}
+        approval={"approved_mesh_node_id":self.node,
+                  "device_scope":"CLIENT_DIAGNOSTIC",
+                  "owner_approved_at":datetime.now(timezone.utc),
+                  "local_opt_in_attested_at":datetime.now(timezone.utc),
+                  "prior_consent_sha256":"a"*64,"revoked_at":None}
+        db=MagicMock()
+        def execute(statement,params=None):
+            out=MagicMock()
+            if "SELECT * FROM guard.workshop_remote_sessions" in str(statement):
+                out.mappings.return_value.first.return_value=row
+            return out
+        db.execute.side_effect=execute
+        url="https://mesh.multi-servis.pl/guest-share"
+        with patch.object(workshop,"_schema"),patch.object(workshop,"engine") as engine, \
+             patch.object(workshop,"_grant",return_value=grant), \
+             patch.object(workshop,"standing_authorization_record",return_value=approval), \
+             patch.object(workshop,"_event") as event, \
+             patch.object(mesh,"verify_standing_service_node",return_value=self.node) as verify, \
+             patch.object(mesh,"create_standing_service_share",
+                          return_value=mesh.MeshShare("safe-share",url)) as create, \
+             patch.object(mesh,"create_share") as paid_share, \
+             patch.object(mesh,"revoke_share") as revoke:
+            engine.begin.return_value.__enter__.return_value=db
+            response=workshop.connect_for_owner(self.sid)
+            self.assertEqual(response["url"],url)
+            self.assertEqual(response["capabilities"],["desktop"])
+            self.assertEqual(response["sessionId"],str(self.sid))
+            create.assert_called_once_with(
+                self.node,"CLIENT_DIAGNOSTIC",
+                f"Multi-Servis diagnostyka {str(self.sid)[:8]}",60)
+            paid_share.assert_not_called()
+            revoke.assert_not_called()
+            verify.assert_called_once_with(self.node,"CLIENT_DIAGNOSTIC")
+            event.assert_called_once_with(db,self.sid,"MESH_CREATED","MESH")
+
+    def test_owner_preflight_only_ready_for_attested_online_service_node(self):
+        from app.routers import multiguard_remote as paid
+        grant={"status":"WAITING","edition":"PRO","enabled":True,
+               "mesh_node_id":self.node}
+        approval={"approved_mesh_node_id":self.node,
+                  "device_scope":"CLIENT_DIAGNOSTIC",
+                  "owner_approved_at":datetime.now(timezone.utc),
+                  "local_opt_in_attested_at":datetime.now(timezone.utc),
+                  "prior_consent_sha256":"a"*64,"revoked_at":None}
+        db=MagicMock()
+        def check(receipt,group_ok):
+            with patch.object(workshop,"_schema"),patch.object(workshop,"_grant",return_value=grant), \
+                 patch.object(workshop,"standing_authorization_record",return_value=receipt), \
+                 patch.object(paid,"engine") as engine, \
+                 patch.object(mesh,"verify_standing_service_node",
+                              side_effect=None if group_ok else mesh.MeshCentralError("offline"),
+                              return_value=self.node) as verify:
+                engine.connect.return_value.__enter__.return_value=db
+                response=paid.panel_remote_entitlement_diagnostic(self.iid)
+                result=json.loads(response.body)
+                self.assertEqual(result["unattendedReady"],bool(group_ok and receipt))
+                if receipt is None:verify.assert_not_called()
+                else:verify.assert_called_once_with(self.node,"CLIENT_DIAGNOSTIC")
+            return result
+        self.assertEqual(check(approval,True)["reasonCode"],"SERVICE_PRO_STANDING_SESSION_READY")
+        self.assertFalse(check(approval,False)["unattendedReady"])
+        self.assertFalse(check(None,True)["unattendedReady"])
+
     def test_standing_service_connect_rejects_revocation_after_share_creation(self):
         row={**self.row,
              "authorization_kind":"STANDING_SERVICE",
