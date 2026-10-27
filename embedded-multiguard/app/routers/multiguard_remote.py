@@ -1554,15 +1554,22 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       const proofConfirmed = document.getElementById('ws-confirm-proof');
       const approvalStatus = document.getElementById('ws-approval-status');
       const status = document.getElementById('ws-status');
-      let sid = null, timer = null;
+      let sid = null, timer = null, standingEligible = false;
+      start.disabled = true;
       async function refreshApproval() {
         const r = await fetch('/multiguard/panel/remote-api/entitlement/' + installation,{
           credentials:'same-origin',cache:'no-store'
         });
         if(!r.ok) throw Error('HTTP '+r.status+': '+(await r.text()).slice(0,150));
         const state = await r.json();
-        approvalStatus.textContent = state.localOptInAttested
-          ? 'Upoważnienie potwierdzone na urządzeniu; oczekuje na weryfikację grupy MeshCentral. Dostęp bez pytania nadal jest zablokowany.'
+        standingEligible = state.unattendedReady === true
+          && state.mode === 'SERVICE_PRO'
+          && state.standingAuthorizationRecorded === true;
+        if(!sid) start.disabled = !standingEligible;
+        approvalStatus.textContent = standingEligible
+          ? 'Zweryfikowano ważną zgodę i dedykowaną grupę online. Możesz rozpocząć połączenie serwisowe bez kolejnego pytania.'
+          : state.localOptInAttested
+          ? 'Zgoda potwierdzona lokalnie, ale komputer nie jest jeszcze gotowy w dedykowanej grupie MeshCentral.'
           : state.ownerPriorConsentPrepared
           ? 'Dokument zgody zapisany. Oczekuje na jednorazowe potwierdzenie w aplikacji MultiGuard na wskazanym komputerze.'
           : 'Nie zapisano bieżącego wcześniejszego upoważnienia dla tego komputera.';
@@ -1609,8 +1616,16 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
             await refresh();
           } else {
             sid = null;
-            start.disabled = false;
-            status.textContent = 'Gotowy do połączenia.';
+            start.disabled = true;
+            try {
+              await refreshApproval();
+              status.textContent = standingEligible
+                ? 'Gotowy do połączenia serwisowego.'
+                : 'Połączenie oczekuje na weryfikację upoważnienia i grupy MeshCentral.';
+            } catch(e) {
+              status.textContent = 'Nie udało się sprawdzić upoważnienia: ' + e.message;
+              start.disabled = true;
+            }
           }
         } catch(e) {
           status.textContent = 'Nie można sprawdzić otwartych sesji: ' + e.message;
@@ -1641,7 +1656,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
             status.textContent = 'Sesja: ' + info.status;
             connect.disabled = true;
             end.disabled = true;
-            start.disabled = false;
+            start.disabled = !standingEligible;
             sid = null;
             clearInterval(timer);
             timer = null;
@@ -1652,7 +1667,12 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         }
       }
       start.onclick = async () => {
-        if (!window.confirm('Czy na pewno połączyć się z komputerem serwisowym?')) return;
+        if (!standingEligible) {
+          start.disabled = true;
+          status.textContent = 'Wymagane wcześniejsze upoważnienie i potwierdzenie online MeshCentral.';
+          return;
+        }
+        if (!window.confirm('Połączyć się z komputerem na podstawie wcześniej udzielonego upoważnienia serwisowego Pro?')) return;
         start.disabled = true;
         try {
           const reply = await api('request/' + installation, 'POST');
@@ -1662,7 +1682,11 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           if (timer) clearInterval(timer);
           timer = setInterval(refresh, 3000);
           await refresh();
-        } catch (e) { start.disabled=false; connect.disabled=true; end.disabled=true; status.textContent='Nie udało się rozpocząć sesji: '+e.message; }
+        } catch (e) {
+          start.disabled=true; connect.disabled=true; end.disabled=true;
+          status.textContent='Nie udało się rozpocząć sesji: '+e.message;
+          try{await refreshApproval();}catch(_){standingEligible=false;start.disabled=true;}
+        }
       };
       connect.onclick = async () => {
         if (!sid) return;
@@ -1693,8 +1717,11 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         try {
           await api('sessions/' + sid + '/end','POST');
           clearInterval(timer); timer=null; sid=null;
-          connect.disabled=true; end.disabled=true; start.disabled=false;
-          status.textContent='Sesja zakończona. Możesz rozpocząć kolejne połączenie.';
+          connect.disabled=true; end.disabled=true; start.disabled=true;
+          await refreshApproval();
+          status.textContent=standingEligible
+            ?'Sesja zakończona. Możesz rozpocząć kolejne połączenie.'
+            :'Sesja zakończona. Upoważnienie lub grupa nie są potwierdzone.';
         } catch(e) {end.disabled=false;status.textContent=e.message;}
       };
       revoke.onclick = async () => {
@@ -1721,7 +1748,10 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           revoke.disabled = false;
         }
       };
-      void refreshApproval().catch(e=>{approvalStatus.textContent='Brak informacji o zgodzie: '+e.message;});
+      void refreshApproval().catch(e=>{
+        standingEligible=false; start.disabled=true;
+        approvalStatus.textContent='Brak potwierdzenia upoważnienia: '+e.message;
+      });
       recover();
     })();
     </script>
