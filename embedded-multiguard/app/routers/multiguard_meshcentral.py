@@ -276,7 +276,8 @@ def verify_standing_service_node(node_id: str, device_scope: str) -> str:
     if node_id.split("/")[1] != group.split("/")[1]:
         raise MeshCentralError("Węzeł jest w innej domenie MeshCentral.")
 
-    command = _base_command()
+    # A reused command list (e.g. in test adapters) must not be mutated.
+    command = list(_base_command())
     command[command.index("DeviceSharing")] = "ListDevices"
     output = _run(command + ["--json"])
     if len(output) > 2_000_000:
