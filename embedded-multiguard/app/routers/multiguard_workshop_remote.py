@@ -124,6 +124,11 @@ def _schema():
                    last_activity_at TIMESTAMPTZ,
                    mesh_public_id TEXT,mesh_share_expires_at TIMESTAMPTZ,
                    last_error TEXT)""",
+                # Existing sessions remain bound to interactive consent.
+                # A standing session MUST carry its own explicit mode marker.
+                """ALTER TABLE guard.workshop_remote_sessions
+                   ADD COLUMN IF NOT EXISTS authorization_kind TEXT NOT NULL
+                   DEFAULT 'SESSION_CONSENT'""",
                 """CREATE UNIQUE INDEX IF NOT EXISTS uq_workshop_remote_open
                    ON guard.workshop_remote_sessions(installation_id)
                    WHERE status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')""",
@@ -498,88 +503,80 @@ def request_consent_for_owner(iid: uuid.UUID):
 
 
 def request_for_owner(iid: uuid.UUID):
-    """Unattended OWNER access requires independent ownership attestation.
+    """Create ONE short-lived desktop-only session from prior recorded consent.
 
-    Workshop PRO entitlement alone does not prove a device belongs to the
-    service. No automatic consent rows may be created through this path.
+    No standing grant, no separate local opt-in or no exact ONLINE node in
+    its dedicated trusted MeshCentral group => deny before touching sessions.
+    This never accepts a node or permission assertion supplied by a browser.
     """
-    raise HTTPException(
-        503,
-        "Zdalny dostęp bez pytania wymaga osobnego zatwierdzenia urządzenia "
-        "i grupy MeshCentral.",
-    )
-
-
-@router.post("/agent/workshop/standing/status")
-def workshop_standing_status(request: WorkshopAuth):
-    """Read-only local GUI status; no permission changes or unattended link."""
     _schema()
-    _authenticate(request)
     with engine.connect() as db:
-        grant = _grant(db, request.installationId)
-        record = (standing_authorization_record(db, request.installationId)
-                  if _eligible(grant) else None)
-    if not _eligible(grant):
-        raise HTTPException(403,"Serwisowy Pro jest nieaktywny.")
-    approved = bool(record and record["owner_approved_at"] is not None
-                    and record["revoked_at"] is None
-                    and record["approved_mesh_node_id"] == grant.get("mesh_node_id"))
-    return {
-        "requestId":request.requestId,
-        "ownerPrepared":approved,
-        "deviceScope":record["device_scope"] if approved else None,
-        "priorConsentSha256":record["prior_consent_sha256"] if approved else None,
-        "localOptInAttested":bool(approved and record["local_opt_in_attested_at"] is not None),
-        "unattendedReady":False,
-    }
-
-
-@router.post("/agent/workshop/standing/attest")
-def workshop_standing_attest(request: WorkshopStandingAttestation):
-    """One-time explicit local GUI confirmation tied to OWNER approval.
-
-    This does not create a remote session or change MeshCentral groups.
-    A valid standing record is necessary but never sufficient for access.
-    """
-    _schema()
-    _authenticate(request)
+        grant = _grant(db, iid)
+        standing = (standing_authorization_record(db, iid)
+                    if _eligible(grant) else None)
+    if not standing_authorization_record_valid(grant, standing):
+        raise HTTPException(
+            403, "Brak ważnego, lokalnie potwierdzonego upoważnienia serwisowego Pro."
+        )
+    node = grant["mesh_node_id"]
+    scope = standing["device_scope"]
+    try:
+        meshcentral.verify_standing_service_node(node, scope)
+    except meshcentral.MeshCentralError as exc:
+        raise HTTPException(
+            409, "Wymagana potwierdzona usługa online w dedykowanej grupie MeshCentral."
+        ) from exc
     with engine.begin() as db:
-        # Serialize against revoke, reinstall, node reassignment, downgrade.
-        db.execute(text("""SELECT installation_id
-            FROM guard.pending_installations WHERE installation_id=:iid FOR UPDATE
-        """),{"iid":request.installationId}).first()
-        db.execute(text("""SELECT installation_id
-            FROM guard.workshop_grants WHERE installation_id=:iid FOR UPDATE
-        """),{"iid":request.installationId}).first()
-        grant = _grant(db, request.installationId)
-        if not _eligible(grant) or not grant.get("mesh_node_id"):
-            raise HTTPException(403,"Brak aktywnej licencji serwisowej Pro i węzła.")
-        record = db.execute(text("""
-            SELECT approved_mesh_node_id,device_scope,owner_approved_at,
-                   local_opt_in_attested_at,prior_consent_sha256,revoked_at
-            FROM guard.workshop_standing_remote_authorizations
+        # Follow the same grant -> standing -> session lock order as OWNER
+        # rights revocation to prevent authorizing against stale grants.
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
             WHERE installation_id=:iid FOR UPDATE
-        """),{"iid":request.installationId}).mappings().first()
-        if (not record or record["revoked_at"] is not None
-                or record["owner_approved_at"] is None
-                or record["approved_mesh_node_id"] != grant["mesh_node_id"]
-                or record["prior_consent_sha256"] != request.acknowledgedConsentSha256):
-            raise HTTPException(403,"Brak bieżącego upoważnienia OWNER dla tego komputera.")
-        if record["local_opt_in_attested_at"] is not None:
-            raise HTTPException(409,"Zgoda lokalna została już zarejestrowana.")
+        """),{"iid":iid}).first()
         db.execute(text("""
-            UPDATE guard.workshop_standing_remote_authorizations
-            SET local_opt_in_attested_at=:now,updated_at=:now
-            WHERE installation_id=:iid AND revoked_at IS NULL
-              AND local_opt_in_attested_at IS NULL
-        """),{"iid":request.installationId,"now":_now()})
+            SELECT installation_id FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":iid}).first()
+        grant = _grant(db, iid)
+        standing = standing_authorization_record(db, iid)
+        if (not standing_authorization_record_valid(grant, standing)
+                or grant["mesh_node_id"] != node
+                or standing["device_scope"] != scope):
+            raise HTTPException(403,"Upoważnienie lub węzeł uległy zmianie.")
+        if _open(db, iid):
+            raise HTTPException(409,"Ten komputer ma już otwartą sesję.")
+        if db.execute(text("""
+            SELECT 1 FROM guard.remote_sessions
+            WHERE installation_id=:iid AND mesh_public_id IS NOT NULL
+              AND status IN ('CONNECT_READY','ACTIVE') LIMIT 1
+        """),{"iid":iid}).first():
+            raise HTTPException(409,"Trwa połączenie klienta Pro; zakończ je najpierw.")
+        sid = uuid.uuid4()
+        now = _now()
+        # A prior local authorization (not a fake interactive decision) is
+        # recorded in a separate column for every subsequent check/revoke.
         db.execute(text("""
-            INSERT INTO guard.workshop_standing_remote_audit
-                (installation_id,action,actor_type)
-            VALUES (:iid,'LOCAL_OPT_IN_ATTESTED','LOCAL_USER')
-        """),{"iid":request.installationId})
-    return {"requestId":request.requestId,
-            "localOptInAttested":True,"unattendedReady":False}
+            INSERT INTO guard.workshop_remote_sessions(
+                id,installation_id,status,authorization_kind,
+                requested_capabilities,granted_capabilities,
+                requested_at,expires_at,consented_at,last_activity_at
+            ) VALUES (
+                :sid,:iid,'CONSENTED','STANDING_SERVICE',
+                '["desktop"]'::jsonb,'["desktop"]'::jsonb,
+                :now,:expires,:consent,:now
+            )
+        """),{"sid":sid,"iid":iid,"now":now,
+               "expires":now+timedelta(minutes=5),
+               "consent":standing["local_opt_in_attested_at"]})
+        updated = db.execute(text("""
+            UPDATE guard.workshop_mesh_nodes SET session_id=:sid,updated_at=:now
+            WHERE installation_id=:iid AND mesh_node_id=:node
+            RETURNING installation_id
+        """),{"sid":sid,"now":now,"iid":iid,"node":node}).first()
+        if not updated:
+            raise HTTPException(409,"Nie potwierdzono stałego powiązania węzła serwisowego.")
+        _event(db,sid,"STANDING_OWNER_REQUESTED","TECHNICIAN")
+    return sid
 
 
 @router.post("/agent/workshop/remote/mesh-enroll")
