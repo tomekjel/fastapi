@@ -436,7 +436,12 @@ def revoke_standing_authorization_for_owner(iid):
     _schema()
     share_failure = False
     with engine.begin() as db:
-        # This locks the specific authorization before inspecting sessions.
+        # Match downgrade and session-start lock order: grant first. This
+        # serializes revoke with licence changes and prevents AB/BA deadlocks.
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":iid}).first()
         prior = db.execute(text("""
             SELECT revoked_at
             FROM guard.workshop_standing_remote_authorizations
