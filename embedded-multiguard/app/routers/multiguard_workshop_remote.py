@@ -671,6 +671,14 @@ def workshop_session_mesh_enroll(request: WorkshopSessionMeshEnrollment):
         row = db.execute(text("SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid"
                               + (" FOR UPDATE" if lock else "")),
                          {"sid":request.sessionId}).mappings().first()
+        # A standing service session already uses the OWNER-verified native
+        # SCM node. It must NEVER be sent through the one-time consent-group
+        # enrollment: that would misbind or re-enroll an existing MeshAgent.
+        if row and row.get("authorization_kind", "SESSION_CONSENT") != "SESSION_CONSENT":
+            raise HTTPException(
+                409, "Stała sesja serwisowa korzysta z zatwierdzonego węzła "
+                     "MeshCentral; rejestracja agenta pojedynczej sesji jest zabroniona."
+            )
         paid_remote._require_transport_consent(row, request.installationId, _now())
         return grant
     with engine.connect() as db:
