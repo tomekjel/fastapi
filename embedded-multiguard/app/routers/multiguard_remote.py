@@ -1371,7 +1371,15 @@ def panel_remote_entitlement_diagnostic(
     workshop._schema()
     with engine.connect() as db:
         grant = workshop._grant(db, installation_id)
-    mode = workshop.remote_entitlement_mode(grant)
+        mode = workshop.remote_entitlement_mode(grant)
+        standing = (
+            workshop.standing_authorization_record(db, installation_id)
+            if mode == "SERVICE_PRO" else None
+        )
+    # A durable record by itself is NOT an online authorization. The actual
+    # share path must independently verify exact MeshCentral live node/group
+    # and current, unrevoked scope. Until then never report ready.
+    standing_recorded = workshop.standing_authorization_record_valid(grant, standing)
     return JSONResponse({
         "mode": mode,
         "serviceRemoteEligible": mode == "SERVICE_PRO",
@@ -1379,10 +1387,13 @@ def panel_remote_entitlement_diagnostic(
         # No standing-access share is enabled until independent signed
         # device authorization, owner attestation and dedicated MeshCentral
         # group are wired and checked at connection time.
+        "standingAuthorizationRecorded": standing_recorded,
         "unattendedReady": False,
         "reasonCode": (
             "CHECK_CUSTOMER_PRO_AND_USE_PER_SESSION_CONSENT"
             if mode == "CUSTOMER_LICENSE"
+            else "SERVICE_PRO_AWAITS_LIVE_MESH_GROUP_VERIFICATION"
+            if mode == "SERVICE_PRO" and standing_recorded
             else "SERVICE_PRO_NEEDS_DEVICE_BOUND_STANDING_AUTHORIZATION"
             if mode == "SERVICE_PRO"
             else "REMOTE_NOT_ELIGIBLE"
