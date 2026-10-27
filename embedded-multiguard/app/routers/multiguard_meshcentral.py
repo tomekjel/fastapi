@@ -435,6 +435,25 @@ def create_workshop_share(
     raise MeshCentralError("OWNER_UNATTENDED zablokowany do czasu niezależnego poświadczenia urządzenia.")
 
 
+def create_standing_service_share(
+    node_id: str,
+    device_scope: str,
+    session_label: str,
+    duration_minutes: int = 60,
+) -> MeshShare:
+    """Desktop-only, visible privacy bar; never a paid PRO session.
+
+    Called only AFTER OWNER backend has verified two separate approvals and
+    an active service PRO grant, and the same exact MeshCentral node/group.
+    This adapter verifies the live group again just before requesting a link.
+    """
+    verify_standing_service_node(node_id, device_scope)
+    return _create_share(
+        node_id, session_label, ("desktop",), duration_minutes,
+        workshop_unattended=True,
+    )
+
+
 def _share_absent_from_listing(node_id: str, public_id: str) -> bool:
     """Trust absence only in a COMPLETE MeshCtrl DeviceSharing listing.
 
