@@ -278,6 +278,10 @@ def _public(row):
         "sessionId": str(row["id"]),
         "supportRequestId": str(row["id"]),
         "status": row["status"],
+        # Explicit wire discriminator; older interactive sessions default to
+        # session-specific consent. A standing session MUST NOT trigger the
+        # client's consent-based MeshAgent enrollment or prompt.
+        "authorizationKind": row.get("authorization_kind","SESSION_CONSENT"),
         "technicianDisplayName": row["requested_by_name"],
         "subject": row["subject"],
         "requestedCapabilities": list(row["requested_capabilities"] or []),
