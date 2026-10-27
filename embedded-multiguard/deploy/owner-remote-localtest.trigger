@@ -23,3 +23,5 @@ check=beta-dynamic-final
 retry=after-rog-manual-restart
 
 retry=sql-anchor-only
+
+2026-10-27: re-run pre-production on ASUS MultiGuard-Dev: service Pro standing authorization scope and separate mesh group policy matrix, paid Pro 403/409 distinction, owner browser and session transport tests; no server deploy.
