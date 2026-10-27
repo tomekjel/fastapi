@@ -10,8 +10,6 @@ FILES=(multiguard_remote.py multiguard_workshop_remote.py multiguard_meshcentral
 BACKUP="$ROOT/backups/remote-fix-$(date -u +%Y%m%dT%H%M%SZ)"
 TMP=$(mktemp -d)
 CHANGED=0
-TIMER_WAS_ACTIVE=0
-if systemctl is-active --quiet "$TIMER"; then TIMER_WAS_ACTIVE=1; fi
 finish() {
   code=$?
   trap - EXIT
@@ -20,7 +18,7 @@ finish() {
     for file in "${FILES[@]}"; do cp -p "$BACKUP/$file" "$ROUTERS/$file"; done
     systemctl restart "$SERVICE" || true
   fi
-  if ((TIMER_WAS_ACTIVE)); then systemctl start "$TIMER" || true; fi
+  systemctl start "$TIMER" || true
   rm -rf "$TMP"
   echo "BACKUP=$BACKUP"
   exit "$code"
