@@ -461,6 +461,7 @@ def create_share(
 
 def create_client_approved_share(
     node_id: str,
+    session_id: str,
     session_label: str,
     capabilities: Iterable[str],
     duration_minutes: int = 60,
@@ -473,6 +474,12 @@ def create_client_approved_share(
     """
     if os.getenv("MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED", "") != "1":
         return create_share(node_id, session_label, capabilities, duration_minutes)
+    # The flag alone is never authority. Re-check exact online node, session
+    # identity and pinned consent-only group immediately before creating share.
+    verified = verify_session_node(node_id.rsplit("/", 1)[-1], session_id,
+                                   persistent_service=True)
+    if verified != node_id:
+        raise MeshCentralError("Agent nie odpowiada zatwierdzonej sesji.")
     if "files" in {str(item).lower() for item in capabilities}:
         # File transfer needs separate consent policy; don't broaden desktop approval.
         return create_share(node_id, session_label, capabilities, duration_minutes)
