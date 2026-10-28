@@ -47,6 +47,13 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("consent.disabled = true;", self.ui)
         self.assertIn("consent.disabled = false;", self.ui)
 
+    def test_workshop_customer_consent_window_is_ten_minutes(self):
+        workshop = (SOURCE.parent / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
+        request = workshop.split("def request_consent_for_owner(", 1)[1].split("\n@router.post(", 1)[0]
+        self.assertIn('"expires": now + timedelta(minutes=10)', request)
+        self.assertNotIn('"expires": now + timedelta(minutes=5)', request)
+        self.assertIn("'REQUESTED'", request)
+
     def test_service_pro_reconnect_never_falls_back_to_client_consent(self):
         workshop = (SOURCE.parent / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
         start = workshop.split("def request_for_owner(", 1)[1].split("\ndef ", 1)[0]
