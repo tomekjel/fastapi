@@ -3497,9 +3497,9 @@ def approve_reception_license(
                 """
                 UPDATE guard.license_links
                 SET lifecycle='PENDING_ACCEPTANCE',
-                    approved_at=now(),
+                    approved_at=COALESCE(approved_at,now()),
                     updated_at=now()
-                WHERE id=:id
+                WHERE id=:id AND lifecycle IN ('UNASSIGNED','SERVICE_TEST','PENDING_ACCEPTANCE')
                 RETURNING *
                 """
             ),
