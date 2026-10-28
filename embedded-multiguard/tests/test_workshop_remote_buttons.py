@@ -93,7 +93,10 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
 
     def test_confirmation_before_network_request(self):
         handler = self.ui[self.ui.index("start.onclick = async () => {"):]
-        self.assertLess(handler.index("window.confirm("), handler.index("start.disabled = true;"))
+        # An ineligible device is disabled before any confirmation or network call.
+        # For eligible devices, confirm first, then disable while requesting.
+        confirmed = handler.split("if (!window.confirm(", 1)[1]
+        self.assertLess(confirmed.index("start.disabled = true;"), confirmed.index("await api('request/' + installation, 'POST')"))
         self.assertLess(handler.index("window.confirm("), handler.index("await api('request/' + installation, 'POST')"))
 
     def test_button_colors_and_disabled_gates(self):
