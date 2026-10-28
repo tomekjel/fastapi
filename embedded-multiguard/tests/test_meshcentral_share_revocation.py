@@ -50,7 +50,7 @@ class MeshCentralRevocationTests(unittest.TestCase):
             if "ListDeviceGroups" in command:
                 return json.dumps([{"_id": group, "mtype": 2, "consent": 0}])
             return json.dumps([{"_id": node, "meshid": group, "consent": 0}])
-        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
                                   "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
              patch.object(meshcentral, "_base_command",
                           return_value=["meshctrl", "DeviceSharing"]), \
@@ -60,7 +60,7 @@ class MeshCentralRevocationTests(unittest.TestCase):
             if "ListDeviceGroups" in command:
                 return json.dumps([{"_id": group, "mtype": 2, "consent": 0}])
             return json.dumps([{"_id": node, "meshid": group, "consent": 8}])
-        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
                                   "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
              patch.object(meshcentral, "_base_command",
                           return_value=["meshctrl", "DeviceSharing"]), \
@@ -71,7 +71,7 @@ class MeshCentralRevocationTests(unittest.TestCase):
             if "ListDeviceGroups" in command:
                 return json.dumps([{"_id": group, "mtype": 2, "consent": 8}])
             return json.dumps([{"_id": node, "meshid": group, "consent": 0}])
-        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
                                   "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
              patch.object(meshcentral, "_base_command",
                           return_value=["meshctrl", "DeviceSharing"]), \
@@ -92,7 +92,7 @@ class MeshCentralRevocationTests(unittest.TestCase):
                     return json.dumps([record])
                 return json.dumps([{"_id": node, "meshid": group}])
             with self.subTest(group_consent=group_consent), \
-                 patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+                 patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
                                   "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
                  patch.object(meshcentral, "_base_command",
                               return_value=["meshctrl", "DeviceSharing"]), \
@@ -112,7 +112,7 @@ class MeshCentralRevocationTests(unittest.TestCase):
                 return json.dumps([{"_id": group, "mtype": 2, "consent": 511}])
             return json.dumps([{"_id": node, "meshid": group}])
         with patch.dict(os.environ, {
-                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
                 "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group,
             }), patch.object(meshcentral, "_base_command",
                              return_value=["meshctrl", "DeviceSharing"]), \
@@ -124,7 +124,7 @@ class MeshCentralRevocationTests(unittest.TestCase):
         group = "mesh/d/" + "B"*64
         node = "node/d/" + "A"*64
         with patch.dict(os.environ, {
-                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
                 "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group,
                 "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID": group,
             }), patch.object(meshcentral, "_run") as run:
@@ -132,7 +132,7 @@ class MeshCentralRevocationTests(unittest.TestCase):
                 meshcentral.verify_session_share_policy(node)
             run.assert_not_called()
         with patch.dict(os.environ, {
-                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
                 "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": "mesh/d/" + "C"*64,
             }), patch.object(meshcentral, "_run") as run:
             with self.assertRaises(meshcentral.MeshCentralError):
