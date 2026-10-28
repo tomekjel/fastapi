@@ -505,7 +505,7 @@ def request_consent_for_owner(iid: uuid.UUID):
             VALUES (:sid,:iid,'REQUESTED',:expires,:now)
         """), {
             "sid": sid, "iid": iid,
-            "expires": now + timedelta(minutes=5), "now": now,
+            "expires": now + timedelta(minutes=10), "now": now,
         })
         _event(db, sid, "OWNER_REQUESTED", "TECHNICIAN")
         return sid
