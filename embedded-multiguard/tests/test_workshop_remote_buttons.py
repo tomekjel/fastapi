@@ -55,6 +55,11 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("autoOpen=false; viewerError=false;", self.ui)
         self.assertIn("if(viewerTab && !viewerTab.closed) viewerTab.close(); viewerTab=null;", self.ui)
 
+    def test_recover_does_not_accumulate_polling_intervals(self):
+        self.assertIn("if (timer) { clearInterval(timer); timer = null; }", self.ui)
+        self.assertIn("timer = setInterval(refresh, 3000);", self.ui)
+        self.assertIn("timer=null; sid=null; autoOpen=false; viewerError=false;", self.ui)
+
     def test_confirmation_before_network_request(self):
         handler = self.ui[self.ui.index("start.onclick = async () => {"):]
         self.assertLess(handler.index("window.confirm("), handler.index("start.disabled = true;"))
