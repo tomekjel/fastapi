@@ -36,6 +36,14 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("start.disabled = true;", self.ui)
         self.assertIn("connect.disabled = true;", self.ui)
 
+    def test_viewer_opens_after_verified_binding_without_second_owner_click(self):
+        self.assertIn("viewerTab = window.open('about:blank','_blank');", self.ui)
+        self.assertIn("if (ready && autoOpen && !opening)", self.ui)
+        self.assertIn("await openDesktop();", self.ui)
+        self.assertIn("api('sessions/' + sid + '/connect','POST')", self.ui)
+        self.assertIn("url.hostname !== 'mesh.multi-servis.pl'", self.ui)
+        self.assertIn("if (viewerTab && !viewerTab.closed) viewerTab.close();", self.ui)
+
     def test_confirmation_before_network_request(self):
         handler = self.ui[self.ui.index("start.onclick = async () => {"):]
         self.assertLess(handler.index("window.confirm("), handler.index("start.disabled = true;"))
