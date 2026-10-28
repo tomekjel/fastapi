@@ -13,21 +13,32 @@ from app.routers import multiguard_meshcentral as meshcentral
 
 
 class MeshCentralRevocationTests(unittest.TestCase):
-    def test_client_approved_share_requires_independent_policy_attestation(self):
-        args = ("node/d/identity", "owner", ("desktop",), 60)
+    def test_client_approved_share_requires_attestation_and_exact_online_node(self):
+        args = ("node/d/" + "A"*64, "00000000-0000-4000-8000-000000000001",
+                "owner", ("desktop",), 60)
         with patch.dict(os.environ, {"MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED": "0"}), \
              patch.object(meshcentral, "create_share", return_value="fallback") as fallback, \
+             patch.object(meshcentral, "verify_session_node") as verify, \
              patch.object(meshcentral, "_create_share") as direct:
             self.assertEqual(meshcentral.create_client_approved_share(*args), "fallback")
             fallback.assert_called_once()
+            verify.assert_not_called()
             direct.assert_not_called()
         with patch.dict(os.environ, {"MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED": "1"}), \
              patch.object(meshcentral, "create_share", return_value="fallback") as fallback, \
+             patch.object(meshcentral, "verify_session_node", return_value=args[0]) as verify, \
              patch.object(meshcentral, "_create_share", return_value="approved") as direct:
             self.assertEqual(meshcentral.create_client_approved_share(*args), "approved")
+            verify.assert_called_with("A"*64, args[1], persistent_service=True)
             self.assertTrue(direct.call_args.kwargs["workshop_unattended"])
             self.assertEqual(meshcentral.create_client_approved_share(
-                args[0], args[1], ("desktop","files"), args[3]), "fallback")
+                args[0], args[1], args[2], ("desktop","files"), args[4]), "fallback")
+        with patch.dict(os.environ, {"MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED": "1"}), \
+             patch.object(meshcentral, "verify_session_node", return_value="node/d/" + "B"*64), \
+             patch.object(meshcentral, "_create_share") as direct:
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.create_client_approved_share(*args)
+            direct.assert_not_called()
 
     def test_create_share_rejects_untrusted_urls(self):
         bad_urls = (
