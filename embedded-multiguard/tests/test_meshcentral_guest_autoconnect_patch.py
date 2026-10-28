@@ -27,6 +27,13 @@ class MeshSharingAutoConnectTests(unittest.TestCase):
         self.assertIn("attempts >= limit", result)
         self.assertNotIn("eval(", result)
 
+    def test_meshcentral_125_alternate_closing_tag_spacing(self):
+        template = self.source.replace("        start();\n    </script>", "        start();\n        </script>")
+        result = module.patch(template)
+        self.assertIn(module.MARKER, result)
+        self.assertEqual(result.count("</script>"), 1)
+        self.assertIn("connectDesktop(null, 3)", result)
+
     def test_patcher_is_idempotence_safe(self):
         result = module.patch(self.source)
         with self.assertRaises(ValueError):
