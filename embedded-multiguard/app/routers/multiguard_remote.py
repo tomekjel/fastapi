@@ -1490,7 +1490,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         .ws-controls button:disabled{background:#737b87!important;color:#fff;cursor:not-allowed;opacity:.65}
         .ws-controls button:focus-visible{outline:3px solid #72baff;outline-offset:3px}
       </style>
-      <div class="ws-prior-consent">
+      <div class="ws-prior-consent" style="display:none">
         <h2>Upoważnienie do stałej diagnostyki</h2>
         <p>Najpierw zapisz dokument wcześniejszej zgody osoby uprawnionej do tego komputera. Plik pozostanie na Twoim komputerze: do serwera trafi jedynie SHA-256 dokumentu. Po tej operacji MultiGuard na komputerze klienta musi osobno potwierdzić upoważnienie.</p>
         <label>Rodzaj komputera
@@ -1507,8 +1507,8 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         <small role="status" aria-live="polite" id="ws-approval-status">Upoważnienie wymaga niezależnego potwierdzenia w aplikacji MultiGuard na tym urządzeniu.</small>
       </div>
       <div class="ws-controls">
-        <button type="button" id="ws-start">POŁĄCZ BEZ KOLEJNEJ ZGODY</button>
-        <button type="button" id="ws-consent" disabled>POŁĄCZ ZA ZGODĄ KLIENTA</button>
+        <button type="button" id="ws-start">POŁĄCZ</button>
+        <button type="button" id="ws-consent" disabled hidden>POŁĄCZ ZA ZGODĄ KLIENTA</button>
         <button type="button" id="ws-connect" disabled>OTWÓRZ PULPIT</button>
         <button type="button" id="ws-end" disabled>ROZŁĄCZ</button>
         <button type="button" id="ws-revoke">COFNIJ STAŁE UPOWAŻNIENIE</button>
@@ -1540,19 +1540,23 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         });
         if(!r.ok) throw Error('HTTP '+r.status+': '+(await r.text()).slice(0,150));
         const state = await r.json();
-        standingEligible = state.unattendedReady === true
-          && state.mode === 'SERVICE_PRO'
-          && state.standingAuthorizationRecorded === true;
-        if(!sid) { start.disabled = !standingEligible; consent.disabled = false; }
+        standingEligible = state.mode === 'SERVICE_PRO' && state.unattendedReady === true;
+        const customerMode = state.mode === 'CUSTOMER_LICENSE';
+        start.hidden = state.mode !== 'SERVICE_PRO';
+        consent.hidden = !customerMode;
+        if(!sid) {
+          start.disabled = !standingEligible;
+          consent.disabled = !customerMode;
+        }
         approvalStatus.textContent = standingEligible
-          ? 'Zweryfikowano ważną zgodę i dedykowaną grupę online. Możesz rozpocząć połączenie serwisowe bez kolejnego pytania.'
-          : state.localOptInAttested
-          ? 'Zgoda potwierdzona lokalnie, ale komputer nie jest jeszcze gotowy w dedykowanej grupie MeshCentral.'
-          : state.ownerPriorConsentPrepared
-          ? 'Dokument zgody zapisany. Oczekuje na jednorazowe potwierdzenie w aplikacji MultiGuard na wskazanym komputerze.'
-          : 'Nie zapisano bieżącego wcześniejszego upoważnienia dla tego komputera.';
+          ? 'Pro serwisowy: komputer online, połączenie bez zgody klienta.'
+          : customerMode
+          ? 'Pro czasowy: każde połączenie wymaga zgody klienta.'
+          : state.mode === 'SERVICE_PRO'
+          ? 'Oczekiwanie na komputer w przypisanej grupie serwisowej MeshCentral.'
+          : 'Zdalny pulpit niedostępny dla tej licencji.';
       }
-      prepare.onclick = async () => {
+            prepare.onclick = async () => {
         if(!proof.files || proof.files.length!==1 || !proofConfirmed.checked) {
           approvalStatus.textContent='Wybierz dokument zgody i osobno potwierdź wcześniejsze upoważnienie.';
           return;
@@ -1712,7 +1716,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       start.onclick = async () => {
         if (!standingEligible) {
           start.disabled = true;
-          status.textContent = 'Wymagane wcześniejsze upoważnienie i potwierdzenie online MeshCentral.';
+          status.textContent = 'Wymagana aktywna licencja Pro serwisowa i węzeł online.';
           return;
         }
         if (!window.confirm('Czy na pewno połączyć się z tym komputerem?')) return;
