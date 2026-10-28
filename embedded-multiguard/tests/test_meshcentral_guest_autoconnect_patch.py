@@ -37,9 +37,8 @@ class MeshSharingAutoConnectTests(unittest.TestCase):
     def test_crlf_template_preserves_existing_line_endings(self):
         original = self.source.replace("\n", "\r\n")
         patched = module.patch(original)
-        self.assertEqual(patched.replace(module.MARKER, ""), patched.replace(module.MARKER, ""))
         self.assertNotIn("\n", patched.replace("\r\n", ""))
-        self.assertEqual(patched.count("\r\n"), original.count("\r\n") + 20)
+        self.assertEqual(patched.count("\r\n") - original.count("\r\n"), module.INSERT.split("    </script>", 1)[0].rstrip("\n").count("\n"))
 
     def test_patcher_is_idempotence_safe(self):
         result = module.patch(self.source)
