@@ -1719,7 +1719,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           status.textContent = 'Wymagane wcześniejsze upoważnienie i potwierdzenie online MeshCentral.';
           return;
         }
-        if (!window.confirm('Połączyć się z komputerem na podstawie wcześniej udzielonego upoważnienia serwisowego Pro?')) return;
+        if (!window.confirm('Czy na pewno połączyć się z tym komputerem?')) return;
         prepareViewer();
         start.disabled = true;
         try {
