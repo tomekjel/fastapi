@@ -1607,6 +1607,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         finally{prepare.disabled=false;}
       };
       async function recover() {
+        if (timer) { clearInterval(timer); timer = null; }
         consent.disabled = true;
         start.disabled = true;
         connect.disabled = true;
@@ -1787,7 +1788,9 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
             ? 'Stałe upoważnienie cofnięte. Poprzednia sesja została zamknięta.'
             : 'Brak aktywnego stałego upoważnienia do cofnięcia.';
           if (timer) clearInterval(timer);
-          timer=null; sid=null; connect.disabled=true; end.disabled=true;
+          timer=null; sid=null; autoOpen=false; viewerError=false;
+          if(viewerTab && !viewerTab.closed) viewerTab.close(); viewerTab=null;
+          connect.disabled=true; end.disabled=true;
           await recover();
           await refreshApproval();
         } catch(e) {
