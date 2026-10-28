@@ -898,7 +898,7 @@ def workshop_remote_decision(request: WorkshopDecision):
                     granted_capabilities=CAST(:caps AS jsonb)
                 WHERE id=:sid
             """),{"sid":row["id"],"now":consented_at,
-                  "consent_expires":consented_at+timedelta(minutes=5),
+                  "consent_expires":consented_at+timedelta(minutes=10),
                   "caps":json.dumps(allowed)})
             _event(db,row["id"],"CLIENT_CONSENTED","CLIENT")
         updated = db.execute(text("""
