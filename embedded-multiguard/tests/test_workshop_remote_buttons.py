@@ -44,6 +44,11 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("url.hostname !== 'mesh.multi-servis.pl'", self.ui)
         self.assertIn("if (viewerTab && !viewerTab.closed) viewerTab.close();", self.ui)
 
+    def test_auto_open_error_is_not_overwritten_by_ready_message(self):
+        self.assertIn("if (ready && autoOpen && !opening)", self.ui)
+        self.assertIn("} else if (!opening) {", self.ui)
+        self.assertIn("Nie udało się otworzyć pulpitu:", self.ui)
+
     def test_confirmation_before_network_request(self):
         handler = self.ui[self.ui.index("start.onclick = async () => {"):]
         self.assertLess(handler.index("window.confirm("), handler.index("start.disabled = true;"))
