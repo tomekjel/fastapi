@@ -3500,6 +3500,7 @@ def approve_reception_license(
                     approved_at=COALESCE(approved_at,now()),
                     updated_at=now()
                 WHERE id=:id AND lifecycle IN ('UNASSIGNED','SERVICE_TEST','PENDING_ACCEPTANCE')
+                  AND accepted_at IS NULL AND valid_from IS NULL AND valid_until IS NULL
                 RETURNING *
                 """
             ),
