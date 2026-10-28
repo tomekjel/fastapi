@@ -2226,7 +2226,7 @@ def acceptance(req: AcceptanceRequest):
                     accepted_documents=CAST(:documents AS jsonb),
                     app_version=:app_version,
                     updated_at=now()
-                WHERE id=:id
+                WHERE id=:id AND lifecycle='PENDING_ACCEPTANCE'
                 RETURNING *
                 """
             ),
@@ -2239,7 +2239,9 @@ def acceptance(req: AcceptanceRequest):
                 "app_version": req.app_version,
                 "id": link["id"],
             },
-        ).mappings().one()
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(409, "Licencja zmieniła stan podczas akceptacji; odśwież dane.")
         link = _normalize_link(dict(row))
         _update_installation_mirror(connection, link)
         connection.execute(
