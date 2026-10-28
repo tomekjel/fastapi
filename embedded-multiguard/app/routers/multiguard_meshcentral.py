@@ -468,6 +468,17 @@ def verify_session_share_policy(node_id: str) -> None:
     """
     import json
     group = _required("MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID")
+    # A single-prompt session must use a dedicated MeshCentral group, not the
+    # legacy shared group with consent=511 or a standing-service group.
+    approved_group = _required("MESH_CENTRAL_SINGLE_PROMPT_MESH_ID")
+    if (approved_group != group or
+            not re.fullmatch(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", approved_group)):
+        raise MeshCentralError("Grupa jednej zgody nie odpowiada grupie agenta sesji.")
+    for other_var in ("MESH_CENTRAL_OWNER_OWNED_MESH_ID",
+                      "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID"):
+        other = os.getenv(other_var, "").strip()
+        if other and other == approved_group:
+            raise MeshCentralError("Grupa jednej zgody nie może być grupą serwisową.")
     command = list(_base_command())
     command[command.index("DeviceSharing")] = "ListDevices"
     raw = _run(command + ["--json"])
