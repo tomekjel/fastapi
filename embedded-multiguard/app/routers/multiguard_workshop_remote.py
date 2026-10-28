@@ -602,8 +602,7 @@ def request_for_owner(iid: uuid.UUID):
             409, "Wymagana potwierdzona usługa online w dedykowanej grupie MeshCentral."
         ) from exc
     with engine.begin() as db:
-        # Follow the same grant -> standing -> session lock order as OWNER
-        # rights revocation to prevent authorizing against stale grants.
+        # Serialize with licence changes; the node and service grant must remain valid.
         db.execute(text("""
             SELECT installation_id FROM guard.workshop_grants
             WHERE installation_id=:iid FOR UPDATE
