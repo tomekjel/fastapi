@@ -1703,6 +1703,13 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         viewerError = false;
         const tab = viewerTab && !viewerTab.closed ? viewerTab : null;
         viewerTab = null;
+        if (!tab) {
+          opening = false;
+          viewerError = true;
+          connect.disabled = false;
+          status.textContent = 'Przeglądarka zablokowała nową kartę. Kliknij OTWÓRZ PULPIT.';
+          return;
+        }
         try {
           connect.disabled = true;
           const reply = await api('sessions/' + connectingSession + '/connect','POST');
