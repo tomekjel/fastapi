@@ -227,6 +227,7 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("if not _eligible(grant):", plan)
         self.assertIn("expected_remote_mesh_group(grant)", plan)
         self.assertIn('"meshGroupId": group', plan)
+        self.assertIn('"requiredAgentProfile": "SERVICE_PRO"', plan)
         self.assertIn('"unattendedAuthorized": False', plan)
         self.assertNotIn("MeshAgentInstall", plan)
         self.assertNotIn("token", plan.lower())
