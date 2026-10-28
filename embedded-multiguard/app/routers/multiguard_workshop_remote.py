@@ -770,6 +770,7 @@ def workshop_mesh_provisioning_plan(request: WorkshopAuth):
         "requestId": request.requestId,
         "mode": "SERVICE_PRO",
         "meshGroupId": group,
+        "requiredAgentProfile": "SERVICE_PRO",
         "unattendedAuthorized": False,
         "serverTime": _now().isoformat(),
     }
