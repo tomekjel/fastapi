@@ -3504,7 +3504,9 @@ def approve_reception_license(
                 """
             ),
             {"id": link["id"]},
-        ).mappings().one()
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(409, "Licencja zmieniła stan podczas wydania; odśwież dane.")
         link = _normalize_link(dict(row))
         _update_installation_mirror(connection, link)
 
