@@ -12,6 +12,23 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         cls.active = src[src.index("def panel_workshop_active("):src.index('@router.get("/panel/remote/workshop/',src.index("def panel_workshop_active("))]
         cls.status = src[src.index("def panel_workshop_status("):src.index('@router.post("/panel/remote-api/workshop/sessions/', src.index("def panel_workshop_status("))]
 
+    def test_paid_pro_uses_client_consent_share_not_service_pro(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        commercial = source.split('@router.post("/agent/remote/mesh-enroll")', 1)[1].split('@router.post("/agent/remote/poll")', 1)[0]
+        self.assertIn("_has_active_remote_pro(installation,", commercial)
+        self.assertIn("single_prompt=(os.getenv(", commercial)
+        self.assertNotIn("SERVICE_PRO", commercial)
+        self.assertIn("meshcentral.create_client_approved_share(", source)
+        self.assertIn("str(session_uuid)", source)
+
+    def test_single_prompt_is_explicit_opt_in_and_legacy_stays_default(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn('MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED") == "1"', source)
+        mesh = (SOURCE.parent / "multiguard_meshcentral.py").read_text(encoding="utf-8")
+        self.assertIn('if os.getenv("MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED", "") != "1":', mesh)
+        self.assertIn("return create_share(node_id, session_label, capabilities, duration_minutes)", mesh)
+        self.assertIn("single_prompt=True", mesh)
+
     def test_explicit_consent_endpoint_is_separate_from_unattended(self):
         source = SOURCE.read_text(encoding="utf-8")
         consent_route = source.split('@router.post("/panel/remote-api/workshop/request-consent/{installation_id}")', 1)[1].split('@router.post("/panel/remote-api/workshop/request/{installation_id}")', 1)[0]
