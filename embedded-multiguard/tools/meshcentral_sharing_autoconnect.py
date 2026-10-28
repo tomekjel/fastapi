@@ -44,7 +44,10 @@ def patch(source: str) -> str:
     if "var urlargs = parseUriArgs();" not in source:
         raise ValueError("Expected URL argument parser missing")
     # Preserve upstream whitespace and script closing tags across MeshCentral 1.2.5 builds.
-    return source.replace(ANCHOR, INSERT.split("    </script>", 1)[0].rstrip("\n"))
+    addition = INSERT.split("    </script>", 1)[0].rstrip("\n")
+    if "\r\n" in source:
+        addition = addition.replace("\n", "\r\n")
+    return source.replace(ANCHOR, addition)
 
 
 def main() -> None:
