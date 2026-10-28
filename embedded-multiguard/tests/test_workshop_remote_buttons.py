@@ -55,6 +55,23 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("if row[\"expires_at\"]<_now():", decision)
         self.assertNotIn('"consent_expires":consented_at+timedelta(minutes=5)', decision)
 
+    def test_customer_assignment_revokes_unattended_before_licence_switch(self):
+        licence = (SOURCE.parent / "multiguard_license.py").read_text(encoding="utf-8")
+        self.assertIn("workshop.close_before_rights_change(connection,installation_id)", licence)
+        self.assertIn("workshop.close_before_rights_change(con,installation_id)", licence)
+        workshop = (SOURCE.parent / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
+        close = workshop.split("def close_before_rights_change(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("_open(db, iid, entitlement_lost=True)", close)
+        self.assertIn('invalidate_standing_authorization(db,iid,"SERVICE_RIGHTS_CHANGED")', close)
+
+    def test_paid_licence_starts_only_after_acceptance(self):
+        licence = (SOURCE.parent / "multiguard_license.py").read_text(encoding="utf-8")
+        acceptance = licence.split("def acceptance(req: AcceptanceRequest):", 1)[1].split("\n@router.", 1)[0]
+        self.assertIn('if link["lifecycle"] != "PENDING_ACCEPTANCE":', acceptance)
+        self.assertIn("valid_from=:started", acceptance)
+        self.assertIn("accepted_at=:started", acceptance)
+        self.assertIn("valid_until=:valid_until", acceptance)
+
     def test_workshop_customer_consent_window_is_ten_minutes(self):
         workshop = (SOURCE.parent / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
         request = workshop.split("def request_consent_for_owner(", 1)[1].split("\n@router.post(", 1)[0]
