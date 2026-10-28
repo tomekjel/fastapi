@@ -76,6 +76,29 @@ class MeshCentralRevocationTests(unittest.TestCase):
             with self.assertRaises(meshcentral.MeshCentralError):
                 meshcentral.verify_session_share_policy(node)
 
+    def test_session_share_policy_rejects_missing_consent_configuration(self):
+        import json
+        node = "node/d/" + "A"*64
+        group = "mesh/d/" + "B"*64
+        for missing in ("device", "group"):
+            def run(command):
+                if "ListDeviceGroups" in command:
+                    record = {"_id": group, "mtype": 2, "consent": 0}
+                    if missing == "group":
+                        del record["consent"]
+                    return json.dumps([record])
+                record = {"_id": node, "meshid": group, "consent": 0}
+                if missing == "device":
+                    del record["consent"]
+                return json.dumps([record])
+            with self.subTest(missing=missing), \
+                 patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group}), \
+                 patch.object(meshcentral, "_base_command",
+                              return_value=["meshctrl", "DeviceSharing"]), \
+                 patch.object(meshcentral, "_run", side_effect=run):
+                with self.assertRaises(meshcentral.MeshCentralError):
+                    meshcentral.verify_session_share_policy(node)
+
     def test_create_share_rejects_untrusted_urls(self):
         bad_urls = (
             "javascript:alert(1)",
