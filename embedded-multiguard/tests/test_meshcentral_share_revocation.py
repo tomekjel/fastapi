@@ -50,7 +50,8 @@ class MeshCentralRevocationTests(unittest.TestCase):
             if "ListDeviceGroups" in command:
                 return json.dumps([{"_id": group, "mtype": 2, "consent": 0}])
             return json.dumps([{"_id": node, "meshid": group, "consent": 0}])
-        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group}), \
+        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+                                  "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
              patch.object(meshcentral, "_base_command",
                           return_value=["meshctrl", "DeviceSharing"]), \
              patch.object(meshcentral, "_run", side_effect=run_ok):
@@ -59,7 +60,8 @@ class MeshCentralRevocationTests(unittest.TestCase):
             if "ListDeviceGroups" in command:
                 return json.dumps([{"_id": group, "mtype": 2, "consent": 0}])
             return json.dumps([{"_id": node, "meshid": group, "consent": 8}])
-        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group}), \
+        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+                                  "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
              patch.object(meshcentral, "_base_command",
                           return_value=["meshctrl", "DeviceSharing"]), \
              patch.object(meshcentral, "_run", side_effect=run_bad_device):
@@ -69,7 +71,8 @@ class MeshCentralRevocationTests(unittest.TestCase):
             if "ListDeviceGroups" in command:
                 return json.dumps([{"_id": group, "mtype": 2, "consent": 8}])
             return json.dumps([{"_id": node, "meshid": group, "consent": 0}])
-        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group}), \
+        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+                                  "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
              patch.object(meshcentral, "_base_command",
                           return_value=["meshctrl", "DeviceSharing"]), \
              patch.object(meshcentral, "_run", side_effect=run_bad_group):
@@ -92,12 +95,32 @@ class MeshCentralRevocationTests(unittest.TestCase):
                     del record["consent"]
                 return json.dumps([record])
             with self.subTest(missing=missing), \
-                 patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group}), \
+                 patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+                                  "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
                  patch.object(meshcentral, "_base_command",
                               return_value=["meshctrl", "DeviceSharing"]), \
                  patch.object(meshcentral, "_run", side_effect=run):
                 with self.assertRaises(meshcentral.MeshCentralError):
                     meshcentral.verify_session_share_policy(node)
+
+    def test_single_prompt_group_must_be_separate_from_service_groups(self):
+        group = "mesh/d/" + "B"*64
+        node = "node/d/" + "A"*64
+        with patch.dict(os.environ, {
+                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+                "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group,
+                "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID": group,
+            }), patch.object(meshcentral, "_run") as run:
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_share_policy(node)
+            run.assert_not_called()
+        with patch.dict(os.environ, {
+                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+                "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": "mesh/d/" + "C"*64,
+            }), patch.object(meshcentral, "_run") as run:
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_share_policy(node)
+            run.assert_not_called()
 
     def test_create_share_rejects_untrusted_urls(self):
         bad_urls = (
