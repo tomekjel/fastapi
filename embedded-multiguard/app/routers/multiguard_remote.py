@@ -1384,59 +1384,28 @@ def panel_remote_entitlement_diagnostic(
     with engine.connect() as db:
         grant = workshop._grant(db, installation_id)
         mode = workshop.remote_entitlement_mode(grant)
-        standing = (
-            workshop.standing_authorization_record(db, installation_id)
-            if mode == "SERVICE_PRO" else None
-        )
-    # A durable record by itself is NOT an online authorization. The actual
-    # share path must independently verify exact MeshCentral live node/group
-    # and current, unrevoked scope. Until then never report ready.
-    owner_prepared = bool(
-        mode == "SERVICE_PRO" and standing
-        and standing["owner_approved_at"] is not None
-        and standing["revoked_at"] is None
-        and standing["approved_mesh_node_id"] == grant.get("mesh_node_id")
-    )
-    standing_recorded = workshop.standing_authorization_record_valid(grant, standing)
     group_online = False
-    if standing_recorded:
+    if mode == "SERVICE_PRO" and grant.get("mesh_node_id"):
         try:
             group_online = (
-                meshcentral.verify_standing_service_node(
-                    grant["mesh_node_id"], standing["device_scope"]
-                ) == grant["mesh_node_id"]
+                meshcentral.verify_service_pro_node(grant["mesh_node_id"])
+                == grant["mesh_node_id"]
             )
         except meshcentral.MeshCentralError:
-            # No configured group, offline or foreign node => deny.
             group_online = False
     return JSONResponse({
         "mode": mode,
         "serviceRemoteEligible": mode == "SERVICE_PRO",
         "customerLicenceRoute": mode == "CUSTOMER_LICENSE",
-        # No standing-access share is enabled until independent signed
-        # device authorization, owner attestation and dedicated MeshCentral
-        # group are wired and checked at connection time.
-        "ownerPriorConsentPrepared": owner_prepared,
-        "localOptInAttested": bool(
-            owner_prepared and standing["local_opt_in_attested_at"] is not None
-        ),
-        "standingAuthorizationRecorded": standing_recorded,
-        "unattendedReady": bool(standing_recorded and group_online),
+        "standingAuthorizationRecorded": False,
+        "unattendedReady": bool(mode == "SERVICE_PRO" and group_online),
         "reasonCode": (
-            "SERVICE_PRO_STANDING_SESSION_READY"
-            if standing_recorded and group_online
-            else "CHECK_CUSTOMER_PRO_AND_USE_PER_SESSION_CONSENT"
-            if mode == "CUSTOMER_LICENSE"
-            else "SERVICE_PRO_AWAITS_LIVE_MESH_GROUP_VERIFICATION"
-            if mode == "SERVICE_PRO" and standing_recorded
-            else "SERVICE_PRO_AWAITS_LOCAL_CONFIRMATION"
-            if mode == "SERVICE_PRO" and owner_prepared
-            else "SERVICE_PRO_NEEDS_DEVICE_BOUND_STANDING_AUTHORIZATION"
-            if mode == "SERVICE_PRO"
+            "SERVICE_PRO_ONLINE" if group_online and mode == "SERVICE_PRO"
+            else "SERVICE_PRO_SERVICE_GROUP_OFFLINE" if mode == "SERVICE_PRO"
+            else "CUSTOMER_REQUIRES_SESSION_CONSENT" if mode == "CUSTOMER_LICENSE"
             else "REMOTE_NOT_ELIGIBLE"
         ),
     }, headers={"Cache-Control": "private, no-store"})
-
 
 @router.post("/panel/remote-api/standing/{installation_id}/prepare")
 def panel_owner_prepare_standing_remote_authorization(
