@@ -93,6 +93,12 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("autoOpen=false; viewerError=false;", self.ui)
         self.assertIn("if(viewerTab && !viewerTab.closed) viewerTab.close(); viewerTab=null;", self.ui)
 
+    def test_session_polling_is_serialized(self):
+        self.assertIn("refreshPending = false;", self.ui)
+        self.assertIn("if (!sid || refreshPending) return;", self.ui)
+        self.assertIn("refreshPending = true;", self.ui)
+        self.assertIn("} finally {\n          refreshPending = false;", self.ui)
+
     def test_recover_does_not_accumulate_polling_intervals(self):
         self.assertIn("if (timer) { clearInterval(timer); timer = null; }", self.ui)
         self.assertIn("timer = setInterval(refresh, 3000);", self.ui)
