@@ -194,6 +194,27 @@ def remote_entitlement_mode(grant):
     return "UNKNOWN_DENIED"
 
 
+
+def expected_remote_mesh_group(grant):
+    """Resolve the target group from authoritative server licence state.
+
+    This is a fail-closed planning helper, NOT a permission to move an existing
+    MeshCentral node. Group changes must revoke active shares first, verify
+    installation identity, and be committed with the licence transition.
+    """
+    mode = remote_entitlement_mode(grant)
+    if mode == "SERVICE_PRO":
+        key = "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID"
+    elif mode == "CUSTOMER_LICENSE" and grant.get("edition") == "PRO":
+        key = "MESH_CENTRAL_CUSTOMER_MESH_ID"
+    else:
+        return None
+    group = os.getenv(key, "").strip()
+    if not re.fullmatch(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", group):
+        return None
+    return group
+
+
 def _eligible(grant):
     return remote_entitlement_mode(grant) == "SERVICE_PRO"
 
