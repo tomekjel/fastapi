@@ -1727,6 +1727,9 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           }
           const url = new URL(reply.url);
           if (url.protocol !== 'https:' || url.hostname !== 'mesh.multi-servis.pl') throw Error('Niezaufany adres MeshCentral.');
+          // The MeshCentral guest viewer starts the desktop only after its native Connect control is ready.
+          // This flag does not authorize a session; the signed guest link still controls access.
+          url.searchParams.set('mgautoconnect', '1');
           if (tab) tab.location.replace(url.href);
           else { viewerError = true; status.textContent = 'Przeglądarka zablokowała nową kartę. Kliknij OTWÓRZ PULPIT.'; connect.disabled = false; }
         } catch(e) {
