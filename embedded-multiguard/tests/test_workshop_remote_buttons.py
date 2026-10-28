@@ -64,6 +64,13 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("_open(db, iid, entitlement_lost=True)", close)
         self.assertIn('invalidate_standing_authorization(db,iid,"SERVICE_RIGHTS_CHANGED")', close)
 
+    def test_release_requires_unactivated_licence_state(self):
+        licence = (SOURCE.parent / "multiguard_license.py").read_text(encoding="utf-8")
+        release = licence.split("def approve_reception_license(", 1)[1].split("\n@router.", 1)[0]
+        self.assertIn("lifecycle IN ('UNASSIGNED','SERVICE_TEST','PENDING_ACCEPTANCE')", release)
+        self.assertIn("approved_at=COALESCE(approved_at,now())", release)
+        self.assertIn("SET lifecycle='PENDING_ACCEPTANCE'", release)
+
     def test_acceptance_is_guarded_against_concurrent_licence_change(self):
         licence = (SOURCE.parent / "multiguard_license.py").read_text(encoding="utf-8")
         acceptance = licence.split("def acceptance(req: AcceptanceRequest):", 1)[1].split("\n@router.", 1)[0]
