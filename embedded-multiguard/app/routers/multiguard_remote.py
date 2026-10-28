@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -364,7 +365,10 @@ def agent_session_mesh_enroll(body: AgentSessionMeshBody):
     with engine.connect() as db:
         validate(db)
     try:
-        node = meshcentral.verify_session_node(body.meshNodeId, str(body.sessionId), persistent_service=True)
+        node = meshcentral.verify_session_node(
+            body.meshNodeId, str(body.sessionId), persistent_service=True,
+            single_prompt=(os.getenv("MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED") == "1"),
+        )
     except meshcentral.MeshCentralError as exc:
         raise HTTPException(409, "Serwer nie potwierdził jeszcze agenta tej sesji.") from exc
     with engine.begin() as db:
@@ -888,8 +892,9 @@ def remote_session_connect(
     # A slow response must not extend our local expiry beyond MeshCentral's.
     share_expires = datetime.now(timezone.utc) + timedelta(minutes=60)
     try:
-        share = meshcentral.create_share(
+        share = meshcentral.create_client_approved_share(
             node_id,
+            str(session_uuid),
             f"Multi-Servis {str(session_uuid)[:8]}",
             granted,
             60,
