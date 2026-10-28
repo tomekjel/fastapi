@@ -103,6 +103,23 @@ class MeshCentralRevocationTests(unittest.TestCase):
                     with self.assertRaises(meshcentral.MeshCentralError):
                         meshcentral.verify_session_share_policy(node)
 
+    def test_legacy_consent_511_must_never_enable_single_prompt(self):
+        import json
+        group = "mesh/d/" + "B"*64
+        node = "node/d/" + "A"*64
+        def run(command):
+            if "ListDeviceGroups" in command:
+                return json.dumps([{"_id": group, "mtype": 2, "consent": 511}])
+            return json.dumps([{"_id": node, "meshid": group}])
+        with patch.dict(os.environ, {
+                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
+                "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group,
+            }), patch.object(meshcentral, "_base_command",
+                             return_value=["meshctrl", "DeviceSharing"]), \
+             patch.object(meshcentral, "_run", side_effect=run):
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_share_policy(node)
+
     def test_single_prompt_group_must_be_separate_from_service_groups(self):
         group = "mesh/d/" + "B"*64
         node = "node/d/" + "A"*64
