@@ -30,7 +30,7 @@ class MeshCentralRevocationTests(unittest.TestCase):
              patch.object(meshcentral, "verify_session_share_policy") as policy, \
              patch.object(meshcentral, "_create_share", return_value="approved") as direct:
             self.assertEqual(meshcentral.create_client_approved_share(*args), "approved")
-            verify.assert_called_with("A"*64, args[1], persistent_service=True)
+            verify.assert_called_once_with("A"*64, args[1], persistent_service=True, single_prompt=True)
             policy.assert_called_with(args[0])
             self.assertTrue(direct.call_args.kwargs["workshop_unattended"])
             self.assertEqual(meshcentral.create_client_approved_share(
