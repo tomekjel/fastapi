@@ -201,7 +201,7 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
     def test_workshop_enrollment_requires_dedicated_service_group(self):
         source = (pathlib.Path(__file__).resolve().parents[1] / "app" /
                   "routers" / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
-        enroll = source.split("def workshop_mesh_enroll(", 1)[1].split("\\n@router.", 1)[0]
+        enroll = source.split("def workshop_mesh_enroll(", 1)[1].split("@router.", 1)[0]
         self.assertIn("meshcentral.verify_service_pro_node(node)", enroll)
         self.assertNotIn("meshcentral.verify_registered_node(node)", enroll)
         self.assertIn('verified != node', enroll)
