@@ -32,7 +32,7 @@ class MeshCentralRevocationTests(unittest.TestCase):
             "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": legacy,
             "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": approved,
         }), patch.object(meshcentral, "_base_command",
-                        return_value=["meshctrl", "DeviceSharing"]), \
+                        side_effect=lambda: ["meshctrl", "DeviceSharing"]), \
              patch.object(meshcentral, "_run", side_effect=list_devices):
             self.assertEqual(meshcentral.verify_session_node(
                 local_id, session_id, persistent_service=True),
