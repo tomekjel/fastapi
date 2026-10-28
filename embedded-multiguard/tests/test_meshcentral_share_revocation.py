@@ -79,29 +79,29 @@ class MeshCentralRevocationTests(unittest.TestCase):
             with self.assertRaises(meshcentral.MeshCentralError):
                 meshcentral.verify_session_share_policy(node)
 
-    def test_session_share_policy_rejects_missing_consent_configuration(self):
+    def test_session_share_policy_inherits_group_when_device_consent_missing(self):
         import json
         node = "node/d/" + "A"*64
         group = "mesh/d/" + "B"*64
-        for missing in ("device", "group"):
+        for group_consent in (0, 8, None):
             def run(command):
                 if "ListDeviceGroups" in command:
-                    record = {"_id": group, "mtype": 2, "consent": 0}
-                    if missing == "group":
-                        del record["consent"]
+                    record = {"_id": group, "mtype": 2}
+                    if group_consent is not None:
+                        record["consent"] = group_consent
                     return json.dumps([record])
-                record = {"_id": node, "meshid": group, "consent": 0}
-                if missing == "device":
-                    del record["consent"]
-                return json.dumps([record])
-            with self.subTest(missing=missing), \
+                return json.dumps([{"_id": node, "meshid": group}])
+            with self.subTest(group_consent=group_consent), \
                  patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": group,
                                   "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
                  patch.object(meshcentral, "_base_command",
                               return_value=["meshctrl", "DeviceSharing"]), \
                  patch.object(meshcentral, "_run", side_effect=run):
-                with self.assertRaises(meshcentral.MeshCentralError):
+                if group_consent == 0:
                     meshcentral.verify_session_share_policy(node)
+                else:
+                    with self.assertRaises(meshcentral.MeshCentralError):
+                        meshcentral.verify_session_share_policy(node)
 
     def test_single_prompt_group_must_be_separate_from_service_groups(self):
         group = "mesh/d/" + "B"*64
