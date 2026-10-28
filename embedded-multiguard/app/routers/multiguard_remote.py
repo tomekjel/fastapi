@@ -1719,7 +1719,6 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           status.textContent = 'Wymagana aktywna licencja Pro serwisowa i węzeł online.';
           return;
         }
-        if (!window.confirm('Czy na pewno połączyć się z tym komputerem?')) return;
         prepareViewer();
         start.disabled = true;
         try {
