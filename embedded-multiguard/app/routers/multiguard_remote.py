@@ -1557,6 +1557,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       const approvalStatus = document.getElementById('ws-approval-status');
       const status = document.getElementById('ws-status');
       let sid = null, timer = null, standingEligible = false;
+      let autoOpen = false, opening = false, viewerTab = null;
       start.disabled = true;
       consent.disabled = true;
       async function refreshApproval() {
@@ -1655,6 +1656,10 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
             start.disabled = true;
             const ready = info.meshLinked === true;
             connect.disabled = !ready;
+            if (ready && autoOpen && !opening) {
+              autoOpen = false;
+              await openDesktop();
+            }
             status.textContent = ready
               ? 'MeshCentral powiązany — możesz otworzyć pulpit.'
               : 'Oczekiwanie na powiązanie MeshAgenta z tym komputerem. Pulpit jeszcze niedostępny.';
@@ -1678,6 +1683,28 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           status.textContent = 'Utracono potwierdzenie stanu MeshCentral: ' + e.message;
         }
       }
+      function prepareViewer() {
+        viewerTab = window.open('about:blank','_blank');
+        autoOpen = true;
+      }
+      async function openDesktop() {
+        if (!sid || opening) return;
+        opening = true;
+        const tab = viewerTab && !viewerTab.closed ? viewerTab : null;
+        viewerTab = null;
+        try {
+          connect.disabled = true;
+          const reply = await api('sessions/' + sid + '/connect','POST');
+          const url = new URL(reply.url);
+          if (url.protocol !== 'https:' || url.hostname !== 'mesh.multi-servis.pl') throw Error('Niezaufany adres MeshCentral.');
+          if (tab) tab.location.replace(url.href);
+          else { status.textContent = 'Przeglądarka zablokowała nową kartę. Kliknij OTWÓRZ PULPIT.'; connect.disabled = false; }
+        } catch(e) {
+          if (tab) tab.close();
+          status.textContent = 'Nie udało się otworzyć pulpitu: ' + e.message;
+          connect.disabled = false;
+        } finally { opening = false; }
+      }
       start.onclick = async () => {
         if (!standingEligible) {
           start.disabled = true;
@@ -1685,6 +1712,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           return;
         }
         if (!window.confirm('Połączyć się z komputerem na podstawie wcześniej udzielonego upoważnienia serwisowego Pro?')) return;
+        prepareViewer();
         start.disabled = true;
         try {
           const reply = await api('request/' + installation, 'POST');
@@ -1695,6 +1723,8 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           timer = setInterval(refresh, 3000);
           await refresh();
         } catch (e) {
+          autoOpen=false;
+          if(viewerTab && !viewerTab.closed) viewerTab.close(); viewerTab=null;
           start.disabled=true; connect.disabled=true; end.disabled=true;
           status.textContent='Nie udało się rozpocząć sesji: '+e.message;
           try{await refreshApproval();}catch(_){standingEligible=false;start.disabled=true;}
@@ -1702,6 +1732,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       };
       consent.onclick = async () => {
         if (sid || !window.confirm('Wysłać prośbę o zgodę na jedną sesję?')) return;
+        prepareViewer();
         consent.disabled = true;
         start.disabled = true;
         try {
@@ -1713,33 +1744,13 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           timer = setInterval(refresh, 3000);
           await refresh();
         } catch(e) {
+          autoOpen=false;
+          if(viewerTab && !viewerTab.closed) viewerTab.close(); viewerTab=null;
           status.textContent = 'Prośba o zgodę nie powiodła się: ' + e.message;
           await recover();
         }
       };
-      connect.onclick = async () => {
-        if (!sid) return;
-        const tab = window.open('about:blank','_blank');
-        try {
-          connect.disabled = true;
-          const reply = await api('sessions/' + sid + '/connect','POST');
-          const url = new URL(reply.url);
-          if (url.protocol !== 'https:' || url.hostname !== 'mesh.multi-servis.pl')
-            throw Error('Niezaufany adres MeshCentral.');
-          if (tab) tab.location.replace(url.href);
-          else status.textContent = 'Zezwól na nowe okno i ponów otwarcie pulpitu.';
-        } catch (e) {
-          if(tab) tab.close();
-          status.textContent='Nie udało się otworzyć pulpitu: '+e.message;
-        } finally {
-          if (sid) {
-            try {
-              const info = await api('sessions/' + sid);
-              connect.disabled = !info.meshLinked || !['CONSENTED','CONNECT_READY','ACTIVE'].includes(info.status);
-            } catch (_) { connect.disabled = true; }
-          }
-        }
-      };
+      connect.onclick = async () => { if(!viewerTab) viewerTab=window.open('about:blank','_blank'); await openDesktop(); };
       end.onclick = async () => {
         if (!sid) return;
         end.disabled = true;
