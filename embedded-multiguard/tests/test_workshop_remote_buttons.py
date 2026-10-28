@@ -206,6 +206,17 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         endpoint = workshop.split("def request_consent_for_owner(", 1)[1].split("@router.", 1)[0]
         self.assertIn("if not _eligible(grant):", endpoint)
 
+    def test_group_selection_is_server_licence_bound_and_fail_closed(self):
+        source = (SOURCE.parent / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
+        resolver = source.split("def expected_remote_mesh_group(", 1)[1].split("def _eligible(", 1)[0]
+        self.assertIn("remote_entitlement_mode(grant)", resolver)
+        self.assertIn('mode == "SERVICE_PRO"', resolver)
+        self.assertIn('"MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID"', resolver)
+        self.assertIn('mode == "CUSTOMER_LICENSE" and grant.get("edition") == "PRO"', resolver)
+        self.assertIn('"MESH_CENTRAL_CUSTOMER_MESH_ID"', resolver)
+        self.assertIn("return None", resolver)
+        self.assertNotIn("MoveDevice", resolver)
+
     def test_workshop_enrollment_requires_dedicated_service_group(self):
         source = (pathlib.Path(__file__).resolve().parents[1] / "app" /
                   "routers" / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
