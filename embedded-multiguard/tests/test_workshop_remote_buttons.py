@@ -40,13 +40,13 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("viewerTab = window.open('about:blank','_blank');", self.ui)
         self.assertIn("if (ready && autoOpen && !opening)", self.ui)
         self.assertIn("await openDesktop();", self.ui)
-        self.assertIn("api('sessions/' + sid + '/connect','POST')", self.ui)
+        self.assertIn("api('sessions/' + connectingSession + '/connect','POST')", self.ui)
         self.assertIn("url.hostname !== 'mesh.multi-servis.pl'", self.ui)
         self.assertIn("if (viewerTab && !viewerTab.closed) viewerTab.close();", self.ui)
 
     def test_auto_open_error_is_not_overwritten_by_ready_message(self):
         self.assertIn("if (ready && autoOpen && !opening)", self.ui)
-        self.assertIn("} else if (!opening) {", self.ui)
+        self.assertIn("} else if (!opening && !viewerError) {", self.ui)
         self.assertIn("Nie udało się otworzyć pulpitu:", self.ui)
 
     def test_viewer_failure_survives_next_poll_and_end_cleans_pending_tab(self):
