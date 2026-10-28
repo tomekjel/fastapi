@@ -50,6 +50,16 @@ class SessionTransportTests(unittest.TestCase):
              patch.object(mesh, "_run", return_value=json.dumps(records)):
             return mesh.verify_session_node("A"*64, str(self.sid))
 
+    def test_repeated_consent_response_is_not_regranted(self):
+        import inspect
+        source = inspect.getsource(workshop.workshop_remote_decision)
+        self.assertIn("same_approval", source)
+        self.assertIn("same_denial", source)
+        self.assertIn('set(row["granted_capabilities"] or [])', source)
+        self.assertIn('> _now()', source)
+        self.assertLess(source.index("if same_approval or same_denial:"),
+                        source.index('SET status=\'CONSENTED\''))
+
     def test_exact_online_node_group_and_session_marker_required(self):
         self.assertEqual(self.verify([self.record()]), self.node)
         for wrong in (self.record(meshid="mesh//"+"C"*64),
