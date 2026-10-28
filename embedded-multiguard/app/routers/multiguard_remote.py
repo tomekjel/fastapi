@@ -1543,15 +1543,18 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         standingEligible = state.mode === 'SERVICE_PRO' && state.unattendedReady === true;
         const customerMode = state.mode === 'CUSTOMER_LICENSE';
         start.hidden = state.mode !== 'SERVICE_PRO';
-        consent.hidden = !customerMode;
+        // The workshop consent endpoint accepts SERVICE_PRO only. Do not
+        // route a paid/customer installation into this unrelated workflow.
+        // Enable this button only after it is wired to commercial sessions.
+        consent.hidden = true;
         if(!sid) {
           start.disabled = !standingEligible;
-          consent.disabled = !customerMode;
+          consent.disabled = true;
         }
         approvalStatus.textContent = standingEligible
           ? 'Pro serwisowy: komputer online, połączenie bez zgody klienta.'
           : customerMode
-          ? 'Pro czasowy: każde połączenie wymaga zgody klienta.'
+          ? 'Pro czasowy: zdalny dostęp wymaga oddzielnej sesji ze zgodą klienta; ta ścieżka nie jest jeszcze podłączona.'
           : state.mode === 'SERVICE_PRO'
           ? 'Oczekiwanie na komputer w przypisanej grupie serwisowej MeshCentral.'
           : 'Zdalny pulpit niedostępny dla tej licencji.';
