@@ -60,6 +60,13 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("timer = setInterval(refresh, 3000);", self.ui)
         self.assertIn("timer=null; sid=null; autoOpen=false; viewerError=false;", self.ui)
 
+    def test_pending_requests_ignore_stale_session_results(self):
+        self.assertIn("const checkedSession = sid;", self.ui)
+        self.assertIn("if (sid !== checkedSession) return;", self.ui)
+        self.assertIn("const connectingSession = sid;", self.ui)
+        self.assertIn("if (sid !== connectingSession)", self.ui)
+        self.assertIn("if (tab) tab.close();", self.ui)
+
     def test_confirmation_before_network_request(self):
         handler = self.ui[self.ui.index("start.onclick = async () => {"):]
         self.assertLess(handler.index("window.confirm("), handler.index("start.disabled = true;"))
