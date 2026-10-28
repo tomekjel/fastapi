@@ -1659,10 +1659,11 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
             if (ready && autoOpen && !opening) {
               autoOpen = false;
               await openDesktop();
+            } else if (!opening) {
+              status.textContent = ready
+                ? 'MeshCentral powiązany — pulpit gotowy.'
+                : 'Oczekiwanie na powiązanie MeshAgenta z tym komputerem. Pulpit jeszcze niedostępny.';
             }
-            status.textContent = ready
-              ? 'MeshCentral powiązany — możesz otworzyć pulpit.'
-              : 'Oczekiwanie na powiązanie MeshAgenta z tym komputerem. Pulpit jeszcze niedostępny.';
           } else if (['DENIED','ENDED','EXPIRED','ERROR'].includes(info.status)) {
             autoOpen = false;
             if (viewerTab && !viewerTab.closed) viewerTab.close();
