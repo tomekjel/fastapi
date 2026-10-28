@@ -47,6 +47,27 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("consent.disabled = true;", self.ui)
         self.assertIn("consent.disabled = false;", self.ui)
 
+    def test_service_pro_reconnect_never_falls_back_to_client_consent(self):
+        workshop = (SOURCE.parent / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
+        start = workshop.split("def request_for_owner(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("standing_authorization_record_valid(grant, standing)", start)
+        self.assertIn("meshcentral.verify_standing_service_node(node, scope)", start)
+        self.assertNotIn("request_consent_for_owner(", start)
+        connect = workshop.split("def connect_for_owner(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('"STANDING_SERVICE"', connect)
+        self.assertIn("meshcentral.create_standing_service_share(", connect)
+        self.assertIn("meshcentral.create_client_approved_share(", connect)
+        self.assertIn("standing_authorization_record_valid(grant,standing)", connect)
+        self.assertIn('grant["mesh_node_id"] != standing["approved_mesh_node_id"]', connect)
+        self.assertIn('standing["device_scope"]', connect)
+        self.assertIn("meshcentral.verify_standing_service_node(node,scope)", connect)
+        self.assertIn("meshcentral.revoke_share(node,previous)", connect)
+        self.assertIn("if scope is not None else", connect)
+        self.assertIn("state.unattendedReady === true", self.ui)
+        self.assertIn("state.mode === 'SERVICE_PRO'", self.ui)
+        self.assertIn("state.standingAuthorizationRecorded === true", self.ui)
+        self.assertIn("if (!standingEligible)", self.ui)
+
     def test_pending_session_blocks_second_consent_request(self):
         self.assertIn("consent.disabled = true;", self.ui)
         self.assertIn("status.textContent = 'Oczekiwanie na decyzję klienta lub przygotowanie sesji…';", self.ui)
