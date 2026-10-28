@@ -13,6 +13,42 @@ from app.routers import multiguard_meshcentral as meshcentral
 
 
 class MeshCentralRevocationTests(unittest.TestCase):
+    def test_session_node_uses_separate_group_only_when_single_prompt_enabled(self):
+        import json
+
+        legacy = "mesh/d/" + "L" * 64
+        approved = "mesh/d/" + "S" * 64
+        local_id = "A" * 64
+        session_id = "00000000-0000-4000-8000-000000000001"
+        device = {"_id": "node/d/" + local_id,
+                  "meshid": legacy, "name": "MultiGuard-existing",
+                  "conn": 1}
+
+        def list_devices(command):
+            self.assertIn("ListDevices", command)
+            return json.dumps([device])
+
+        with patch.dict(os.environ, {
+            "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": legacy,
+            "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": approved,
+        }), patch.object(meshcentral, "_base_command",
+                        return_value=["meshctrl", "DeviceSharing"]), \
+             patch.object(meshcentral, "_run", side_effect=list_devices):
+            self.assertEqual(meshcentral.verify_session_node(
+                local_id, session_id, persistent_service=True),
+                "node/d/" + local_id)
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_node(
+                    local_id, session_id, persistent_service=True,
+                    single_prompt=True)
+            device["meshid"] = approved
+            self.assertEqual(meshcentral.verify_session_node(
+                local_id, session_id, persistent_service=True,
+                single_prompt=True), "node/d/" + local_id)
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_node(
+                    local_id, session_id, persistent_service=True)
+
     def test_client_approved_share_requires_attestation_and_exact_online_node(self):
         args = ("node/d/" + "A"*64, "00000000-0000-4000-8000-000000000001",
                 "owner", ("desktop",), 60)
