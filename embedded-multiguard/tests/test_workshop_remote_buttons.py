@@ -171,13 +171,12 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertLess(self.ui.index("if (!tab) {"),
                         self.ui.index("const reply = await api('sessions/' + connectingSession + '/connect','POST')"))
 
-    def test_confirmation_before_network_request(self):
-        handler = self.ui[self.ui.index("start.onclick = async () => {"):]
-        # An ineligible device is disabled before any confirmation or network call.
-        # For eligible devices, confirm first, then disable while requesting.
-        confirmed = handler.split("if (!window.confirm(", 1)[1]
-        self.assertLess(confirmed.index("start.disabled = true;"), confirmed.index("await api('request/' + installation, 'POST')"))
-        self.assertLess(handler.index("window.confirm("), handler.index("await api('request/' + installation, 'POST')"))
+    def test_service_connect_disables_button_before_network_request(self):
+        handler = self.ui.split("start.onclick = async () => {", 1)[1].split("consent.onclick = async () => {", 1)[0]
+        self.assertIn("if (!standingEligible)", handler)
+        self.assertNotIn("window.confirm(", handler)
+        self.assertLess(handler.index("start.disabled = true;", handler.index("prepareViewer();")),
+                        handler.index("await api('request/' + installation, 'POST')"))
 
     def test_button_colors_and_disabled_gates(self):
         for needle in ("#ws-start{background:#1764b0}", "#ws-connect{background:#16834a}", "#ws-end{background:#be3030}", ".ws-controls button:disabled", 'id="ws-connect" disabled', 'id="ws-end" disabled'):
