@@ -69,6 +69,7 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         release = licence.split("def approve_reception_license(", 1)[1].split("\n@router.", 1)[0]
         self.assertIn("lifecycle IN ('UNASSIGNED','SERVICE_TEST','PENDING_ACCEPTANCE')", release)
         self.assertIn("approved_at=COALESCE(approved_at,now())", release)
+        self.assertIn("AND accepted_at IS NULL AND valid_from IS NULL AND valid_until IS NULL", release)
         self.assertIn("SET lifecycle='PENDING_ACCEPTANCE'", release)
 
     def test_acceptance_is_guarded_against_concurrent_licence_change(self):
