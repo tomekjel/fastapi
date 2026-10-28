@@ -1562,7 +1562,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       const approvalStatus = document.getElementById('ws-approval-status');
       const status = document.getElementById('ws-status');
       let sid = null, timer = null, standingEligible = false;
-      let autoOpen = false, opening = false, viewerTab = null, viewerError = false;
+      let autoOpen = false, opening = false, viewerTab = null, viewerError = false, refreshPending = false;
       start.disabled = true;
       consent.disabled = true;
       async function refreshApproval() {
@@ -1654,7 +1654,8 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         return r.json();
       }
       async function refresh() {
-        if (!sid) return;
+        if (!sid || refreshPending) return;
+        refreshPending = true;
         const checkedSession = sid;
         try {
           const info = await api('sessions/' + checkedSession);
@@ -1694,6 +1695,8 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           if (sid !== checkedSession) return;
           connect.disabled = true;
           status.textContent = 'Utracono potwierdzenie stanu MeshCentral: ' + e.message;
+        } finally {
+          refreshPending = false;
         }
       }
       function prepareViewer() {
