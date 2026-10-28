@@ -736,11 +736,13 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
     # Server-side read-only verification defeats guessed IDs and hostname
     # collisions; never trust the client-provided node ID without MeshCtrl.
     try:
-        verified = meshcentral.verify_registered_node(node)
+        verified = meshcentral.verify_service_pro_node(node)
     except meshcentral.MeshCentralError as exc:
-        raise HTTPException(503, "MeshCentral nie potwierdził rejestracji agenta.") from exc
-    if not verified:
-        raise HTTPException(409, "MeshAgent nie jest jeszcze zarejestrowany na serwerze.")
+        raise HTTPException(
+            409, "MeshAgent Pro serwisowy musi być online w dedykowanej grupie serwisowej."
+        ) from exc
+    if verified != node:
+        raise HTTPException(409, "Nie potwierdzono przypisanego węzła serwisowego.")
     with engine.begin() as db:
         # Serialize against OWNER revocation and PRO->STANDARD downgrade.
         grant_lock = db.execute(text("""
