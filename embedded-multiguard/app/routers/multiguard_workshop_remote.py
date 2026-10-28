@@ -1006,7 +1006,7 @@ def connect_for_owner(sid):
             meshcentral.create_standing_service_share(
                 node,scope,f"Multi-Servis diagnostyka {str(sid)[:8]}",60
             ) if scope is not None else
-            meshcentral.create_client_approved_share(node,f"Multi-Servis {str(sid)[:8]}",caps,60)
+            meshcentral.create_client_approved_share(node,str(sid),f"Multi-Servis {str(sid)[:8]}",caps,60)
         )
     except meshcentral.MeshCentralError as exc:
         raise HTTPException(502, f"MeshCentral: {exc}") from exc
