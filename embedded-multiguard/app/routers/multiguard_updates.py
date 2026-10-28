@@ -23,9 +23,9 @@ _SCHEMA_READY = False
 _RELEASE_ROOT = Path(
     os.getenv("MULTI_GUARD_RELEASE_ROOT", "/opt/multiservis/releases/multiguard")
 ).resolve()
-_SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
+_SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?(?:\+[0-9A-Za-z.-]+)?$")
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9._-]+$")
-_VALID_CHANNELS = {"TEST", "LICENSE_TEST", "PILOT", "STABLE"}
+_VALID_CHANNELS = {"TEST", "LICENSE_TEST", "BETA", "PILOT", "STABLE"}
 
 _SCHEMA_SQL = """
 CREATE SCHEMA IF NOT EXISTS guard;
@@ -126,7 +126,7 @@ def _ensure_schema() -> None:
                     """
                     ALTER TABLE guard.release_versions
                     ADD CONSTRAINT release_versions_channel_check
-                    CHECK (channel IN ('TEST','LICENSE_TEST','PILOT','STABLE'))
+                    CHECK (channel IN ('TEST','LICENSE_TEST','BETA','PILOT','STABLE'))
                     """
                 )
             )
@@ -143,18 +143,21 @@ def _ensure_schema() -> None:
                     """
                     ALTER TABLE guard.release_blocks
                     ADD CONSTRAINT release_blocks_channel_check
-                    CHECK (channel IN ('TEST','LICENSE_TEST','PILOT','STABLE'))
+                    CHECK (channel IN ('TEST','LICENSE_TEST','BETA','PILOT','STABLE'))
                     """
                 )
             )
         _SCHEMA_READY = True
 
 
-def _semver(value: str) -> tuple[int, int, int]:
-    match = _SEMVER.match((value or "").strip())
+def _semver(value: str) -> tuple[int, int, int, int, int]:
+    """Sort prereleases before the same stable version; beta.N increases correctly."""
+    match = _SEMVER.fullmatch((value or "").strip())
     if not match:
         raise HTTPException(400, f"Nieprawidłowa wersja SemVer: {value}")
-    return tuple(int(part) for part in match.groups())
+    major, minor, patch = (int(part) for part in match.groups()[:3])
+    beta = match.group(4)
+    return (major, minor, patch, 0 if beta is not None else 1, int(beta) if beta is not None else 0)
 
 
 def _rollout_bucket(installation_id: uuid.UUID, release_id: uuid.UUID) -> int:
@@ -183,16 +186,43 @@ def _resolve_channel(
             installation_uuid = None
 
     if installation_uuid is not None:
+        # A workshop installation can remain WAITING and has no row in
+        # guard.installations. Its OWNER-assigned grant is authoritative.
+        grant = connection.execute(
+            text("""
+                SELECT release_channel FROM guard.workshop_grants
+                WHERE installation_id=:installation_id AND enabled=TRUE
+                LIMIT 1
+            """),
+            {"installation_id": installation_uuid},
+        ).mappings().first()
+        if grant:
+            channel = _normalized_channel(grant["release_channel"])
+            if channel:
+                return channel, installation_uuid
+
+        # Customer channel changes must take effect without reinstalling.
+        link = connection.execute(
+            text("""
+                SELECT release_channel FROM guard.license_links
+                WHERE installation_id=:installation_id
+                  AND lifecycle NOT IN ('REVOKED','EXPIRED')
+                LIMIT 1
+            """),
+            {"installation_id": installation_uuid},
+        ).mappings().first()
+        if link:
+            channel = _normalized_channel(link["release_channel"])
+            if channel:
+                return channel, installation_uuid
+
         row = connection.execute(
-            text(
-                """
-                SELECT release_channel
-                FROM guard.installations
+            text("""
+                SELECT release_channel FROM guard.installations
                 WHERE installation_external_id=:installation_id
                   AND is_current=TRUE
                 LIMIT 1
-                """
-            ),
+            """),
             {"installation_id": installation_uuid},
         ).mappings().first()
         if row:

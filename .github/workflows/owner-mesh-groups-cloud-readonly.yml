@@ -1,0 +1,40 @@
+name: OWNER MeshCentral production group check (cloud, read-only)
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/owner-pro-remote-first-consent-20261018]
+    paths: ['embedded-multiguard/deploy/owner-mesh-groups-cloud-readonly.trigger']
+permissions:
+  contents: read
+jobs:
+  group-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+      SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+      SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+      SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read-only remote service groups, no secret values printed
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?missing SSH host}"
+          : "${SSH_USER:?missing SSH user}"
+          : "${SSH_KEY:?missing SSH key}"
+          case "${SSH_PORT:-22}" in *[!0-9]*|'') echo 'BLOCKED: invalid port' >&2; exit 1;; esac
+          key="$(mktemp)"
+          trap 'rm -f "$key"' EXIT
+          umask 077
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' > "$key"
+          chmod 600 "$key"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+              -o ServerAliveInterval=10 -i "$key" -p "${SSH_PORT:-22}" \
+              "${SSH_USER}@${SSH_HOST}" 'python3 -' \
+              < embedded-multiguard/scripts/owner_mesh_groups_readonly.py
+          echo 'Read-only MeshCentral group preflight completed. No changes performed.'

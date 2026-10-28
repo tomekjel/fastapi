@@ -1,0 +1,31 @@
+owner-remote-localtest=2026-10-18T11:26:00+02:00
+runner=MultiGuard-Dev
+production_deploy=false
+retry=backend-runner-label-fix
+retry=actual-runner-ROG
+retry=repair-remote-api-js-paths
+retry=workshop-pro-consent-control-room
+retry=owner-unattended-workshop-pro
+retry=unattended-workshop-contract-tests
+retry=real-owner-sidebar-route
+retry=final-view-before-release
+
+check=workshop-color-confirm-mesh-binding-20261018
+retry=scope-click-handler
+check=resume-session-server-state-20261018
+
+check=isolated-beta-channel
+
+check=license-beta-channel-20261018
+
+check=beta-dynamic-final
+
+retry=after-rog-manual-restart
+
+retry=sql-anchor-only
+
+2026-10-27: re-run pre-production on ASUS MultiGuard-Dev: service Pro standing authorization scope and separate mesh group policy matrix, paid Pro 403/409 distinction, owner browser and session transport tests; no server deploy.
+
+2026-10-27: use verified registered FastAPI ROG self-hosted runner; run standing-consent policy and real backend mode mismatch tests offline only.
+
+2026-10-27: complete offline ROG contract: server-authoritative paid/service/Standard remote mode + authenticated owner diagnostic endpoint + client paid-mode mismatch denial. No deployments.

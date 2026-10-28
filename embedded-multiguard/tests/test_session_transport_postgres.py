@@ -32,7 +32,8 @@ class TransportPostgresTests(unittest.TestCase):
                     id uuid PRIMARY KEY,installation_id uuid,status text,expires_at timestamptz,
                     consented_at timestamptz,ended_at timestamptz,granted_capabilities jsonb,mesh_public_id text)""",
                 """CREATE TABLE IF NOT EXISTS guard.workshop_mesh_nodes (
-                    installation_id uuid PRIMARY KEY,mesh_node_id text UNIQUE,updated_at timestamptz DEFAULT now())""",
+                    installation_id uuid PRIMARY KEY,mesh_node_id text UNIQUE,updated_at timestamptz DEFAULT now(),session_id uuid)""",
+                "ALTER TABLE guard.workshop_mesh_nodes ADD COLUMN IF NOT EXISTS session_id uuid",
                 """CREATE TABLE IF NOT EXISTS guard.pending_installations (
                     installation_id uuid PRIMARY KEY,status text)""",
                 """CREATE TABLE IF NOT EXISTS guard.workshop_grants (
@@ -87,6 +88,26 @@ class TransportPostgresTests(unittest.TestCase):
             self.assertTrue(workshop.workshop_session_mesh_enroll(body)["accepted"])
         with self.engine.connect() as db:
             self.assertEqual(db.execute(text("SELECT mesh_node_id FROM guard.workshop_mesh_nodes WHERE installation_id=:id"),{"id":self.external}).scalar_one(),self.node)
+
+        # A second consent gets a fresh identity only after the first session
+        # ended and its share was revoked; exercise the real binding transaction.
+        next_sid = uuid.uuid4()
+        next_node = "node//" + next_sid.hex * 2
+        with self.engine.begin() as db:
+            db.execute(text("UPDATE guard.workshop_remote_sessions SET status='ENDED',ended_at=now() WHERE id=:sid"), {"sid":self.sid})
+            db.execute(text("""INSERT INTO guard.workshop_remote_sessions(id,installation_id,status,expires_at,consented_at,granted_capabilities)
+                VALUES (:sid,:iid,'CONSENTED',:expiry,now(),'["desktop"]')"""),
+                {"sid":next_sid,"iid":self.external,"expiry":datetime.now(timezone.utc)+timedelta(minutes=5)})
+        next_body=workshop.WorkshopSessionMeshEnrollment(
+            **{**self.auth,"sessionId":next_sid,"meshNodeId":next_node[6:]},discoveryCredential="x"*32)
+        with patch.object(workshop,"_schema"),patch.object(workshop,"_authenticate"), \
+             patch.object(workshop,"engine",self.engine),patch.object(mesh,"verify_session_node",return_value=next_node), \
+             patch.object(workshop,"_event"):
+            self.assertTrue(workshop.workshop_session_mesh_enroll(next_body)["accepted"])
+        with self.engine.connect() as db:
+            binding=db.execute(text("SELECT * FROM guard.workshop_mesh_nodes WHERE installation_id=:iid"), {"iid":self.external}).mappings().one()
+            self.assertEqual(binding["mesh_node_id"],next_node)
+            self.assertEqual(binding["session_id"],next_sid)
 
     @classmethod
     def tearDownClass(cls): cls.engine.dispose()

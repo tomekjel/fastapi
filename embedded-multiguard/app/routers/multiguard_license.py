@@ -499,7 +499,7 @@ CREATE TABLE IF NOT EXISTS guard.license_links (
     plan_code TEXT NOT NULL CHECK (plan_code IN ('multi_guard','multi_guard_pro')),
     duration_months INTEGER NOT NULL CHECK (duration_months IN (3,6,12)),
     release_channel TEXT NOT NULL DEFAULT 'STABLE'
-        CHECK (release_channel IN ('STABLE','PILOT')),
+        CHECK (release_channel IN ('STABLE','PILOT','BETA')),
     lifecycle TEXT NOT NULL DEFAULT 'UNASSIGNED'
         CHECK (lifecycle IN ('UNASSIGNED','SERVICE_TEST','PENDING_ACCEPTANCE','ACTIVE','EXPIRED','REVOKED')),
     installation_id UUID UNIQUE,
@@ -659,7 +659,7 @@ CREATE TABLE IF NOT EXISTS guard.workshop_grants (
         REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
     edition TEXT NOT NULL CHECK (edition IN ('STANDARD','PRO')),
     release_channel TEXT NOT NULL DEFAULT 'STABLE'
-        CHECK (release_channel IN ('STABLE','PILOT')),
+        CHECK (release_channel IN ('STABLE','PILOT','BETA')),
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     monitoring_profile TEXT NOT NULL DEFAULT 'OFF',
     associated_reception_id UUID REFERENCES service.service_orders(id) ON DELETE SET NULL,
@@ -707,7 +707,7 @@ CREATE TABLE IF NOT EXISTS guard.installations (
     accepted_at TIMESTAMPTZ,
     app_version TEXT,
     release_channel TEXT NOT NULL DEFAULT 'STABLE'
-        CHECK (release_channel IN ('STABLE','PILOT')),
+        CHECK (release_channel IN ('STABLE','PILOT','BETA')),
     health_level TEXT NOT NULL DEFAULT 'GREEN'
         CHECK (health_level IN ('GREEN','YELLOW','ORANGE','RED')),
     last_seen_at TIMESTAMPTZ,
@@ -742,6 +742,22 @@ ALTER TABLE guard.license_links
     ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
 ALTER TABLE guard.installations
     ADD COLUMN IF NOT EXISTS release_channel TEXT NOT NULL DEFAULT 'STABLE';
+-- Expand existing release channel CHECK constraints without changing any assigned ring.
+ALTER TABLE guard.license_links
+    DROP CONSTRAINT IF EXISTS license_links_release_channel_check;
+ALTER TABLE guard.license_links
+    ADD CONSTRAINT license_links_release_channel_check
+    CHECK (release_channel IN ('STABLE','PILOT','BETA'));
+ALTER TABLE guard.workshop_grants
+    DROP CONSTRAINT IF EXISTS workshop_grants_release_channel_check;
+ALTER TABLE guard.workshop_grants
+    ADD CONSTRAINT workshop_grants_release_channel_check
+    CHECK (release_channel IN ('STABLE','PILOT','BETA'));
+ALTER TABLE guard.installations
+    DROP CONSTRAINT IF EXISTS installations_release_channel_check;
+ALTER TABLE guard.installations
+    ADD CONSTRAINT installations_release_channel_check
+    CHECK (release_channel IN ('STABLE','PILOT','BETA'));
 -- Migrate the CHECK constraint on existing PostgreSQL installations.
 ALTER TABLE guard.pending_installations
     DROP CONSTRAINT IF EXISTS pending_installations_status_check;
@@ -897,11 +913,13 @@ def _set_workshop_grant(
     enabled: bool,
 ) -> dict[str, Any]:
     _ensure_schema()
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
     edition = edition.strip().upper()
     channel = channel.strip().upper()
     if edition not in {"STANDARD", "PRO"}:
         raise HTTPException(400, "Edycja musi być Standard albo Pro.")
-    if channel not in {"STABLE", "PILOT"}:
+    if channel not in {"STABLE", "PILOT", "BETA"}:
         raise HTTPException(400, "Kanał musi być stabilny albo Beta.")
     with engine.begin() as con:
         pending = con.execute(text("""
@@ -921,6 +939,10 @@ def _set_workshop_grant(
         """), {"id": installation_id}).mappings().first()
         previous = dict(existing) if existing else None
         current = {"edition":edition,"release_channel":channel,"enabled":enabled}
+        if (previous and previous["enabled"] and previous["edition"]=="PRO"
+                and (edition!="PRO" or not enabled)):
+            # Revoke active shares and standing consent before changing rights.
+            workshop.close_before_rights_change(con,installation_id)
         con.execute(text("""
             INSERT INTO guard.workshop_grants(
                 installation_id,edition,release_channel,enabled
@@ -1004,8 +1026,8 @@ def _assign_pending_to_reception(
         raise HTTPException(400, "Edycja musi być STANDARD albo PRO.")
     if months not in {3, 6, 12}:
         raise HTTPException(400, "Okres musi wynosić 3, 6 albo 12 miesięcy.")
-    if release_channel not in {"STABLE", "PILOT"}:
-        raise HTTPException(400, "Kanał aktualizacji musi być STABLE albo PILOT.")
+    if release_channel not in {"STABLE", "PILOT", "BETA"}:
+        raise HTTPException(400, "Kanał aktualizacji musi być STABLE, PILOT albo BETA.")
 
     if existing:
         existing_edition = (
@@ -1041,7 +1063,11 @@ def _assign_pending_to_reception(
             release_channel=release_channel,
         )
 
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
     with engine.begin() as connection:
+        # Paid assignment must remove old workshop remote access first.
+        workshop.close_before_rights_change(connection,installation_id)
         connection.execute(
             text(
                 """
@@ -1081,9 +1107,11 @@ def _assign_direct_customer_license(
     channel = channel.strip().upper()
     if edition not in {"STANDARD", "PRO"} or months not in {3, 6, 12}:
         raise HTTPException(400, "Wybierz Standard/Pro i okres 3, 6 lub 12 miesięcy.")
-    if channel not in {"STABLE", "PILOT"}:
-        raise HTTPException(400, "Kanał musi być Stabilna albo Beta.")
+    if channel not in {"STABLE", "PILOT", "BETA"}:
+        raise HTTPException(400, "Kanał musi być STABLE, PILOT albo BETA.")
     _ensure_schema()
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
     with engine.begin() as con:
         pending = con.execute(text("""
             SELECT * FROM guard.pending_installations
@@ -1144,6 +1172,8 @@ def _assign_direct_customer_license(
         """), {"id":installation_id,"license_id":str(created["id"])})
     try:
         with engine.begin() as con:
+            # Never retain a permanent diagnostic grant after paid conversion.
+            workshop.close_before_rights_change(con,installation_id)
             lic = con.execute(text("""
                 INSERT INTO guard.license_links(
                     reception_id,reception_number,service_device_id,
@@ -2196,7 +2226,7 @@ def acceptance(req: AcceptanceRequest):
                     accepted_documents=CAST(:documents AS jsonb),
                     app_version=:app_version,
                     updated_at=now()
-                WHERE id=:id
+                WHERE id=:id AND lifecycle='PENDING_ACCEPTANCE'
                 RETURNING *
                 """
             ),
@@ -2209,7 +2239,9 @@ def acceptance(req: AcceptanceRequest):
                 "app_version": req.app_version,
                 "id": link["id"],
             },
-        ).mappings().one()
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(409, "Licencja zmieniła stan podczas akceptacji; odśwież dane.")
         link = _normalize_link(dict(row))
         _update_installation_mirror(connection, link)
         connection.execute(
@@ -2338,8 +2370,8 @@ def _generate_license_link(
         raise HTTPException(400, "Edycja musi być STANDARD albo PRO.")
     if months not in {3, 6, 12}:
         raise HTTPException(400, "Okres musi wynosić 3, 6 albo 12 miesięcy.")
-    if release_channel not in {"STABLE", "PILOT"}:
-        raise HTTPException(400, "Kanał aktualizacji musi być STABLE albo PILOT.")
+    if release_channel not in {"STABLE", "PILOT", "BETA"}:
+        raise HTTPException(400, "Kanał aktualizacji musi być STABLE, PILOT albo BETA.")
 
     _ensure_schema()
     reception = _reception(reception_id)
@@ -2756,7 +2788,8 @@ def multiguard_panel_pending(
               </select></label>
               <label>Kanał<select name="release_channel">
                 <option value="STABLE">Stabilna</option>
-                <option value="PILOT">Beta</option>
+                <option value="PILOT">Pilot (dotychczasowy)</option>
+                <option value="BETA">Beta</option>
               </select></label>
               <p class="muted">„Brak licencji” pozostawia komputer w kolejce. Nie cofa już wydanych uprawnień.</p>
               <button type="submit" data-owner-service-submit>PRZYPISZ LICENCJĘ KLIENTA</button>
@@ -2833,7 +2866,8 @@ def multiguard_panel_pending(
               <label>Kanał
                 <select name="release_channel">
                   <option value="STABLE" selected>Stabilna</option>
-                  <option value="PILOT">Beta</option>
+                  <option value="PILOT">Pilot (dotychczasowy)</option>
+                <option value="BETA">Beta</option>
                 </select>
               </label>
             </div>
@@ -3361,7 +3395,8 @@ def multiguard_panel(
               <label>Kanał
                 <select name="release_channel">
                   <option value="STABLE" selected>Stabilna</option>
-                  <option value="PILOT">Beta</option>
+                  <option value="PILOT">Pilot (dotychczasowy)</option>
+                <option value="BETA">Beta</option>
                 </select>
               </label>
               <label>&nbsp;<button type="submit">GENERUJ KLUCZ</button></label>
@@ -3462,14 +3497,17 @@ def approve_reception_license(
                 """
                 UPDATE guard.license_links
                 SET lifecycle='PENDING_ACCEPTANCE',
-                    approved_at=now(),
+                    approved_at=COALESCE(approved_at,now()),
                     updated_at=now()
-                WHERE id=:id
+                WHERE id=:id AND lifecycle IN ('UNASSIGNED','SERVICE_TEST','PENDING_ACCEPTANCE')
+                  AND accepted_at IS NULL AND valid_from IS NULL AND valid_until IS NULL
                 RETURNING *
                 """
             ),
             {"id": link["id"]},
-        ).mappings().one()
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(409, "Licencja zmieniła stan podczas wydania; odśwież dane.")
         link = _normalize_link(dict(row))
         _update_installation_mirror(connection, link)
 
@@ -3488,8 +3526,8 @@ def set_reception_release_channel(
         raise HTTPException(400, "Nieprawidłowe ID zlecenia.") from exc
 
     channel = body.release_channel.strip().upper()
-    if channel not in {"STABLE", "PILOT"}:
-        raise HTTPException(400, "Kanał aktualizacji musi być STABLE albo PILOT.")
+    if channel not in {"STABLE", "PILOT", "BETA"}:
+        raise HTTPException(400, "Kanał aktualizacji musi być STABLE, PILOT albo BETA.")
 
     link = _link_by_reception_id(rid)
     if not link:

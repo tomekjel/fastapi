@@ -26,6 +26,9 @@ class DeviceScope(str, Enum):
 class MeshGroupClass(str, Enum):
     CONSENT = "CONSENT"
     OWNER_OWNED = "OWNER_OWNED"
+    # Separate group for diagnostic service devices whose owners have
+    # given durable, individually recorded and revocable prior consent.
+    SERVICE_DIAGNOSTICS = "SERVICE_DIAGNOSTICS"
     UNKNOWN = "UNKNOWN"
 
 
@@ -79,15 +82,24 @@ def authorize_share(mode: RemoteMode, evidence: ServerEvidence) -> ShareDecision
         return ShareDecision("prompt,bar", False, RemoteMode.CONSENT_REQUIRED)
 
     if mode == RemoteMode.OWNER_UNATTENDED:
-        if evidence.scope != DeviceScope.OWNED_WORKSHOP_PRO:
-            raise PermissionError("UNATTENDED_ONLY_FOR_OWNER_DEVICES")
+        # The indefinite SERVICE PRO mode is independent of where the device
+        # physically resides. A workshop-owned PC and a customer diagnostic
+        # PC are BOTH eligible only with distinct server-side prior-consent
+        # evidence; ordinary time-limited PAID_PRO can NEVER use this mode.
+        expected_group = {
+            DeviceScope.OWNED_WORKSHOP_PRO: MeshGroupClass.OWNER_OWNED,
+            DeviceScope.CLIENT_WORKSHOP_PRO: MeshGroupClass.SERVICE_DIAGNOSTICS,
+        }.get(evidence.scope)
+        if expected_group is None:
+            raise PermissionError("UNATTENDED_REQUIRES_SERVICE_PRO")
         if not evidence.owner_approved_unattended:
-            raise PermissionError("OWNER_APPROVAL_REQUIRED")
+            raise PermissionError("STANDING_OWNER_APPROVAL_REQUIRED")
         if not evidence.local_opt_in_attested:
-            raise PermissionError("LOCAL_OPT_IN_REQUIRED")
-        if evidence.mesh_group != MeshGroupClass.OWNER_OWNED:
+            raise PermissionError("DEVICE_OWNER_PRIOR_CONSENT_NOT_ATTESTED")
+        if evidence.mesh_group != expected_group:
             raise PermissionError("UNATTENDED_MESH_GROUP_REQUIRED")
-        # A visible status/privacy bar remains even without the prompt.
+        # No interactive prompt after recorded standing authorization, but
+        # MeshCentral privacy notification/bar must remain visible.
         return ShareDecision("notify,bar", True, RemoteMode.OWNER_UNATTENDED)
 
     raise PermissionError("UNRECOGNIZED_REMOTE_MODE")

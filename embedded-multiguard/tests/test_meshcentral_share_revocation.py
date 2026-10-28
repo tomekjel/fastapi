@@ -13,6 +13,168 @@ from app.routers import multiguard_meshcentral as meshcentral
 
 
 class MeshCentralRevocationTests(unittest.TestCase):
+    def test_session_node_uses_separate_group_only_when_single_prompt_enabled(self):
+        import json
+
+        legacy = "mesh/d/" + "L" * 64
+        approved = "mesh/d/" + "S" * 64
+        local_id = "A" * 64
+        session_id = "00000000-0000-4000-8000-000000000001"
+        device = {"_id": "node/d/" + local_id,
+                  "meshid": legacy, "name": "MultiGuard-existing",
+                  "conn": 1}
+
+        def list_devices(command):
+            self.assertIn("ListDevices", command)
+            return json.dumps([device])
+
+        with patch.dict(os.environ, {
+            "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": legacy,
+            "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": approved,
+        }), patch.object(meshcentral, "_base_command",
+                        side_effect=lambda: ["meshctrl", "DeviceSharing"]), \
+             patch.object(meshcentral, "_run", side_effect=list_devices):
+            self.assertEqual(meshcentral.verify_session_node(
+                local_id, session_id, persistent_service=True),
+                "node/d/" + local_id)
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_node(
+                    local_id, session_id, persistent_service=True,
+                    single_prompt=True)
+            device["meshid"] = approved
+            self.assertEqual(meshcentral.verify_session_node(
+                local_id, session_id, persistent_service=True,
+                single_prompt=True), "node/d/" + local_id)
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_node(
+                    local_id, session_id, persistent_service=True)
+
+    def test_client_approved_share_requires_attestation_and_exact_online_node(self):
+        args = ("node/d/" + "A"*64, "00000000-0000-4000-8000-000000000001",
+                "owner", ("desktop",), 60)
+        with patch.dict(os.environ, {"MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED": "0"}), \
+             patch.object(meshcentral, "create_share", return_value="fallback") as fallback, \
+             patch.object(meshcentral, "verify_session_node") as verify, \
+             patch.object(meshcentral, "_create_share") as direct:
+            self.assertEqual(meshcentral.create_client_approved_share(*args), "fallback")
+            fallback.assert_called_once()
+            verify.assert_not_called()
+            direct.assert_not_called()
+        with patch.dict(os.environ, {"MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED": "1"}), \
+             patch.object(meshcentral, "create_share", return_value="fallback") as fallback, \
+             patch.object(meshcentral, "verify_session_node", return_value=args[0]) as verify, \
+             patch.object(meshcentral, "verify_session_share_policy") as policy, \
+             patch.object(meshcentral, "_create_share", return_value="approved") as direct:
+            self.assertEqual(meshcentral.create_client_approved_share(*args), "approved")
+            verify.assert_called_once_with("A"*64, args[1], persistent_service=True, single_prompt=True)
+            policy.assert_called_with(args[0])
+            self.assertTrue(direct.call_args.kwargs["workshop_unattended"])
+            self.assertEqual(meshcentral.create_client_approved_share(
+                args[0], args[1], args[2], ("desktop","files"), args[4]), "fallback")
+        with patch.dict(os.environ, {"MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED": "1"}), \
+             patch.object(meshcentral, "verify_session_node", return_value="node/d/" + "B"*64), \
+             patch.object(meshcentral, "_create_share") as direct:
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.create_client_approved_share(*args)
+            direct.assert_not_called()
+
+    def test_session_share_policy_rejects_device_or_group_desktop_prompt(self):
+        import json
+        node = "node/d/" + "A"*64
+        group = "mesh/d/" + "B"*64
+        def run_ok(command):
+            if "ListDeviceGroups" in command:
+                return json.dumps([{"_id": group, "mtype": 2, "consent": 0}])
+            return json.dumps([{"_id": node, "meshid": group, "consent": 0}])
+        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
+                                  "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
+             patch.object(meshcentral, "_base_command",
+                          return_value=["meshctrl", "DeviceSharing"]), \
+             patch.object(meshcentral, "_run", side_effect=run_ok):
+            meshcentral.verify_session_share_policy(node)
+        def run_bad_device(command):
+            if "ListDeviceGroups" in command:
+                return json.dumps([{"_id": group, "mtype": 2, "consent": 0}])
+            return json.dumps([{"_id": node, "meshid": group, "consent": 8}])
+        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
+                                  "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
+             patch.object(meshcentral, "_base_command",
+                          return_value=["meshctrl", "DeviceSharing"]), \
+             patch.object(meshcentral, "_run", side_effect=run_bad_device):
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_share_policy(node)
+        def run_bad_group(command):
+            if "ListDeviceGroups" in command:
+                return json.dumps([{"_id": group, "mtype": 2, "consent": 8}])
+            return json.dumps([{"_id": node, "meshid": group, "consent": 0}])
+        with patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
+                                  "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
+             patch.object(meshcentral, "_base_command",
+                          return_value=["meshctrl", "DeviceSharing"]), \
+             patch.object(meshcentral, "_run", side_effect=run_bad_group):
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_share_policy(node)
+
+    def test_session_share_policy_inherits_group_when_device_consent_missing(self):
+        import json
+        node = "node/d/" + "A"*64
+        group = "mesh/d/" + "B"*64
+        for group_consent in (0, 8, None):
+            def run(command):
+                if "ListDeviceGroups" in command:
+                    record = {"_id": group, "mtype": 2}
+                    if group_consent is not None:
+                        record["consent"] = group_consent
+                    return json.dumps([record])
+                return json.dumps([{"_id": node, "meshid": group}])
+            with self.subTest(group_consent=group_consent), \
+                 patch.dict(os.environ, {"MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
+                                  "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group}), \
+                 patch.object(meshcentral, "_base_command",
+                              return_value=["meshctrl", "DeviceSharing"]), \
+                 patch.object(meshcentral, "_run", side_effect=run):
+                if group_consent == 0:
+                    meshcentral.verify_session_share_policy(node)
+                else:
+                    with self.assertRaises(meshcentral.MeshCentralError):
+                        meshcentral.verify_session_share_policy(node)
+
+    def test_legacy_consent_511_must_never_enable_single_prompt(self):
+        import json
+        group = "mesh/d/" + "B"*64
+        node = "node/d/" + "A"*64
+        def run(command):
+            if "ListDeviceGroups" in command:
+                return json.dumps([{"_id": group, "mtype": 2, "consent": 511}])
+            return json.dumps([{"_id": node, "meshid": group}])
+        with patch.dict(os.environ, {
+                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
+                "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group,
+            }), patch.object(meshcentral, "_base_command",
+                             return_value=["meshctrl", "DeviceSharing"]), \
+             patch.object(meshcentral, "_run", side_effect=run):
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_share_policy(node)
+
+    def test_single_prompt_group_must_be_separate_from_service_groups(self):
+        group = "mesh/d/" + "B"*64
+        node = "node/d/" + "A"*64
+        with patch.dict(os.environ, {
+                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
+                "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": group,
+                "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID": group,
+            }), patch.object(meshcentral, "_run") as run:
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_share_policy(node)
+            run.assert_not_called()
+        with patch.dict(os.environ, {
+                "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID": "mesh/d/" + "C"*64,
+                "MESH_CENTRAL_SINGLE_PROMPT_MESH_ID": "mesh/d/" + "C"*64,
+            }), patch.object(meshcentral, "_run") as run:
+            with self.assertRaises(meshcentral.MeshCentralError):
+                meshcentral.verify_session_share_policy(node)
+            run.assert_not_called()
+
     def test_create_share_rejects_untrusted_urls(self):
         bad_urls = (
             "javascript:alert(1)",
