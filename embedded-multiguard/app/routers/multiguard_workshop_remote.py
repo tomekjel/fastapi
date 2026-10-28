@@ -958,12 +958,13 @@ def connect_for_owner(sid):
             raise HTTPException(403,"Nieznany sposób autoryzacji sesji.")
         scope = None
         if row.get("authorization_kind","SESSION_CONSENT") == "STANDING_SERVICE":
-            standing = standing_authorization_record(db,row["installation_id"])
-            if (not standing_authorization_record_valid(grant,standing)
-                    or grant["mesh_node_id"] != standing["approved_mesh_node_id"]
-                    or list(row["granted_capabilities"] or []) != ["desktop"]):
-                raise HTTPException(403,"Cofnięto lub zmieniono stałe upoważnienie dla pulpitu.")
-            scope = standing["device_scope"]
+            if list(row["granted_capabilities"] or []) != ["desktop"]:
+                raise HTTPException(403,"Tryb serwisowy dopuszcza wyłącznie pulpit.")
+            scope = "CLIENT_DIAGNOSTIC"
+            try:
+                meshcentral.verify_service_pro_node(grant["mesh_node_id"])
+            except meshcentral.MeshCentralError as exc:
+                raise HTTPException(409,"Węzeł nie należy do aktywnej grupy serwisowej.") from exc
         if row["status"] not in ("CONSENTED","CONNECT_READY","ACTIVE"):
             raise HTTPException(409,"Klient nie wyraził zgody na pulpit.")
         if (row["status"] in ("CONNECT_READY", "ACTIVE")
@@ -1003,20 +1004,15 @@ def connect_for_owner(sid):
         # Stop even a just-created link if it no longer belongs to the exact
         # approved diagnostic MeshCentral group.
         if scope is not None:
-            meshcentral.verify_standing_service_node(node,scope)
+            meshcentral.verify_service_pro_node(node)
         with engine.begin() as db:
             row=db.execute(text("""
                 SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid FOR UPDATE
             """),{"sid":sid}).mappings().first()
             grant=_grant(db,iid)
             current_kind = row.get("authorization_kind","SESSION_CONSENT") if row else None
-            standing = standing_authorization_record(db,iid) if scope is not None else None
-            if (scope is not None and
-                    (current_kind != "STANDING_SERVICE"
-                     or not standing_authorization_record_valid(grant,standing)
-                     or standing["device_scope"] != scope
-                     or standing["approved_mesh_node_id"] != node)):
-                raise HTTPException(403,"Stałe upoważnienie zmieniono podczas tworzenia udostępnienia.")
+            if scope is not None and current_kind != "STANDING_SERVICE":
+                raise HTTPException(403,"Tryb sesji serwisowej uległ zmianie.")
             if scope is None and current_kind != "SESSION_CONSENT":
                 raise HTTPException(403,"Tryb zgody zmienił się podczas tworzenia sesji.")
             if share_expires <= _now():
