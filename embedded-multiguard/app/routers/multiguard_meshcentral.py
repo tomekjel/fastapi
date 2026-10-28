@@ -254,6 +254,15 @@ def verify_session_node(local_id: str, session_id: str, *, persistent_service: b
     return node
 
 
+def verify_service_pro_node(node_id: str) -> str:
+    """Verify a service PRO agent in the dedicated service group.
+
+    Never infer service access from a client-consent group or browser input.
+    The service group must be explicitly configured by the administrator.
+    """
+    return verify_standing_service_node(node_id, "CLIENT_DIAGNOSTIC")
+
+
 def verify_standing_service_node(node_id: str, device_scope: str) -> str:
     """Read-only verification of a previously authorized, exact online SCM node.
 
