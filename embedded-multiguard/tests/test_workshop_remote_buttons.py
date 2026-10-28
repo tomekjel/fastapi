@@ -67,6 +67,13 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("if (sid !== connectingSession)", self.ui)
         self.assertIn("if (tab) tab.close();", self.ui)
 
+    def test_popup_block_does_not_create_orphan_mesh_share(self):
+        self.assertIn("if (!tab) {", self.ui)
+        self.assertIn("opening = false;", self.ui)
+        self.assertIn("viewerError = true;", self.ui)
+        self.assertLess(self.ui.index("if (!tab) {"),
+                        self.ui.index("const reply = await api('sessions/' + connectingSession + '/connect','POST')"))
+
     def test_confirmation_before_network_request(self):
         handler = self.ui[self.ui.index("start.onclick = async () => {"):]
         self.assertLess(handler.index("window.confirm("), handler.index("start.disabled = true;"))
