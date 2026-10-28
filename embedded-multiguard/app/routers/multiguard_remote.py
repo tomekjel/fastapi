@@ -1664,6 +1664,9 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
               ? 'MeshCentral powiązany — możesz otworzyć pulpit.'
               : 'Oczekiwanie na powiązanie MeshAgenta z tym komputerem. Pulpit jeszcze niedostępny.';
           } else if (['DENIED','ENDED','EXPIRED','ERROR'].includes(info.status)) {
+            autoOpen = false;
+            if (viewerTab && !viewerTab.closed) viewerTab.close();
+            viewerTab = null;
             status.textContent = 'Sesja: ' + info.status;
             connect.disabled = true;
             end.disabled = true;
