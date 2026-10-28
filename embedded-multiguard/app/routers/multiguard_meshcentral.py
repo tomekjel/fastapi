@@ -491,7 +491,7 @@ def verify_session_share_policy(node_id: str) -> None:
                     stack.append(value)
     if len(matched) != 1 or matched[0].get("meshid") != group:
         raise MeshCentralError("Nie można potwierdzić grupy węzła sesji.")
-    consent = matched[0].get("consent", 0)
+    consent = matched[0].get("consent")
     if type(consent) is not int or consent & 8:
         raise MeshCentralError("Węzeł wymusza dodatkową zgodę na pulpit.")
 
@@ -515,7 +515,7 @@ def verify_session_share_policy(node_id: str) -> None:
              if isinstance(item, dict) and item.get("_id") == group]
     if len(found) != 1:
         raise MeshCentralError("Nie potwierdzono grupy sesji MeshCentral.")
-    policy = found[0].get("consent", 0)
+    policy = found[0].get("consent")
     if (found[0].get("mtype") != 2 or type(policy) is not int
             or policy & 8):
         raise MeshCentralError("Grupa wymusza dodatkową zgodę na pulpit.")
