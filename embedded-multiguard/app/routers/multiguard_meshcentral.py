@@ -502,7 +502,11 @@ def verify_session_share_policy(node_id: str) -> None:
                     stack.append(value)
     if len(matched) != 1 or matched[0].get("meshid") != group:
         raise MeshCentralError("Nie można potwierdzić grupy węzła sesji.")
-    consent = matched[0].get("consent")
+    # MeshCentral often omits per-device consent: that means no override,
+    # not a missing/unsafe policy. Only explicitly configured device consent
+    # can add another desktop prompt. Group and server attestations are
+    # still mandatory.
+    consent = matched[0].get("consent", 0)
     if type(consent) is not int or consent & 8:
         raise MeshCentralError("Węzeł wymusza dodatkową zgodę na pulpit.")
 
