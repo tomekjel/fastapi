@@ -475,6 +475,9 @@ def verify_session_share_policy(node_id: str) -> None:
     approved_group = _required("MESH_CENTRAL_SINGLE_PROMPT_MESH_ID")
     if not re.fullmatch(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", approved_group):
         raise MeshCentralError("Grupa jednej zgody nie odpowiada grupie agenta sesji.")
+    legacy_group = os.getenv("MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID", "").strip()
+    if legacy_group and legacy_group == approved_group:
+        raise MeshCentralError("Grupa jednej zgody musi być odrębna od starej grupy agentów.")
     for other_var in ("MESH_CENTRAL_OWNER_OWNED_MESH_ID",
                       "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID"):
         other = os.getenv(other_var, "").strip()
