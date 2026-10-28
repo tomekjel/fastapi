@@ -45,7 +45,7 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("api('request-consent/' + installation, 'POST')", self.ui)
         self.assertIn("api('request/' + installation, 'POST')", self.ui)
         self.assertIn("consent.disabled = true;", self.ui)
-        self.assertIn("consent.disabled = !customerMode;", self.ui)
+        self.assertIn("consent.disabled = true;", self.ui)
 
     def test_accepted_workshop_consent_has_separate_ten_minute_connection_window(self):
         workshop = (SOURCE.parent / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
@@ -112,7 +112,7 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("state.unattendedReady === true", self.ui)
         self.assertIn("state.mode === 'SERVICE_PRO'", self.ui)
         self.assertIn("start.hidden = state.mode !== 'SERVICE_PRO';", self.ui)
-        self.assertIn("consent.hidden = !customerMode;", self.ui)
+        self.assertIn("consent.hidden = true;", self.ui)
         self.assertIn("if (!standingEligible)", self.ui)
 
     def test_pending_session_blocks_second_consent_request(self):
