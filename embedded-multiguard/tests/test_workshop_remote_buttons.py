@@ -129,6 +129,12 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("url.hostname !== 'mesh.multi-servis.pl'", self.ui)
         self.assertIn("if (viewerTab && !viewerTab.closed) viewerTab.close();", self.ui)
 
+    def test_owner_guest_link_opts_into_meshcentral_auto_connect_only_after_url_validation(self):
+        marker = "url.searchParams.set('mgautoconnect', '1');"
+        self.assertIn(marker, self.ui)
+        self.assertLess(self.ui.index("url.hostname !== 'mesh.multi-servis.pl'"), self.ui.index(marker))
+        self.assertLess(self.ui.index(marker), self.ui.index("tab.location.replace(url.href)"))
+
     def test_auto_open_error_is_not_overwritten_by_ready_message(self):
         self.assertIn("if (ready && autoOpen && !opening)", self.ui)
         self.assertIn("} else if (!opening && !viewerError) {", self.ui)
