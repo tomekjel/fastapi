@@ -198,6 +198,14 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')", self.active)
         self.assertIn('result["meshLinked"]', self.active)
 
+    def test_paid_customer_cannot_use_workshop_consent_button(self):
+        self.assertIn("consent.hidden = true;", self.ui)
+        self.assertIn("consent.disabled = true;", self.ui)
+        workshop = (pathlib.Path(__file__).resolve().parents[1] / "app" /
+                    "routers" / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
+        endpoint = workshop.split("def request_consent_for_owner(", 1)[1].split("@router.", 1)[0]
+        self.assertIn("if not _eligible(grant):", endpoint)
+
     def test_workshop_enrollment_requires_dedicated_service_group(self):
         source = (pathlib.Path(__file__).resolve().parents[1] / "app" /
                   "routers" / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
