@@ -749,6 +749,32 @@ def workshop_session_mesh_enroll(request: WorkshopSessionMeshEnrollment):
     return {"requestId":request.requestId,"sessionId":str(request.sessionId),"accepted":True}
 
 
+@router.post("/agent/workshop/mesh-provisioning-plan")
+def workshop_mesh_provisioning_plan(request: WorkshopAuth):
+    """Return server-selected service mesh ID to a registered workshop client.
+
+    A mesh ID is routing metadata, not an install token or unattended grant.
+    The client must obtain an approved MeshAgent package by a separate
+    protected provisioning path and complete identity-bound enrollment.
+    """
+    _schema()
+    _authenticate(request)
+    with engine.connect() as db:
+        grant = _grant(db, request.installationId)
+        if not _eligible(grant):
+            raise HTTPException(403, "Instalacja nie ma aktywnej licencji serwisowej PRO.")
+        group = expected_remote_mesh_group(grant)
+        if group is None:
+            raise HTTPException(503, "Nie skonfigurowano oddzielnej grupy serwisowej.")
+    return {
+        "requestId": request.requestId,
+        "mode": "SERVICE_PRO",
+        "meshGroupId": group,
+        "unattendedAuthorized": False,
+        "serverTime": _now().isoformat(),
+    }
+
+
 @router.post("/agent/workshop/mesh-enroll")
 def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
     """Identity-bound registration; OWNER never has to type MeshCentral node IDs."""
