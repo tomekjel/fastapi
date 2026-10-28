@@ -212,6 +212,18 @@ def expected_remote_mesh_group(grant):
     group = os.getenv(key, "").strip()
     if not re.fullmatch(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", group):
         return None
+    # Never allow the unattended group to alias either customer route,
+    # including the existing single-prompt legacy MeshCentral configuration.
+    if mode == "SERVICE_PRO":
+        customer_groups = (
+            os.getenv("MESH_CENTRAL_CUSTOMER_MESH_ID", "").strip(),
+            os.getenv("MESH_CENTRAL_SINGLE_PROMPT_MESH_ID", "").strip(),
+        )
+        if group in customer_groups:
+            return None
+    elif mode == "CUSTOMER_LICENSE":
+        if group == os.getenv("MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID", "").strip():
+            return None
     return group
 
 
