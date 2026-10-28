@@ -216,6 +216,9 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn('"MESH_CENTRAL_CUSTOMER_MESH_ID"', resolver)
         self.assertIn("return None", resolver)
         self.assertNotIn("MoveDevice", resolver)
+        self.assertIn('"MESH_CENTRAL_SINGLE_PROMPT_MESH_ID"', resolver)
+        self.assertIn("if group in customer_groups:", resolver)
+        self.assertIn('group == os.getenv("MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID"', resolver)
 
     def test_workshop_enrollment_requires_dedicated_service_group(self):
         source = (pathlib.Path(__file__).resolve().parents[1] / "app" /
