@@ -49,6 +49,12 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("} else if (!opening) {", self.ui)
         self.assertIn("Nie udało się otworzyć pulpitu:", self.ui)
 
+    def test_viewer_failure_survives_next_poll_and_end_cleans_pending_tab(self):
+        self.assertIn("viewerError = true;", self.ui)
+        self.assertIn("!opening && !viewerError", self.ui)
+        self.assertIn("autoOpen=false; viewerError=false;", self.ui)
+        self.assertIn("if(viewerTab && !viewerTab.closed) viewerTab.close(); viewerTab=null;", self.ui)
+
     def test_confirmation_before_network_request(self):
         handler = self.ui[self.ui.index("start.onclick = async () => {"):]
         self.assertLess(handler.index("window.confirm("), handler.index("start.disabled = true;"))
