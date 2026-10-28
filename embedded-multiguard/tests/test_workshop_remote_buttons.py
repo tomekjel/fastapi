@@ -64,6 +64,13 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("_open(db, iid, entitlement_lost=True)", close)
         self.assertIn('invalidate_standing_authorization(db,iid,"SERVICE_RIGHTS_CHANGED")', close)
 
+    def test_acceptance_is_guarded_against_concurrent_licence_change(self):
+        licence = (SOURCE.parent / "multiguard_license.py").read_text(encoding="utf-8")
+        acceptance = licence.split("def acceptance(req: AcceptanceRequest):", 1)[1].split("\n@router.", 1)[0]
+        self.assertIn("WHERE id=:id AND lifecycle='PENDING_ACCEPTANCE'", acceptance)
+        self.assertIn("if row is None:", acceptance)
+        self.assertIn('raise HTTPException(409, "Licencja zmieniła stan podczas akceptacji; odśwież dane.")', acceptance)
+
     def test_paid_licence_starts_only_after_acceptance(self):
         licence = (SOURCE.parent / "multiguard_license.py").read_text(encoding="utf-8")
         acceptance = licence.split("def acceptance(req: AcceptanceRequest):", 1)[1].split("\n@router.", 1)[0]
