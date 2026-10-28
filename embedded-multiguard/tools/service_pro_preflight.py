@@ -30,7 +30,17 @@ def main():
     elif ids[KEYS[0]] == ids[KEYS[1]]:
         print("BLOCKED: Service group must differ from customer single-consent group.")
     else:
-        print("CONFIG_READY: Distinct group identifiers configured; live node membership still requires verification.")
+        print("GROUPS_CONFIGURED: Distinct group identifiers present; checking policy attestation.")
+
+    # This is an independent server-side security gate in verify_service_pro_node.
+    # A group identifier alone never authorizes unattended access.
+    attested = env.get("MESH_CENTRAL_STANDING_POLICY_ATTESTED",
+                       os.environ.get("MESH_CENTRAL_STANDING_POLICY_ATTESTED", ""))
+    if attested != "1":
+        print("BLOCKED: MESH_CENTRAL_STANDING_POLICY_ATTESTED is not set to 1.")
+        print("Inspect domain, group, device and bridge-user consent policies first.")
+    elif ids[KEYS[0]] and ids[KEYS[0]] != ids[KEYS[1]]:
+        print("CONFIG_READY: Identity and policy gate set; live group/node checks still required.")
 
 if __name__ == "__main__":
     main()
