@@ -1557,7 +1557,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       const approvalStatus = document.getElementById('ws-approval-status');
       const status = document.getElementById('ws-status');
       let sid = null, timer = null, standingEligible = false;
-      let autoOpen = false, opening = false, viewerTab = null;
+      let autoOpen = false, opening = false, viewerTab = null, viewerError = false;
       start.disabled = true;
       consent.disabled = true;
       async function refreshApproval() {
@@ -1659,7 +1659,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
             if (ready && autoOpen && !opening) {
               autoOpen = false;
               await openDesktop();
-            } else if (!opening) {
+            } else if (!opening && !viewerError) {
               status.textContent = ready
                 ? 'MeshCentral powiązany — pulpit gotowy.'
                 : 'Oczekiwanie na powiązanie MeshAgenta z tym komputerem. Pulpit jeszcze niedostępny.';
@@ -1689,11 +1689,13 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       }
       function prepareViewer() {
         viewerTab = window.open('about:blank','_blank');
+        viewerError = false;
         autoOpen = true;
       }
       async function openDesktop() {
         if (!sid || opening) return;
         opening = true;
+        viewerError = false;
         const tab = viewerTab && !viewerTab.closed ? viewerTab : null;
         viewerTab = null;
         try {
@@ -1702,9 +1704,10 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
           const url = new URL(reply.url);
           if (url.protocol !== 'https:' || url.hostname !== 'mesh.multi-servis.pl') throw Error('Niezaufany adres MeshCentral.');
           if (tab) tab.location.replace(url.href);
-          else { status.textContent = 'Przeglądarka zablokowała nową kartę. Kliknij OTWÓRZ PULPIT.'; connect.disabled = false; }
+          else { viewerError = true; status.textContent = 'Przeglądarka zablokowała nową kartę. Kliknij OTWÓRZ PULPIT.'; connect.disabled = false; }
         } catch(e) {
           if (tab) tab.close();
+          viewerError = true;
           status.textContent = 'Nie udało się otworzyć pulpitu: ' + e.message;
           connect.disabled = false;
         } finally { opening = false; }
@@ -1760,6 +1763,8 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
         end.disabled = true;
         try {
           await api('sessions/' + sid + '/end','POST');
+          autoOpen=false; viewerError=false;
+          if(viewerTab && !viewerTab.closed) viewerTab.close(); viewerTab=null;
           clearInterval(timer); timer=null; sid=null;
           connect.disabled=true; end.disabled=true; start.disabled=true; consent.disabled=true;
           await refreshApproval();
