@@ -220,6 +220,17 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn("if group in customer_groups:", resolver)
         self.assertIn('group == os.getenv("MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID"', resolver)
 
+    def test_workshop_provisioning_plan_is_authenticated_and_not_a_grant(self):
+        source = (SOURCE.parent / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
+        plan = source.split("def workshop_mesh_provisioning_plan(", 1)[1].split("@router.post", 1)[0]
+        self.assertIn("_authenticate(request)", plan)
+        self.assertIn("if not _eligible(grant):", plan)
+        self.assertIn("expected_remote_mesh_group(grant)", plan)
+        self.assertIn('"meshGroupId": group', plan)
+        self.assertIn('"unattendedAuthorized": False', plan)
+        self.assertNotIn("MeshAgentInstall", plan)
+        self.assertNotIn("token", plan.lower())
+
     def test_workshop_enrollment_requires_dedicated_service_group(self):
         source = (pathlib.Path(__file__).resolve().parents[1] / "app" /
                   "routers" / "multiguard_workshop_remote.py").read_text(encoding="utf-8")
