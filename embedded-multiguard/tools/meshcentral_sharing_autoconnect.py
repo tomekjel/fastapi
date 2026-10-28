@@ -56,7 +56,12 @@ def main() -> None:
         parser.error("source and destination must differ; no in-place production editing")
     if args.destination.exists():
         parser.error("destination already exists; refusing overwrite")
-    args.destination.write_text(patch(args.source.read_text(encoding="utf-8")), encoding="utf-8")
+    # newline="" prevents implicit CRLF-to-LF conversion in the original template.
+    with args.source.open("r", encoding="utf-8", newline="") as source_file:
+        original = source_file.read()
+    updated = patch(original)
+    with args.destination.open("w", encoding="utf-8", newline="") as target_file:
+        target_file.write(updated)
 
 
 if __name__ == "__main__":
