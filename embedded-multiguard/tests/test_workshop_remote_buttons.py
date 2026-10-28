@@ -100,7 +100,8 @@ class WorkshopRemoteButtonsTests(unittest.TestCase):
         self.assertIn('result["meshLinked"]', self.active)
 
     def test_reset_on_end(self):
-        self.assertIn("connect.disabled=true; end.disabled=true; start.disabled=false;", self.ui)
+        self.assertIn("connect.disabled=true; end.disabled=true; start.disabled=true; consent.disabled=true;", self.ui)
+        self.assertIn("await refreshApproval();", self.ui)
         self.assertIn("sid=null;", self.ui)
         self.assertIn("end.disabled=false;status.textContent=e.message;", self.ui)
 
