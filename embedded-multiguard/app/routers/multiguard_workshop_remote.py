@@ -745,8 +745,11 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
     # Fail early for STANDARD/disabled installations; do not permit them to
     # flood the MeshCentral management CLI with arbitrary lookup requests.
     with engine.connect() as db:
-        if not _eligible(_grant(db, request.installationId)):
+        grant = _grant(db, request.installationId)
+        if not _eligible(grant):
             raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
+        if expected_remote_mesh_group(grant) is None:
+            raise HTTPException(503, "Nie skonfigurowano grupy MeshCentral dla Pro serwisowego.")
     local_id = request.meshNodeId
     if not re.fullmatch(r"[A-Za-z0-9@$]{64}", local_id):
         raise HTTPException(400, "Nieprawidłowy identyfikator MeshAgent.")
@@ -775,6 +778,8 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
         grant = _grant(db, request.installationId)
         if not _eligible(grant):
             raise HTTPException(403, "Instalacja nie ma aktywnego serwisowego Pro.")
+        if expected_remote_mesh_group(grant) is None:
+            raise HTTPException(503, "Brak grupy serwisowej w konfiguracji serwera.")
         # Serialize the cross-mode association with commercial enrollment
         # using exactly the same advisory lock on the full MeshCentral node.
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:node))"), {"node":node})
