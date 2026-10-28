@@ -1650,8 +1650,10 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       }
       async function refresh() {
         if (!sid) return;
+        const checkedSession = sid;
         try {
-          const info = await api('sessions/' + sid);
+          const info = await api('sessions/' + checkedSession);
+          if (sid !== checkedSession) return;
           if (['CONSENTED','CONNECT_READY','ACTIVE'].includes(info.status)) {
             consent.disabled = true;
             start.disabled = true;
@@ -1684,6 +1686,7 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
             status.textContent = 'Oczekiwanie na decyzję klienta lub przygotowanie sesji…';
           }
         } catch (e) {
+          if (sid !== checkedSession) return;
           connect.disabled = true;
           status.textContent = 'Utracono potwierdzenie stanu MeshCentral: ' + e.message;
         }
@@ -1695,19 +1698,25 @@ def owner_workshop_workspace(installation_id: uuid.UUID, _: None = Depends(_pane
       }
       async function openDesktop() {
         if (!sid || opening) return;
+        const connectingSession = sid;
         opening = true;
         viewerError = false;
         const tab = viewerTab && !viewerTab.closed ? viewerTab : null;
         viewerTab = null;
         try {
           connect.disabled = true;
-          const reply = await api('sessions/' + sid + '/connect','POST');
+          const reply = await api('sessions/' + connectingSession + '/connect','POST');
+          if (sid !== connectingSession) {
+            if (tab) tab.close();
+            return;
+          }
           const url = new URL(reply.url);
           if (url.protocol !== 'https:' || url.hostname !== 'mesh.multi-servis.pl') throw Error('Niezaufany adres MeshCentral.');
           if (tab) tab.location.replace(url.href);
           else { viewerError = true; status.textContent = 'Przeglądarka zablokowała nową kartę. Kliknij OTWÓRZ PULPIT.'; connect.disabled = false; }
         } catch(e) {
           if (tab) tab.close();
+          if (sid !== connectingSession) return;
           viewerError = true;
           status.textContent = 'Nie udało się otworzyć pulpitu: ' + e.message;
           connect.disabled = false;
