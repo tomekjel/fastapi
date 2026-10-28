@@ -684,7 +684,10 @@ def workshop_session_mesh_enroll(request: WorkshopSessionMeshEnrollment):
     with engine.connect() as db:
         validate(db)
     try:
-        node = meshcentral.verify_session_node(request.meshNodeId, str(request.sessionId), persistent_service=True)
+        node = meshcentral.verify_session_node(
+            request.meshNodeId, str(request.sessionId), persistent_service=True,
+            single_prompt=(os.getenv("MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED") == "1"),
+        )
     except meshcentral.MeshCentralError as exc:
         raise HTTPException(409, "Serwer nie potwierdził jeszcze agenta tej sesji.") from exc
     with engine.begin() as db:
