@@ -172,7 +172,8 @@ def verify_registered_node(node_id: str) -> bool:
     return found
 
 
-def verify_session_node(local_id: str, session_id: str, *, persistent_service: bool = False) -> str:
+def verify_session_node(local_id: str, session_id: str, *, persistent_service: bool = False,
+                        single_prompt: bool = False) -> str:
     """Check exact live MeshCentral node in the pinned consent-only group.
 
     With persistent_service=True a Windows SCM agent survives many sessions,
@@ -185,7 +186,8 @@ def verify_session_node(local_id: str, session_id: str, *, persistent_service: b
     session_id = str(uuid.UUID(session_id))
     if not re.fullmatch(r"[A-Za-z0-9@$]{64}", local_id):
         raise MeshCentralError("Nieprawidłowa tożsamość agenta sesji.")
-    group = _required("MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID")
+    group = _required("MESH_CENTRAL_SINGLE_PROMPT_MESH_ID" if single_prompt
+                      else "MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID")
     if not re.fullmatch(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", group):
         raise MeshCentralError("Nieprawidłowa grupa agentów sesji.")
     domain = group.split("/")[1]
@@ -467,12 +469,11 @@ def verify_session_share_policy(node_id: str) -> None:
     group and device restrictions are independently checked on every share.
     """
     import json
-    group = _required("MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID")
+    group = _required("MESH_CENTRAL_SINGLE_PROMPT_MESH_ID")
     # A single-prompt session must use a dedicated MeshCentral group, not the
     # legacy shared group with consent=511 or a standing-service group.
     approved_group = _required("MESH_CENTRAL_SINGLE_PROMPT_MESH_ID")
-    if (approved_group != group or
-            not re.fullmatch(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", approved_group)):
+    if not re.fullmatch(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", approved_group):
         raise MeshCentralError("Grupa jednej zgody nie odpowiada grupie agenta sesji.")
     for other_var in ("MESH_CENTRAL_OWNER_OWNED_MESH_ID",
                       "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID"):
@@ -555,7 +556,7 @@ def create_client_approved_share(
     # The flag alone is never authority. Re-check exact online node, session
     # identity and pinned consent-only group immediately before creating share.
     verified = verify_session_node(node_id.rsplit("/", 1)[-1], session_id,
-                                   persistent_service=True)
+                                   persistent_service=True, single_prompt=True)
     if verified != node_id:
         raise MeshCentralError("Agent nie odpowiada zatwierdzonej sesji.")
     verify_session_share_policy(node_id)
