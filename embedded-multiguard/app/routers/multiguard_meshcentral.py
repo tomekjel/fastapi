@@ -459,6 +459,69 @@ def create_share(
     return _create_share(node_id, session_label, capabilities, duration_minutes)
 
 
+
+def verify_session_share_policy(node_id: str) -> None:
+    """Re-check device/group desktop consent policy before reusing GUI consent.
+
+    The configured server/user/domain policy is attested separately; dynamic
+    group and device restrictions are independently checked on every share.
+    """
+    import json
+    group = _required("MESH_CENTRAL_TRANSIENT_CONSENT_MESH_ID")
+    command = list(_base_command())
+    command[command.index("DeviceSharing")] = "ListDevices"
+    raw = _run(command + ["--json"])
+    if len(raw) > 2_000_000:
+        raise MeshCentralError("Zbyt duży spis agentów MeshCentral.")
+    try:
+        devices = json.loads(raw)
+    except ValueError as exc:
+        raise MeshCentralError("Nieprawidłowy spis agentów MeshCentral.") from exc
+    matched = []
+    stack = [devices]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, dict):
+            if item.get("_id", item.get("id")) == node_id:
+                matched.append(item)
+            for key, value in item.items():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+    if len(matched) != 1 or matched[0].get("meshid") != group:
+        raise MeshCentralError("Nie można potwierdzić grupy węzła sesji.")
+    consent = matched[0].get("consent", 0)
+    if type(consent) is not int or consent & 8:
+        raise MeshCentralError("Węzeł wymusza dodatkową zgodę na pulpit.")
+
+    groups_command = list(_base_command())
+    groups_command[groups_command.index("DeviceSharing")] = "ListDeviceGroups"
+    raw_groups = _run(groups_command + ["--json"])
+    if len(raw_groups) > 2_000_000:
+        raise MeshCentralError("Zbyt duży spis grup MeshCentral.")
+    try:
+        groups = json.loads(raw_groups)
+    except ValueError as exc:
+        raise MeshCentralError("Nieprawidłowa lista grup MeshCentral.") from exc
+    if isinstance(groups, dict) and "meshes" in groups:
+        groups = groups["meshes"]
+    if isinstance(groups, dict):
+        groups = [dict(value, _id=value.get("_id", key))
+                  for key, value in groups.items() if isinstance(value, dict)]
+    if not isinstance(groups, list):
+        raise MeshCentralError("Nierozpoznana lista grup MeshCentral.")
+    found = [item for item in groups
+             if isinstance(item, dict) and item.get("_id") == group]
+    if len(found) != 1:
+        raise MeshCentralError("Nie potwierdzono grupy sesji MeshCentral.")
+    policy = found[0].get("consent", 0)
+    if (found[0].get("mtype") != 2 or type(policy) is not int
+            or policy & 8):
+        raise MeshCentralError("Grupa wymusza dodatkową zgodę na pulpit.")
+
+
+
 def create_client_approved_share(
     node_id: str,
     session_id: str,
@@ -480,6 +543,7 @@ def create_client_approved_share(
                                    persistent_service=True)
     if verified != node_id:
         raise MeshCentralError("Agent nie odpowiada zatwierdzonej sesji.")
+    verify_session_share_policy(node_id)
     if "files" in {str(item).lower() for item in capabilities}:
         # File transfer needs separate consent policy; don't broaden desktop approval.
         return create_share(node_id, session_label, capabilities, duration_minutes)
