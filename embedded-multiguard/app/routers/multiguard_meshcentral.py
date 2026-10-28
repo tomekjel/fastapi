@@ -455,8 +455,31 @@ def create_share(
     capabilities: Iterable[str],
     duration_minutes: int = 60,
 ) -> MeshShare:
-    """Commercial client share: always prompt for each connection."""
+    """Fallback for ordinary links: MeshCentral itself requests consent."""
     return _create_share(node_id, session_label, capabilities, duration_minutes)
+
+
+def create_client_approved_share(
+    node_id: str,
+    session_label: str,
+    capabilities: Iterable[str],
+    duration_minutes: int = 60,
+) -> MeshShare:
+    """Use the local MultiGuard consent only with attested MeshCentral policy.
+
+    This opt-in is deliberately fail-closed: until the remote group/domain/user
+    consent configuration has been independently verified, the old MeshCentral
+    prompt remains in force. This is NEVER an unattended permission.
+    """
+    if os.getenv("MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED", "") != "1":
+        return create_share(node_id, session_label, capabilities, duration_minutes)
+    if "files" in {str(item).lower() for item in capabilities}:
+        # File transfer needs separate consent policy; don't broaden desktop approval.
+        return create_share(node_id, session_label, capabilities, duration_minutes)
+    return _create_share(
+        node_id, session_label, ("desktop",), duration_minutes,
+        workshop_unattended=True,
+    )
 
 
 def create_workshop_share(
