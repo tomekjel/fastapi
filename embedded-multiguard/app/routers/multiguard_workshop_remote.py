@@ -858,6 +858,19 @@ def workshop_remote_decision(request: WorkshopDecision):
         if not row:
             raise HTTPException(404,"Nie znaleziono żądania.")
         if row["status"]!="REQUESTED":
+            # A timed-out GUI response can be retried without a second click.
+            # Reuse only the exact prior decision. Never renew an expired lease.
+            same_approval = (
+                row["status"] in ("CONSENTED", "CONNECT_READY", "ACTIVE")
+                and request.allowDesktop
+                and set(row["granted_capabilities"] or [])
+                    == ({"desktop", "files"} if request.allowFiles else {"desktop"})
+                and (row.get("mesh_share_expires_at") or row["expires_at"]) > _now()
+            )
+            same_denial = row["status"] == "DENIED" and not request.allowDesktop
+            if same_approval or same_denial:
+                return {"requestId":request.requestId,"serverTime":_now().isoformat(),
+                        "session":_public(row)}
             raise HTTPException(409,"Żądanie nie oczekuje na decyzję.")
         if row["expires_at"]<_now():
             expired = True
