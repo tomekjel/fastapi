@@ -10,7 +10,7 @@ import argparse
 from pathlib import Path
 
 MARKER = "/* MULTIGUARD_GUEST_AUTOCONNECT_V1 */"
-ANCHOR = "        start();\n    </script>"
+ANCHOR = "        start();"
 INSERT = """        start();
         /* MULTIGUARD_GUEST_AUTOCONNECT_V1 */
         // Opt-in only: never alter other MeshCentral sharing links.
@@ -37,13 +37,14 @@ INSERT = """        start();
 def patch(source: str) -> str:
     if MARKER in source:
         raise ValueError("Already patched; no double injection")
-    if source.count(ANCHOR) != 1:
+    if source.count(ANCHOR) != 1 or "function connectDesktop(e, contype, tsid, consent)" not in source:
         raise ValueError("Unexpected MeshCentral template version; review manually")
     if "function connectDesktop(e, contype, tsid, consent)" not in source:
         raise ValueError("Expected native desktop connector missing")
     if "var urlargs = parseUriArgs();" not in source:
         raise ValueError("Expected URL argument parser missing")
-    return source.replace(ANCHOR, INSERT)
+    # Preserve upstream whitespace and script closing tags across MeshCentral 1.2.5 builds.
+    return source.replace(ANCHOR, INSERT.split("    </script>", 1)[0].rstrip("\n"))
 
 
 def main() -> None:
