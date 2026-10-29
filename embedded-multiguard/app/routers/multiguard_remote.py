@@ -193,9 +193,13 @@ def _has_verified_remote_pro(connection, installation, now: datetime) -> bool:
         FROM guard.license_links l
         JOIN guard.installations gi
           ON gi.installation_external_id=l.installation_id
-        WHERE gi.id=:id LIMIT 1
+        WHERE gi.id=:id
+        ORDER BY (l.lifecycle='ACTIVE') DESC, l.valid_until DESC NULLS LAST
+        LIMIT 1
     """), {"id":internal_id}).mappings().first()
     if paid:
+        # Any existing customer link takes precedence over service access.
+        # Deny closed on revoked/expired rights; never fall through to grants.
         return (paid["plan_code"]=="multi_guard_pro"
                 and paid["lifecycle"]=="ACTIVE"
                 and paid["valid_until"] is not None
