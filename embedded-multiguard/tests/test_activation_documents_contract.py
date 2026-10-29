@@ -87,6 +87,17 @@ class ActivationDocumentContract(unittest.TestCase):
             with self.subTest(value=malformed):
                 self.assert_rejected(malformed)
 
+    def test_nonstring_document_fields_are_rejected(self):
+        for field, value in (
+            ("kind", 123), ("version", 2), ("title", ["wrong"]),
+            ("content_markdown", {"html": "wrong"}),
+            ("version", None), ("title", True),
+        ):
+            with self.subTest(field=field, value=value):
+                docs = self.docs(3)
+                docs[0][field] = value
+                self.assert_rejected(docs)
+
     def test_wrong_document_item_shape(self):
         docs = self.docs(3)
         docs[1] = "invalid"
