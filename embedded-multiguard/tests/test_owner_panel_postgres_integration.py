@@ -886,6 +886,28 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     accept_docs=[{"kind":d["kind"],"version":d["version"],
                   "sha256":hashlib.sha256(d["content_markdown"].encode()).hexdigest()}
                  for d in docs]
+    # Production incident regression: missing activation policies must fail
+    # closed both on refresh and acceptance, without starting paid time.
+    original_documents_env=os.environ["MULTIGUARD_REQUIRED_DOCUMENTS"]
+    try:
+        os.environ["MULTIGUARD_REQUIRED_DOCUMENTS"]="[]"
+        no_docs_refresh=c.post("/v1/multi-guard/refresh",json=refresh_fields)
+        assert no_docs_refresh.status_code==503,no_docs_refresh.text
+        no_docs_accept=c.post("/v1/multi-guard/acceptance",
+                              json={**refresh_fields,"documents":accept_docs})
+        assert no_docs_accept.status_code==503,no_docs_accept.text
+        assert license._link_by_installation(direct_id)["lifecycle"]=="PENDING_ACCEPTANCE"
+        assert not mock_calls["keygate_end"]
+    finally:
+        os.environ["MULTIGUARD_REQUIRED_DOCUMENTS"]=original_documents_env
+
+    # A different device credential cannot accept documents for this computer.
+    bad_auth=c.post("/v1/multi-guard/acceptance",
+                    json={**refresh_fields,"installationCredential":"x"*48,
+                          "documents":accept_docs})
+    assert bad_auth.status_code==403,bad_auth.text
+    assert not mock_calls["keygate_end"]
+
     # Rejection paths must not activate or start paid time.
     invalid_cases=[
       ("missing",[]),
