@@ -1603,9 +1603,13 @@ def _required_documents() -> list[dict[str, str]]:
                 503, "MULTIGUARD_REQUIRED_DOCUMENTS ma błędny JSON."
             ) from exc
     if not source:
-        return []
+        raise HTTPException(
+            503, "Brak trzech wymaganych dokumentów Multi-Guard w konfiguracji."
+        )
     if not isinstance(source, list):
         raise HTTPException(503, "Dokumenty Multi-Guard muszą być tablicą.")
+    if len(source) != 3:
+        raise HTTPException(503, "Multi-Guard wymaga dokładnie trzech dokumentów.")
 
     result: list[dict[str, str]] = []
     for item in source:
@@ -1626,6 +1630,8 @@ def _required_documents() -> list[dict[str, str]]:
                 "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
             }
         )
+    if len({(doc["kind"], doc["version"]) for doc in result}) != 3:
+        raise HTTPException(503, "Powtórzone identyfikatory dokumentów Multi-Guard.")
     return result
 
 
