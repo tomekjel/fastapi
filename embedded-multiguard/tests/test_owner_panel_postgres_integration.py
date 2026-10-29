@@ -1273,6 +1273,20 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             assert signed_target["validUntil"]==license._iso(transfer_end)
             assert signed_target["lifecycle"]=="ACTIVE"
             assert license._link_by_installation(target_id)["rebind_pending"] is False
+            refresh_base={"requestId":str(uuid.uuid4()),"nonce":"ci-transfer-refresh",
+                          "sentAt":"2026-10-29T00:00:00Z",
+                          "installationId":str(target_id),
+                          "deviceId":"ci-transfer-target-1234567890",
+                          "installationCredential":activated.json()["installationCredential"],
+                          "appVersion":"0.3.46"}
+            new_refresh=c.post("/v1/multi-guard/refresh",json=refresh_base)
+            ensure(new_refresh.status_code,200,"Transferred licence refresh")
+            renewed_signed=json.loads(new_refresh.json()["signedLicense"]["payload"])
+            assert renewed_signed["validUntil"]==license._iso(transfer_end)
+            assert renewed_signed["lifecycle"]=="ACTIVE"
+            assert c.post("/v1/multi-guard/refresh",json={
+                **refresh_base,"installationId":str(source_id),
+                "deviceId":"ci-transfer-source-1234567890"}).status_code in (403,404)
             assert c.post("/v1/multi-guard/discovery/assignment",
                           json=src).json()["assigned"] is False
             assert mock_calls["create"]==1
