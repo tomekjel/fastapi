@@ -296,6 +296,17 @@ def _keygate_request(
         if ignore_404 and exc.code == 404:
             return None
         detail = exc.read().decode("utf-8", errors="replace")[:1200]
+        # KeyGate ties an administrative API token to a product. A mismatch
+        # is a server configuration problem, never a reason to create a
+        # second licence, retry with another product, or rotate keys.
+        if "PRODUCT_SCOPE_MISMATCH" in detail.upper():
+            raise HTTPException(
+                503,
+                "KeyGate: PRODUCT_SCOPE_MISMATCH — token administracyjny "
+                "FastAPI nie ma zakresu produktu MULTIGUARD_KEYGATE_PRODUCT_ID. "
+                "Sprawdź przypisanie istniejącego tokenu po stronie KeyGate; "
+                "nie twórz zastępczej licencji ani nie zmieniaj produktu."
+            ) from exc
         raise HTTPException(exc.code, f"KeyGate: {detail}") from exc
     except Exception as exc:
         raise HTTPException(502, f"Brak połączenia z KeyGate: {exc}") from exc
