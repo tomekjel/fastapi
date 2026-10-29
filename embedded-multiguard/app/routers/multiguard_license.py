@@ -1897,6 +1897,9 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
             # An old installation can reappear after uninstall or restore.
             # Never hand its provisioning secret back when OWNER has revoked
             # the licence or its original validity period has elapsed.
+            if (link.get("rebind_pending")
+                    or link.get("installation_id") != pending["installation_id"]):
+                raise HTTPException(409, "Licencja została odłączona od tego komputera.")
             if (link["lifecycle"] in {"REVOKED", "EXPIRED"}
                     or (link.get("valid_until")
                         and link["valid_until"] <= _utcnow())):
