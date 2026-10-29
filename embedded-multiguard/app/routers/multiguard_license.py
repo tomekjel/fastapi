@@ -1210,11 +1210,33 @@ def _assign_direct_customer_license(
             """), {"license_id":lic["keygate_license_id"],"id":installation_id}).scalar_one_or_none()
             if updated is None:
                 raise RuntimeError("Instalacja zmieniła status podczas operacji KeyGate.")
-            con.execute(text("""
-                UPDATE guard.workshop_grants
-                SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
+            # Retire old service rights only after the paid licence is linked.
+            # Record the transition in the same SQL transaction so OWNER can
+            # distinguish a deliberate conversion from a lost workshop grant.
+            service_before = con.execute(text("""
+                SELECT edition,release_channel,enabled,monitoring_profile
+                FROM guard.workshop_grants
                 WHERE installation_id=:id AND enabled=TRUE
-            """), {"id":installation_id})
+                FOR UPDATE
+            """), {"id":installation_id}).mappings().first()
+            if service_before:
+                con.execute(text("""
+                    UPDATE guard.workshop_grants
+                    SET enabled=FALSE,monitoring_profile='OFF',updated_at=now()
+                    WHERE installation_id=:id AND enabled=TRUE
+                """), {"id":installation_id})
+                con.execute(text("""
+                    INSERT INTO guard.workshop_grant_audit(
+                        installation_id,before_state,after_state
+                    ) VALUES (:id,CAST(:before AS jsonb),CAST(:after AS jsonb))
+                """), {"id":installation_id,
+                    "before":json.dumps(dict(service_before)),
+                    "after":json.dumps({
+                        "edition":service_before["edition"],
+                        "release_channel":service_before["release_channel"],
+                        "enabled":False,"monitoring_profile":"OFF",
+                        "converted_to_keygate_license":str(lic["keygate_license_id"]),
+                    })})
     except Exception:
         # KeyGate has already acknowledged creation. The SQL transaction
         # rolls back, but the external licence cannot be rolled back here.
