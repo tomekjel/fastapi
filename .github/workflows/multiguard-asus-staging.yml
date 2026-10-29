@@ -24,7 +24,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $paths = @(
             'embedded-multiguard/app/routers/multiguard_license.py',
-            'embedded-multiguard/app/routers/multiguard_remote.py'
+            'embedded-multiguard/app/routers/multiguard_remote.py',
+            'embedded-multiguard/scripts/deploy_pr30_two_modules.sh'
           )
           $py = Get-Command py -ErrorAction SilentlyContinue
           if ($py) { & py -3 -m py_compile @paths }
@@ -50,5 +51,6 @@ jobs:
           path: |
             embedded-multiguard/app/routers/multiguard_license.py
             embedded-multiguard/app/routers/multiguard_remote.py
+            embedded-multiguard/scripts/deploy_pr30_two_modules.sh
             multiguard-stage-manifest.json
           retention-days: 7
