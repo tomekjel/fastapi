@@ -113,6 +113,16 @@ class ActivationDocumentContract(unittest.TestCase):
             hashlib.sha256(docs[1]["content_markdown"].encode("utf-8")).hexdigest(),
         )
 
+    def test_internal_fixture_is_complete(self):
+        fixture = Path(__file__).resolve().parents[1] / "test-fixtures/activation-documents-internal.json"
+        docs = json.loads(fixture.read_text(encoding="utf-8"))
+        settings["value"] = docs
+        parsed = parse_documents()
+        self.assertEqual(len(parsed), 3)
+        self.assertEqual({d["kind"] for d in parsed}, {"terms", "privacy", "safety"})
+        self.assertTrue(all("WYŁĄCZNIE TEST WEWNĘTRZNY" in d["contentMarkdown"] for d in parsed))
+        self.assertTrue(all(d["version"].endswith("-internal") for d in parsed))
+
     def test_valid_documents_hash_and_content(self):
         docs = self.docs(3)
         settings["value"] = json.dumps(docs, ensure_ascii=False)
