@@ -1240,6 +1240,21 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
                       "targetInstallationId":str(target_id),
                       "expectedValidUntil":license._iso(transfer_end)}
     try:
+        # A stale discovery record cannot silently become the licensed host.
+        with engine.begin() as db:
+            db.execute(text("""
+                UPDATE guard.pending_installations
+                SET last_seen_at=now()-interval '3 days' WHERE installation_id=:id
+            """),{"id":target_id})
+        stale=c.post("/multiguard/licenses/direct/transfer",
+                     auth=auth,json=transfer_payload)
+        assert stale.status_code==409,stale.text
+        assert not deactivated
+        with engine.begin() as db:
+            db.execute(text("""
+                UPDATE guard.pending_installations
+                SET last_seen_at=now() WHERE installation_id=:id
+            """),{"id":target_id})
         transferred=c.post("/multiguard/licenses/direct/transfer",
                            auth=auth,json=transfer_payload)
         ensure(transferred.status_code,200,"DIRECT transfer between two computers")
