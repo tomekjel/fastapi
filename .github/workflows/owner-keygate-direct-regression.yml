@@ -1,0 +1,26 @@
+name: OWNER KeyGate DIRECT regression no deploy
+on:
+  push:
+    branches: [fix/owner-keygate-direct-reconcile-20261029]
+    paths:
+      - embedded-multiguard/app/routers/multiguard_license.py
+      - embedded-multiguard/tests/test_owner_panel_postgres_integration.py
+      - .github/workflows/owner-keygate-direct-regression.yml
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile changed Python files without importing production services
+        run: |
+          python -m py_compile embedded-multiguard/app/routers/multiguard_license.py
+          python -m py_compile embedded-multiguard/tests/test_owner_panel_postgres_integration.py
+      - name: Check required duplicate-safety regression assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'assert mock_calls["create"]==1' embedded-multiguard/tests/test_owner_panel_postgres_integration.py
+          grep -Fq 'RECONCILIATION_REQUIRED" in conflict.text' embedded-multiguard/tests/test_owner_panel_postgres_integration.py
+          grep -Fq 'return _normalize_link(dict(existing))' embedded-multiguard/app/routers/multiguard_license.py
