@@ -2686,6 +2686,13 @@ def _transfer_direct_license(req: DirectTransferRequest) -> dict[str, Any]:
         if (target["status"]!="WAITING" or target["assigned_license_id"]
                 or target["assigned_reception_id"]):
             raise HTTPException(409, "Komputer docelowy nie oczekuje na nową licencję.")
+        # Never transfer a paid entitlement to an abandoned discovery record.
+        # OWNER must select a freshly registered, reachable replacement.
+        if (not target["last_seen_at"]
+                or target["last_seen_at"] < _utcnow()-timedelta(days=1)):
+            raise HTTPException(
+                409, "Komputer docelowy nie zgłaszał się od ponad 24 godzin."
+            )
         occupied=con.execute(text("""
             SELECT EXISTS(SELECT 1 FROM guard.license_links
                           WHERE installation_id=:id)
