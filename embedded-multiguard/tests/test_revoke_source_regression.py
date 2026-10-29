@@ -16,4 +16,16 @@ assert "remote" not in names, "Do not reference or shadow remote in revoke flow"
 assert any(isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
            and node.func.attr=="revoke_share" for node in ast.walk(fn)), (
            "Revocation must keep Mesh share invalidation")
+service=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+             and node.name=="_set_workshop_grant")
+disable=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+             and node.name=="owner_disable_workshop")
+for fn in (service,disable):
+    sql_literals=[
+        node.value for node in ast.walk(fn)
+        if isinstance(node,ast.Constant) and isinstance(node.value,str)
+    ]
+    assert any("workshop_remote_sessions" in q
+               and "mesh_public_id IS NOT NULL" in q for q in sql_literals), (
+        f"{fn.name} must check leftover Mesh share links even after session status changes")
 print("PASS: revoke KeyGate verification does not shadow remote sessions")
