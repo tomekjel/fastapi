@@ -1,76 +1,95 @@
-"""Contract tests for the real MultiGuard document parser.
+#!/usr/bin/env python3
+"""Isolated contract checks for MultiGuard activation document parsing.
 
-Run from embedded-multiguard with the same test dependencies as the API suite.
-These tests use no production database or credentials.
+Executes the exact production _required_documents function AST without
+importing the database-connected application or production settings.
 """
 from __future__ import annotations
 
-import pytest
-from fastapi import HTTPException
-
-from app.routers import multiguard_license as license_api
-
-
-@pytest.fixture(autouse=True)
-def no_external_documents(monkeypatch):
-    monkeypatch.setattr(license_api, "_setting", lambda name, default=None: default)
+import ast
+import hashlib
+import json
+import unittest
+from pathlib import Path
 
 
-def test_missing_documents_fail_closed():
-    with pytest.raises(HTTPException) as err:
-        license_api._required_documents()
-    assert err.value.status_code == 503
+class HTTPException(Exception):
+    def __init__(self, status_code, detail):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail)
 
 
-@pytest.mark.parametrize("count", [1, 2, 4])
-def test_wrong_count_is_rejected(monkeypatch, count):
-    docs = [
-        {"kind": f"kind{i}", "version": "1.0", "title": "Dokument",
-         "content_markdown": "Pełny tekst dokumentu"}
-        for i in range(count)
-    ]
-    monkeypatch.setattr(license_api, "_setting", lambda name, default=None: docs)
-    with pytest.raises(HTTPException) as err:
-        license_api._required_documents()
-    assert err.value.status_code == 503
+SOURCE = Path(__file__).resolve().parents[1] / "app/routers/multiguard_license.py"
+tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+selected = next(
+    node for node in tree.body
+    if isinstance(node, ast.FunctionDef) and node.name == "_required_documents"
+)
+settings = {"value": []}
+scope = {
+    "HTTPException": HTTPException,
+    "hashlib": hashlib,
+    "json": json,
+    "_setting": lambda name, default=None: settings["value"],
+}
+exec(compile(ast.Module(body=[selected], type_ignores=[]), str(SOURCE), "exec"), scope)
+parse_documents = scope["_required_documents"]
 
 
-def test_blank_content_is_rejected(monkeypatch):
-    docs = [
-        {"kind": f"kind{i}", "version": "1", "title": "Dokument",
-         "content_markdown": "   " if i == 1 else "Tekst"}
-        for i in range(3)
-    ]
-    monkeypatch.setattr(license_api, "_setting", lambda name, default=None: docs)
-    with pytest.raises(HTTPException) as err:
-        license_api._required_documents()
-    assert err.value.status_code == 503
+class ActivationDocumentContract(unittest.TestCase):
+    def setUp(self):
+        settings["value"] = []
+
+    def assert_rejected(self, docs):
+        settings["value"] = docs
+        with self.assertRaises(HTTPException) as error:
+            parse_documents()
+        self.assertEqual(error.exception.status_code, 503)
+
+    def test_missing_documents(self):
+        self.assert_rejected([])
+
+    def test_wrong_document_counts(self):
+        for n in (1, 2, 4):
+            with self.subTest(count=n):
+                self.assert_rejected(self.docs(n))
+
+    def test_duplicate_kinds(self):
+        docs = self.docs(3)
+        docs[1]["kind"] = docs[0]["kind"]
+        self.assert_rejected(docs)
+
+    def test_whitespace_content(self):
+        docs = self.docs(3)
+        docs[1]["content_markdown"] = "   "
+        self.assert_rejected(docs)
+
+    def test_invalid_json(self):
+        self.assert_rejected("{not valid json")
+
+    def test_valid_documents_hash_and_content(self):
+        docs = self.docs(3)
+        settings["value"] = json.dumps(docs, ensure_ascii=False)
+        output = parse_documents()
+        self.assertEqual(len(output), 3)
+        for source, result in zip(docs, output):
+            self.assertEqual(result["kind"], source["kind"])
+            self.assertEqual(result["version"], source["version"])
+            self.assertEqual(result["contentMarkdown"], source["content_markdown"])
+            self.assertEqual(
+                result["sha256"],
+                hashlib.sha256(source["content_markdown"].encode("utf-8")).hexdigest(),
+            )
+
+    @staticmethod
+    def docs(n):
+        return [
+            {"kind": f"doc-{i}", "version": "1.0", "title": f"Dokument {i}",
+             "content_markdown": f"Pełna treść dokumentu {i}"}
+            for i in range(n)
+        ]
 
 
-def test_duplicate_kind_is_rejected(monkeypatch):
-    docs = [
-        {"kind": "same", "version": str(i), "title": "Dokument",
-         "content_markdown": "Pełny tekst"}
-        for i in range(3)
-    ]
-    monkeypatch.setattr(license_api, "_setting", lambda name, default=None: docs)
-    with pytest.raises(HTTPException) as err:
-        license_api._required_documents()
-    assert err.value.status_code == 503
-
-
-def test_three_documents_have_content_and_correct_sha256(monkeypatch):
-    import hashlib
-    docs = [
-        {"kind": f"kind{i}", "version": "1.0", "title": f"Dokument {i}",
-         "content_markdown": f"Treść dokumentu {i}"}
-        for i in range(3)
-    ]
-    monkeypatch.setattr(license_api, "_setting", lambda name, default=None: docs)
-    result = license_api._required_documents()
-    assert len(result) == 3
-    for raw, parsed in zip(docs, result):
-        assert parsed["contentMarkdown"] == raw["content_markdown"]
-        assert parsed["sha256"] == hashlib.sha256(
-            raw["content_markdown"].encode("utf-8")
-        ).hexdigest()
+if __name__ == "__main__":
+    unittest.main()
