@@ -2112,6 +2112,16 @@ def provision(req: ProvisionRequest):
         raise HTTPException(409, "Licencja jest już przypisana do innego komputera.")
     if link["lifecycle"] in {"EXPIRED", "REVOKED"}:
         raise HTTPException(409, f"Licencja ma stan {link['lifecycle']}.")
+    if link.get("valid_until") and link["valid_until"] <= _utcnow():
+        raise HTTPException(409, "Upłynął termin ważności licencji.")
+    # A previously transferred key must not be usable outside the OWNER
+    # selected target's authenticated discovery identity.
+    if link.get("sale_kind") == "DIRECT":
+        if not pending or pending["device_id"] != req.device_id:
+            raise HTTPException(403, "Komputer nie ma potwierdzonej rejestracji.")
+        if pending["assigned_license_id"] != link["keygate_license_id"]:
+            raise HTTPException(409, "Licencja nie jest przydzielona temu komputerowi.")
+
 
     activated = _keygate_activate(
         license_key, req.device_id, str(installation_id)
