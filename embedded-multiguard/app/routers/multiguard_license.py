@@ -954,7 +954,8 @@ def _set_workshop_grant(
                 outstanding = con.execute(text("""
                     SELECT count(*) FROM guard.workshop_remote_sessions
                     WHERE installation_id=:id
-                      AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+                      AND (status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+                           OR mesh_public_id IS NOT NULL)
                 """), {"id": installation_id}).scalar_one()
                 if outstanding:
                     raise HTTPException(
@@ -3502,7 +3503,8 @@ def owner_disable_workshop(
         active_remote = (con.execute(text("""
             SELECT count(*) FROM guard.workshop_remote_sessions
             WHERE installation_id=:iid
-              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+              AND (status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+                   OR mesh_public_id IS NOT NULL)
         """), {"iid": installation_id}).scalar_one() if remote_table else 0)
     if active_remote:
         # Revoke every outstanding Mesh share before dropping the service
