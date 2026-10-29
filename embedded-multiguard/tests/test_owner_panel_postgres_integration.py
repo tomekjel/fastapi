@@ -813,7 +813,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     with engine.begin() as db:
         db.execute(text("""
             INSERT INTO guard.pending_installations(
-                installation_id,device_id,credential_sha256,app_version,
+                installation_id,device_id,discovery_credential_sha256,app_version,
                 hostname,manufacturer,model,status
             ) VALUES (:id,'ci-ambiguous-device',:cred,'0.3.46',
                       'CI-Ambiguous','Lenovo','ThinkPad','WAITING')
