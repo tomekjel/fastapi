@@ -3505,10 +3505,56 @@ def owner_disable_workshop(
               AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
         """), {"iid": installation_id}).scalar_one() if remote_table else 0)
     if active_remote:
-        raise HTTPException(
-            409, "Przed cofnięciem trybu serwisowego trzeba zakończyć "
-                 "aktywne sesje zdalne. Licencja nie została zmieniona."
-        )
+        # Revoke every outstanding Mesh share before dropping the service
+        # entitlement. Never mark a session closed on an unverified Mesh call.
+        from app.routers import multiguard_meshcentral as meshcentral
+        with engine.begin() as con:
+            columns = set(con.execute(text("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema='guard'
+                  AND table_name='workshop_remote_sessions'
+            """)).scalars().all())
+            required = {'id','installation_id','status','mesh_public_id'}
+            if not required.issubset(columns):
+                raise HTTPException(409,
+                    "Nieznany schemat sesji serwisowych — cofnięcie wstrzymane.")
+            node_columns = set(con.execute(text("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema='guard' AND table_name='workshop_mesh_nodes'
+            """)).scalars().all())
+            if not {'installation_id','mesh_node_id'}.issubset(node_columns):
+                raise HTTPException(409,
+                    "Brak potwierdzonego powiązania agenta Mesh — cofnięcie wstrzymane.")
+            sessions = con.execute(text("""
+                SELECT id, mesh_public_id
+                FROM guard.workshop_remote_sessions
+                WHERE installation_id=:iid AND
+                      (status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+                       OR mesh_public_id IS NOT NULL)
+                FOR UPDATE
+            """), {"iid":installation_id}).mappings().all()
+            node = con.execute(text("""
+                SELECT mesh_node_id FROM guard.workshop_mesh_nodes
+                WHERE installation_id=:iid AND mesh_node_id IS NOT NULL
+                LIMIT 1
+            """), {"iid":installation_id}).scalar_one_or_none()
+            for session in sessions:
+                if session['mesh_public_id']:
+                    if not node:
+                        raise HTTPException(502,
+                            "Nie można potwierdzić usunięcia aktywnego linku Mesh.")
+                    try:
+                        meshcentral.revoke_share(node,session['mesh_public_id'])
+                    except meshcentral.MeshCentralError as exc:
+                        raise HTTPException(502,
+                            "MeshCentral nie potwierdził zakończenia sesji; "
+                            "licencja serwisowa pozostała aktywna.") from exc
+                con.execute(text("""
+                    UPDATE guard.workshop_remote_sessions
+                    SET status='ENDED',mesh_public_id=NULL
+                    WHERE id=:id
+                """), {"id":session['id']})
+    # A second check inside _set_workshop_grant guards the entitlement write.
     _set_workshop_grant(
         installation_id,grant["edition"],grant["release_channel"],False,
     )
