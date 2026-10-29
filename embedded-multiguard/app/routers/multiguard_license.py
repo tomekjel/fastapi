@@ -1619,7 +1619,7 @@ def _required_documents() -> list[dict[str, str]]:
         version = str(item.get("version", "")).strip()
         title = str(item.get("title", "")).strip()
         content = str(item.get("content_markdown", ""))
-        if not all((kind, version, title, content)):
+        if not all((kind, version, title, content.strip())):
             raise HTTPException(503, "Dokument Multi-Guard jest niekompletny.")
         result.append(
             {
@@ -1630,8 +1630,8 @@ def _required_documents() -> list[dict[str, str]]:
                 "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
             }
         )
-    if len({(doc["kind"], doc["version"]) for doc in result}) != 3:
-        raise HTTPException(503, "Powtórzone identyfikatory dokumentów Multi-Guard.")
+    if len({doc["kind"] for doc in result}) != 3:
+        raise HTTPException(503, "Dokumenty Multi-Guard muszą mieć trzy różne rodzaje.")
     return result
 
 
