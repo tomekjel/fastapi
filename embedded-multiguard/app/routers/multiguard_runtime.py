@@ -1663,9 +1663,9 @@ def multi_guard_panel_computers(
     device_search_form = f"""
         <form class="service-search" method="get" action="/multiguard/panel/computers">
           <input type="hidden" name="presence" value="{_panel_h(presence)}">
-          <label>Wyszukaj model, producenta, numer seryjny, hostname lub zlecenie
+          <label>Szukaj po nazwie własnej (także nazwisku lub telefonie), nazwie Windows, modelu, S/N lub zleceniu
             <input name="q" maxlength="120" value="{_panel_h(q)}"
-              placeholder="np. Lenovo, MG-2026, S/N">
+              placeholder="np. Kowalski, 600123456, Lenovo, MG-2026">
           </label>
           <button type="submit">SZUKAJ</button>
         </form>
@@ -1701,7 +1701,7 @@ def multi_guard_panel_computers(
           <td><span class="presence-dot presence-{presence_style}"></span>{_panel_h(presence_label)}
               <span class="inventory-hardware">{_panel_dt(row['last_seen_at'])}</span></td>
           <td>{_panel_h(row['app_version'] or '—')}</td>
-          <td><details class="mg-inline-device"><summary>ROZWIŃ · {_panel_h(row['service_order_count'])} napraw</summary><a href="{detail}">ZARZĄDZAJ URZĄDZENIEM / LICENCJĄ</a></details>
+          <td><details class="mg-inline-device"><summary>OPERACJE · {_panel_h(row['service_order_count'])} napraw</summary><div><a href="{detail}">KOMPUTER / EDYTUJ NAZWĘ</a> · <a href="/multiguard/panel/licenses">LICENCJE</a> · <a href="/multiguard/panel/service-mode#service-modes">TRYB SERWISOWY / WYŁĄCZ</a></div><div><small>Cofnięcie licencji płatnej jest dostępne w zarządzaniu jej rekordem; usunięcie komputera to osobna operacja.</small></div></details>
               <span class="inventory-hardware">{_panel_h(row['health_level'] or 'Brak raportu')} · {_panel_h(row['owner_priority'])}</span></td>
         </tr>""")
     if not rows_html:
