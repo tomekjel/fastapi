@@ -28,4 +28,16 @@ for fn in (service,disable):
     assert any("workshop_remote_sessions" in q
                and "mesh_public_id IS NOT NULL" in q for q in sql_literals), (
         f"{fn.name} must check leftover Mesh share links even after session status changes")
-print("PASS: revoke KeyGate verification does not shadow remote sessions")
+
+# License-only checks: never downgrade a KeyGate scope failure into a
+# duplicate issuance and never change channels on revoked licences.
+request=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+             and node.name=="_keygate_request")
+channel=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+             and node.name=="set_reception_release_channel")
+assert any(isinstance(n,ast.Constant) and isinstance(n.value,str)
+           and "PRODUCT_SCOPE_MISMATCH" in n.value for n in ast.walk(request))
+assert any(isinstance(n,ast.Compare) and
+           any(isinstance(c,ast.Constant) and c.value=="ACTIVE" for c in n.comparators)
+           for n in ast.walk(channel))
+print("PASS: revoke and licence-only fail-closed guards")
