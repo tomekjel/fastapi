@@ -1114,9 +1114,34 @@ def _assign_direct_customer_license(
         """), {"installation_id":installation_id,"reference":reference,
             "edition":edition,"months":months,"channel":channel}).scalar_one_or_none()
     if reserved is None:
+        # A prior creation attempt is not equivalent to a failed KeyGate call.
+        # Return an already-linked, identical DIRECT licence idempotently;
+        # never attempt a second external create for this installation.
+        with engine.connect() as con:
+            prior = con.execute(text("""
+                SELECT state,keygate_license_id,edition,duration_months,
+                       release_channel
+                FROM guard.direct_keygate_attempts
+                WHERE installation_id=:id
+            """), {"id":installation_id}).mappings().first()
+            linked = con.execute(text("""
+                SELECT * FROM guard.license_links
+                WHERE installation_id=:id AND sale_kind='DIRECT'
+                LIMIT 1
+            """), {"id":installation_id}).mappings().first()
+        if (prior and linked and prior["state"]=="CREATED"
+                and str(prior["keygate_license_id"] or "")==str(linked["keygate_license_id"])
+                and prior["edition"]==edition
+                and prior["duration_months"]==months
+                and prior["release_channel"]==channel):
+            return _normalize_link(dict(linked))
+        # STARTED may represent an external success with a lost response.
+        # CREATED without a local link also needs manual recovery, not a
+        # second issue. Keep these situations distinguishable in OWNER UI.
+        state=str(prior["state"]) if prior else "UNKNOWN"
         raise HTTPException(
-            409, "Poprzednia próba w KeyGate wymaga sprawdzenia przez OWNER "
-                 "przed ponownym utworzeniem licencji."
+            409, "KeyGate: zapis poprzedniej operacji ("+state+"). "
+                 "Wymagane uzgodnienie przez OWNER; nie wystawiaj drugiej licencji."
         )
     try:
         created = _keygate_create_license(
