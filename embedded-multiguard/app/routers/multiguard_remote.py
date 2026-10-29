@@ -185,7 +185,7 @@ def _has_verified_remote_pro(connection, installation, now: datetime) -> bool:
     """
     if not _has_active_remote_pro(installation, now):
         return False
-    internal_id = installation.get("id") or installation.get("installation_id")
+    internal_id = installation.get("installation_id") or installation.get("id")
     if internal_id is None:
         return False
     paid = connection.execute(text("""
