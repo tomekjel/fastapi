@@ -2168,53 +2168,53 @@ def provision(req: ProvisionRequest):
             else "SERVICE_TEST"
         )
 
-            row = connection.execute(
-                text(
-                    """
-                    UPDATE guard.license_links
-                    SET installation_id=:installation_id,
-                        device_id=:device_id,
-                        credential_sha256=:credential_sha256,
-                        app_version=:app_version,
-                        lifecycle=:lifecycle,
-                        provisioned_at=COALESCE(provisioned_at,now()),
-                        rebind_pending=FALSE,
-                        updated_at=now()
-                    WHERE id=:id
-                    RETURNING *
-                    """
-                ),
-                {
-                    "installation_id": installation_id,
-                    "device_id": req.device_id,
-                    "credential_sha256": credential_hash,
-                    "app_version": req.app_version,
-                    "lifecycle": lifecycle,
-                    "id": link["id"],
-                },
-            ).mappings().one()
-            link = _normalize_link(dict(row))
-            _update_installation_mirror(connection, link)
-            connection.execute(
-                text(
-                    """
-                    UPDATE guard.pending_installations
-                    SET
-                        status='PROVISIONED',
-                        assigned_reception_id=:reception_id,
-                        assigned_license_id=:license_id,
-                        provisioned_at=COALESCE(provisioned_at,now()),
-                        last_seen_at=now(),
-                        updated_at=now()
-                    WHERE installation_id=:installation_id
-                    """
-                ),
-                {
-                    "reception_id": link["reception_id"],
-                    "license_id": link["keygate_license_id"],
-                    "installation_id": installation_id,
-                },
-            )
+        row = connection.execute(
+            text(
+                """
+                UPDATE guard.license_links
+                SET installation_id=:installation_id,
+                    device_id=:device_id,
+                    credential_sha256=:credential_sha256,
+                    app_version=:app_version,
+                    lifecycle=:lifecycle,
+                    provisioned_at=COALESCE(provisioned_at,now()),
+                    rebind_pending=FALSE,
+                    updated_at=now()
+                WHERE id=:id
+                RETURNING *
+                """
+            ),
+            {
+                "installation_id": installation_id,
+                "device_id": req.device_id,
+                "credential_sha256": credential_hash,
+                "app_version": req.app_version,
+                "lifecycle": lifecycle,
+                "id": link["id"],
+            },
+        ).mappings().one()
+        link = _normalize_link(dict(row))
+        _update_installation_mirror(connection, link)
+        connection.execute(
+            text(
+                """
+                UPDATE guard.pending_installations
+                SET
+                    status='PROVISIONED',
+                    assigned_reception_id=:reception_id,
+                    assigned_license_id=:license_id,
+                    provisioned_at=COALESCE(provisioned_at,now()),
+                    last_seen_at=now(),
+                    updated_at=now()
+                WHERE installation_id=:installation_id
+                """
+            ),
+            {
+                "reception_id": link["reception_id"],
+                "license_id": link["keygate_license_id"],
+                "installation_id": installation_id,
+            },
+        )
 
     return {
         "requestId": req.request_id,
