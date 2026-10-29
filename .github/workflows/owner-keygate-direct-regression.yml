@@ -4,6 +4,7 @@ on:
     paths:
       - embedded-multiguard/app/routers/multiguard_license.py
       - embedded-multiguard/app/routers/multiguard_remote.py
+      - embedded-multiguard/app/routers/multiguard_runtime.py
       - embedded-multiguard/scripts/deploy_pr30_two_modules.sh
       - embedded-multiguard/tests/test_owner_panel_postgres_integration.py
       - .github/workflows/owner-keygate-direct-regression.yml
@@ -18,6 +19,7 @@ jobs:
         run: |
           python -m py_compile embedded-multiguard/app/routers/multiguard_license.py
           python -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
+          python -m py_compile embedded-multiguard/app/routers/multiguard_runtime.py
           bash -n embedded-multiguard/scripts/deploy_pr30_two_modules.sh
           python -m py_compile embedded-multiguard/tests/test_owner_panel_postgres_integration.py
       - name: Check required duplicate-safety regression assertions
