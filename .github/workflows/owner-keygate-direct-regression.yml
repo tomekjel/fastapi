@@ -4,6 +4,7 @@ on:
     branches: [fix/owner-keygate-direct-reconcile-20261029]
     paths:
       - embedded-multiguard/app/routers/multiguard_runtime.py
+      - embedded-multiguard/scripts/inspect_test_installation.py
       - embedded-multiguard/app/routers/multiguard_license.py
       - .github/workflows/owner-keygate-direct-regression.yml
   pull_request:
@@ -26,6 +27,7 @@ jobs:
           python -m py_compile embedded-multiguard/app/routers/multiguard_license.py
           python -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
           python -m py_compile embedded-multiguard/app/routers/multiguard_runtime.py
+          python -m py_compile embedded-multiguard/scripts/inspect_test_installation.py
           bash -n embedded-multiguard/scripts/deploy_pr30_two_modules.sh
           python -m py_compile embedded-multiguard/tests/test_owner_panel_postgres_integration.py
       - name: Check required duplicate-safety regression assertions
