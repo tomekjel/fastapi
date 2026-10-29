@@ -4,6 +4,7 @@ on:
     branches: [fix/owner-keygate-direct-reconcile-20261029]
     paths:
       - embedded-multiguard/app/routers/multiguard_license.py
+      - embedded-multiguard/app/routers/multiguard_remote.py
       - embedded-multiguard/tests/test_owner_panel_postgres_integration.py
       - .github/workflows/owner-keygate-direct-regression.yml
 permissions:
@@ -16,6 +17,7 @@ jobs:
       - name: Compile changed Python files without importing production services
         run: |
           python -m py_compile embedded-multiguard/app/routers/multiguard_license.py
+          python -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
           python -m py_compile embedded-multiguard/tests/test_owner_panel_postgres_integration.py
       - name: Check required duplicate-safety regression assertions
         shell: bash
