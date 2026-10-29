@@ -1240,6 +1240,29 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
                       "targetInstallationId":str(target_id),
                       "expectedValidUntil":license._iso(transfer_end)}
     try:
+        # Complete credential loss creates a NEW installation identity.
+        # OWNER can review matching hardware hints but no key is transferred
+        # until an explicit action. The endpoint is read-only.
+        recovery_url=f"/multiguard/licenses/direct/{source_id}/recovery-candidates"
+        assert c.get(recovery_url).status_code==401
+        with engine.begin() as db:
+            db.execute(text("""
+                UPDATE guard.pending_installations
+                SET manufacturer='Lenovo',model='ThinkPad',
+                    serial_number='CI-REINSTALL-SERIAL'
+                WHERE installation_id IN (:old,:new)
+            """),{"old":source_id,"new":target_id})
+        candidates=c.get(recovery_url,auth=auth)
+        ensure(candidates.status_code,200,"OWNER read-only reinstall candidates")
+        body=candidates.json()
+        assert body["requiresOwnerApproval"] is True
+        assert body["validUntil"]==license._iso(transfer_end)
+        match=next(x for x in body["candidates"]
+                   if x["installationId"]==str(target_id))
+        assert match["confirmedSameComputer"] is False
+        assert "serial_number" in match["matchingAttributes"]
+        assert mock_calls["create"]==1
+        assert not deactivated
         # A stale discovery record cannot silently become the licensed host.
         with engine.begin() as db:
             db.execute(text("""
