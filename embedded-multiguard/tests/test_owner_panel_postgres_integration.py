@@ -1191,6 +1191,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
 
     # Transfer a separate active DIRECT licence without creating a new key.
     source_id,target_id=uuid.uuid4(),uuid.uuid4()
+    transfer_token="KG-BBBBBBBB-BBBBBBBB-BBBBBBBB-BBBBBBBB"
     source_cred="ci-transfer-source-secret-0123456789-abcdefgh"
     target_cred="ci-transfer-target-secret-0123456789-abcdefgh"
     transfer_end=license._utcnow()+timedelta(days=60)
@@ -1214,12 +1215,12 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             VALUES('CI-TRANSFER','ci-transfer-key','ci-plan',:hash,
                 'multi_guard_pro',12,'STABLE','ACTIVE',
                 :source,:device,now()-interval '2 months',:until,'DIRECT')
-        """),{"hash":hashlib.sha256(token_key.encode()).hexdigest(),"source":source_id,
+        """),{"hash":hashlib.sha256(transfer_token.encode()).hexdigest(),"source":source_id,
             "device":"ci-transfer-source-1234567890","until":transfer_end})
     fake_deactivate_before=license._keygate_deactivate
     deactivated=[]
     license._keygate_deactivate=lambda key,device:deactivated.append((key,device))
-    license._keygate_reveal=lambda _:token_key
+    license._keygate_reveal=lambda _:transfer_token
     transfer_payload={"sourceInstallationId":str(source_id),
                       "targetInstallationId":str(target_id),
                       "expectedValidUntil":license._iso(transfer_end)}
@@ -1238,7 +1239,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         assert c.post("/v1/multi-guard/discovery/assignment",json=src).json()["assigned"] is False
         dst_result=c.post("/v1/multi-guard/discovery/assignment",json=dst)
         ensure(dst_result.status_code,200,"New device receives previous KeyGate licence")
-        assert dst_result.json()["provisioningToken"]==token_key
+        assert dst_result.json()["provisioningToken"]==transfer_token
         assert mock_calls["create"]==1
         with engine.connect() as db:
             moved=db.execute(text("""
@@ -1257,7 +1258,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         license._keygate_activate=lambda key,device,installation: {"license_id":"ci-transfer-key"}
         try:
             req_data={"requestId":str(uuid.uuid4()),"nonce":"ci-transfer-nonce",
-                      "sentAt":"2026-10-29T00:00:00Z","provisioningToken":token_key,
+                      "sentAt":"2026-10-29T00:00:00Z","provisioningToken":transfer_token,
                       "installationId":str(target_id),
                       "deviceId":"ci-transfer-target-1234567890",
                       "appVersion":"0.3.46"}
