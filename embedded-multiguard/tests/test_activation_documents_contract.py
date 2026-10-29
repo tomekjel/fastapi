@@ -75,6 +75,33 @@ class ActivationDocumentContract(unittest.TestCase):
     def test_invalid_json(self):
         self.assert_rejected("{not valid json")
 
+    def test_incomplete_document_fields(self):
+        for missing in ("kind", "version", "title", "content_markdown"):
+            with self.subTest(missing=missing):
+                docs = self.docs(3)
+                docs[0].pop(missing)
+                self.assert_rejected(docs)
+
+    def test_wrong_json_shape(self):
+        for malformed in ("{}", '{"documents":[]}', 'null', '123'):
+            with self.subTest(value=malformed):
+                self.assert_rejected(malformed)
+
+    def test_wrong_document_item_shape(self):
+        docs = self.docs(3)
+        docs[1] = "invalid"
+        self.assert_rejected(docs)
+
+    def test_unicode_hash_is_utf8(self):
+        docs = self.docs(3)
+        docs[1]["content_markdown"] = "Zażółć gęślą jaźń — prywatność"
+        settings["value"] = docs
+        parsed = parse_documents()
+        self.assertEqual(
+            parsed[1]["sha256"],
+            hashlib.sha256(docs[1]["content_markdown"].encode("utf-8")).hexdigest(),
+        )
+
     def test_valid_documents_hash_and_content(self):
         docs = self.docs(3)
         settings["value"] = json.dumps(docs, ensure_ascii=False)
