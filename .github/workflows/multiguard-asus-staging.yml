@@ -1,5 +1,8 @@
 name: MultiGuard Asus safe staging (no deploy)
 on:
+  pull_request:
+    paths:
+      - .github/workflows/multiguard-asus-staging.yml
   push:
     branches: [fix/owner-keygate-direct-reconcile-20261029]
     paths:
