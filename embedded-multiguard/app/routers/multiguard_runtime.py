@@ -1594,6 +1594,7 @@ def _fetch_owner_inventory(limit, presence_filter, search, offset, silence_days)
             SELECT ids.external_id AS installation_external_id, gi.id AS installation_id,
                 COALESCE(w.enabled,FALSE) AS service_mode,
                 CASE WHEN w.enabled THEN w.edition ELSE gi.plan_code END AS plan_code,
+                p.status AS pending_status, p.assigned_license_id AS pending_license_id,
                 gi.lifecycle, gi.health_level,
                 COALESCE(p.first_seen_at,gi.created_at,w.created_at) AS installed_at,
                 COALESCE(gi.last_seen_at,p.last_seen_at) AS last_seen_at,
@@ -1715,7 +1716,9 @@ def multi_guard_panel_computers(
                 <form method="dialog"><button type="submit">ANULUJ</button></form>
               </dialog>"""
         archive_option = ""
-        if not row['service_mode'] and not active_license_id:
+        if (not row['service_mode'] and not active_license_id
+                and row['pending_status'] in ('WAITING', 'IGNORED')
+                and not row['pending_license_id']):
             archive_dialog = "archive-" + str(iid).replace("-", "")
             archive_option = f"""
               <button type="button" onclick="document.getElementById('{archive_dialog}').showModal()">ARCHIWIZUJ OCZEKUJĄCY</button>
