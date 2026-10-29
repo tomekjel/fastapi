@@ -1214,7 +1214,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             VALUES('CI-TRANSFER','ci-transfer-key','ci-plan',:hash,
                 'multi_guard_pro',12,'STABLE','ACTIVE',
                 :source,:device,now()-interval '2 months',:until,'DIRECT')
-        """),{"hash":"a"*64,"source":source_id,
+        """),{"hash":hashlib.sha256(token_key.encode()).hexdigest(),"source":source_id,
             "device":"ci-transfer-source-1234567890","until":transfer_end})
     fake_deactivate_before=license._keygate_deactivate
     deactivated=[]
@@ -1252,6 +1252,31 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
                 SELECT count(*) FROM guard.license_transfer_audit
                 WHERE source_installation_id=:source
             """),{"source":source_id}).scalar_one()==1
+        # Complete replacement-device provisioning with the SAME paid term.
+        old_activate=license._keygate_activate
+        license._keygate_activate=lambda key,device,installation: {"license_id":"ci-transfer-key"}
+        try:
+            req_data={"requestId":str(uuid.uuid4()),"nonce":"ci-transfer-nonce",
+                      "sentAt":"2026-10-29T00:00:00Z","provisioningToken":token_key,
+                      "installationId":str(target_id),
+                      "deviceId":"ci-transfer-target-1234567890",
+                      "appVersion":"0.3.46"}
+            # Even knowledge of the key does not authorize the old device.
+            denied=c.post("/v1/multi-guard/provision",json={
+                **req_data,"installationId":str(source_id),
+                "deviceId":"ci-transfer-source-1234567890"})
+            assert denied.status_code==409,denied.text
+            activated=c.post("/v1/multi-guard/provision",json=req_data)
+            ensure(activated.status_code,200,"Transfer target provisioning")
+            signed_target=json.loads(activated.json()["signedLicense"]["payload"])
+            assert signed_target["validUntil"]==license._iso(transfer_end)
+            assert signed_target["lifecycle"]=="ACTIVE"
+            assert license._link_by_installation(target_id)["rebind_pending"] is False
+            assert c.post("/v1/multi-guard/discovery/assignment",
+                          json=src).json()["assigned"] is False
+            assert mock_calls["create"]==1
+        finally:
+            license._keygate_activate=old_activate
     finally:
         license._keygate_deactivate=fake_deactivate_before
     print("PASS: DIRECT transfer preserves one KeyGate key, original expiry and removes old assignment.")
