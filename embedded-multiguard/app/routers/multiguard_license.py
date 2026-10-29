@@ -1313,7 +1313,12 @@ def _handover_direct_customer(installation_id: uuid.UUID) -> dict[str, Any]:
         if not link:
             raise HTTPException(404, "Brak bezpośredniej licencji klienta.")
         if link["lifecycle"] in {"REVOKED", "EXPIRED"}:
-            raise HTTPException(409, "Licencja została cofnięta lub wygasła.")
+            return {
+            "assigned": False,
+            "status": "WAITING",
+            "releaseChannel": None,
+            "serverTime": _iso(_utcnow()),
+        }
         if link["lifecycle"] in {"ACTIVE", "PENDING_ACCEPTANCE"}:
             return _normalize_link(dict(link))
         updated = con.execute(text("""
@@ -1933,9 +1938,15 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
             if (link["lifecycle"] in {"REVOKED", "EXPIRED"}
                     or (link.get("valid_until")
                         and link["valid_until"] <= _utcnow())):
-                raise HTTPException(
-                    409, "Licencja została cofnięta lub jej ważność wygasła."
-                )
+                # An authenticated discovery poll must communicate that the
+                # installation has no entitlement; HTTP 409 leaves an older
+                # client unaware of the revoked license state.
+                return {
+                    "assigned": False,
+                    "status": "WAITING",
+                    "releaseChannel": None,
+                    "serverTime": _iso(_utcnow()),
+                }
             return {
                 "assigned":True,
                 "status":pending["status"],
