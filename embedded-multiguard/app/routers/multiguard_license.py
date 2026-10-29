@@ -4196,8 +4196,8 @@ def _revoke_owner_license(link_id: uuid.UUID, operation_id: uuid.UUID,
     if not 3 <= len(reason) <= 1000:
         raise HTTPException(400, "Podaj powód cofnięcia (3–1000 znaków).")
     _ensure_schema()
-    from app.routers import multiguard_remote as remote
-    remote._ensure_schema()
+    from app.routers import multiguard_remote as remote_router
+    remote_router._ensure_schema()
     with engine.begin() as con:
         row = con.execute(text(
             "SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE"
@@ -4221,10 +4221,10 @@ def _revoke_owner_license(link_id: uuid.UUID, operation_id: uuid.UUID,
             raise HTTPException(409, "Cofnąć można wyłącznie aktywną licencję klienta.")
         if link.get("valid_until") != expected_end:
             raise HTTPException(409, "Stan licencji uległ zmianie. Odśwież formularz.")
-        remote = _keygate_license(link["keygate_license_id"])
-        if str(remote.get("status", "")).strip().lower() != "revoked":
+        keygate_state = _keygate_license(link["keygate_license_id"])
+        if str(keygate_state.get("status", "")).strip().lower() != "revoked":
             _keygate_revoke(link["keygate_license_id"])
-            remote = _keygate_license(link["keygate_license_id"])
+            keygate_state = _keygate_license(link["keygate_license_id"])
         if str(remote.get("status", "")).strip().lower() != "revoked":
             raise HTTPException(502, "KeyGate nie potwierdził cofnięcia licencji.")
         if link.get("installation_id"):
