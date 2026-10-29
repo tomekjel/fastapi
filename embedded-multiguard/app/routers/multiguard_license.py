@@ -1615,10 +1615,13 @@ def _required_documents() -> list[dict[str, str]]:
     for item in source:
         if not isinstance(item, dict):
             raise HTTPException(503, "Dokument Multi-Guard ma błędny format.")
-        kind = str(item.get("kind", "")).strip()
-        version = str(item.get("version", "")).strip()
-        title = str(item.get("title", "")).strip()
-        content = str(item.get("content_markdown", ""))
+        fields = ("kind", "version", "title", "content_markdown")
+        if any(not isinstance(item.get(field), str) for field in fields):
+            raise HTTPException(503, "Pola dokumentu Multi-Guard muszą być tekstem.")
+        kind = item["kind"].strip()
+        version = item["version"].strip()
+        title = item["title"].strip()
+        content = item["content_markdown"]
         if not all((kind, version, title, content.strip())):
             raise HTTPException(503, "Dokument Multi-Guard jest niekompletny.")
         result.append(
