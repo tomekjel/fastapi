@@ -7,6 +7,7 @@ on:
       - embedded-multiguard/scripts/inspect_test_installation.py
       - embedded-multiguard/tests/test_revoke_source_regression.py
       - embedded-multiguard/app/routers/multiguard_license.py
+      - embedded-multiguard/tests/test_activation_documents_contract.py
       - .github/workflows/owner-keygate-direct-regression.yml
   pull_request:
     paths:
@@ -16,6 +17,7 @@ on:
       - embedded-multiguard/scripts/deploy_pr30_two_modules.sh
       - embedded-multiguard/tests/test_owner_panel_postgres_integration.py
       - embedded-multiguard/tests/test_revoke_source_regression.py
+      - embedded-multiguard/tests/test_activation_documents_contract.py
       - .github/workflows/owner-keygate-direct-regression.yml
 permissions:
   contents: read
@@ -33,6 +35,7 @@ jobs:
           bash -n embedded-multiguard/scripts/deploy_pr30_two_modules.sh
           python -m py_compile embedded-multiguard/tests/test_owner_panel_postgres_integration.py
           python embedded-multiguard/tests/test_revoke_source_regression.py
+          python embedded-multiguard/tests/test_activation_documents_contract.py
       - name: Check required duplicate-safety regression assertions
         shell: bash
         run: |
