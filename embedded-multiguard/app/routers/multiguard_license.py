@@ -2744,6 +2744,83 @@ def _transfer_direct_license(req: DirectTransferRequest) -> dict[str, Any]:
                 "validUntil":_iso(link["valid_until"])}
 
 
+@router.get("/multiguard/licenses/direct/{source_id}/recovery-candidates")
+def direct_recovery_candidates(
+    source_id: uuid.UUID,
+    user: CurrentUser = Depends(require_owner),
+):
+    """Read-only OWNER review of fresh installations after lost credentials.
+
+    Hardware attributes may be reused or spoofed: a match is ONLY a hint.
+    OWNER must explicitly approve an existing-key transfer separately.
+    """
+    _ensure_schema()
+    with engine.connect() as con:
+        source = con.execute(text("""
+            SELECT p.*,l.id AS link_id,l.valid_until,l.plan_code,l.lifecycle,
+                   l.keygate_license_id
+            FROM guard.pending_installations p
+            JOIN guard.license_links l ON l.installation_id=p.installation_id
+            WHERE p.installation_id=:id AND l.sale_kind='DIRECT'
+        """),{"id":source_id}).mappings().first()
+        if not source:
+            raise HTTPException(404,"Brak źródłowej licencji klienta.")
+        if (source["lifecycle"]!="ACTIVE" or not source["valid_until"]
+                or source["valid_until"]<=_utcnow()):
+            raise HTTPException(409,"Licencja źródłowa nie jest aktywna.")
+        rows=con.execute(text("""
+            SELECT p.installation_id,p.hostname,p.manufacturer,p.model,
+                   p.serial_number,p.last_seen_at,p.status
+            FROM guard.pending_installations p
+            WHERE p.installation_id<>:id
+              AND p.status='WAITING'
+              AND p.assigned_license_id IS NULL
+              AND p.assigned_reception_id IS NULL
+              AND p.last_seen_at>=now()-interval '24 hours'
+              AND NOT EXISTS(
+                  SELECT 1 FROM guard.license_links l
+                  WHERE l.installation_id=p.installation_id)
+              AND NOT EXISTS(
+                  SELECT 1 FROM guard.direct_keygate_attempts a
+                  WHERE a.installation_id=p.installation_id)
+              AND NOT EXISTS(
+                  SELECT 1 FROM guard.workshop_grants w
+                  WHERE w.installation_id=p.installation_id AND w.enabled=TRUE)
+            ORDER BY p.last_seen_at DESC LIMIT 100
+        """),{"id":source_id}).mappings().all()
+    def same(field: str, candidate: dict[str, Any]) -> bool:
+        old=str(source[field] or "").strip().casefold()
+        new=str(candidate[field] or "").strip().casefold()
+        return bool(old and new and old==new)
+    results=[]
+    for candidate in rows:
+        candidate=dict(candidate)
+        matches=[field for field in ("serial_number","manufacturer","model")
+                 if same(field,candidate)]
+        results.append({
+            "installationId":str(candidate["installation_id"]),
+            "hostname":candidate["hostname"],
+            "manufacturer":candidate["manufacturer"],
+            "model":candidate["model"],
+            "serialNumber":candidate["serial_number"],
+            "lastSeenAt":_iso(candidate["last_seen_at"]),
+            "matchingAttributes":matches,
+            "confirmedSameComputer":False,
+        })
+    results.sort(key=lambda item:(
+        -int("serial_number" in item["matchingAttributes"]),
+        -len(item["matchingAttributes"]),
+        item["installationId"]))
+    return {
+        "sourceInstallationId":str(source_id),
+        "edition":"PRO" if source["plan_code"]=="multi_guard_pro" else "STANDARD",
+        "validUntil":_iso(source["valid_until"]),
+        "candidates":results,
+        "requiresOwnerApproval":True,
+        "warning":"Dopasowanie numeru seryjnego i modelu nie dowodzi tożsamości komputera.",
+    }
+
+
 @router.post("/multiguard/licenses/direct/transfer")
 def transfer_direct_license_api(
     req: DirectTransferRequest,
