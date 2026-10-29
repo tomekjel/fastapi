@@ -223,6 +223,29 @@ def _has_verified_remote_pro(connection, installation, now: datetime) -> bool:
                 and grant["status"] == "WAITING")
 
 
+def _has_verified_service_remote_pro(connection, installation, now: datetime) -> bool:
+    """Only a current OWNER service grant with no paid link may bypass consent."""
+    if not _has_active_remote_pro(installation, now):
+        return False
+    internal_id = installation.get("installation_id") or installation.get("id")
+    if internal_id is None:
+        return False
+    return bool(connection.execute(text("""
+        SELECT 1 FROM guard.workshop_grants w
+        JOIN guard.pending_installations p
+          ON p.installation_id=w.installation_id
+        JOIN guard.installations gi
+          ON gi.installation_external_id=p.installation_id
+        WHERE gi.id=:id AND w.enabled=TRUE AND w.edition='PRO'
+          AND p.status='WAITING'
+          AND NOT EXISTS (
+              SELECT 1 FROM guard.license_links l
+              WHERE l.installation_id=w.installation_id
+          )
+        LIMIT 1
+    """), {"id":internal_id}).first())
+
+
 def _owner_label(user: CurrentUser) -> tuple[Optional[uuid.UUID], str]:
     raw_id = getattr(user, "id", None)
     try:
@@ -674,6 +697,11 @@ def create_remote_session(
             )
 
         capabilities = ["desktop"] + (["files"] if body.requestFiles else [])
+        # A valid OWNER service grant permits unattended support; a paid
+        # PRO subscription always starts as REQUESTED until client consent.
+        service_authorized = _has_verified_service_remote_pro(
+            connection, support, now
+        )
         session_id = uuid.uuid4()
         connection.execute(
             text(
@@ -681,12 +709,14 @@ def create_remote_session(
                 INSERT INTO guard.remote_sessions(
                     id,support_request_id,installation_id,service_device_id,
                     requested_by_user_id,requested_by_name,
-                    requested_capabilities,expires_at,last_activity_at
+                    requested_capabilities,granted_capabilities,
+                    status,consented_at,expires_at,last_activity_at
                 )
                 VALUES(
                     :id,:support_request_id,:installation_id,:service_device_id,
                     :requested_by_user_id,:requested_by_name,
-                    CAST(:capabilities AS jsonb),:expires_at,:now
+                    CAST(:capabilities AS jsonb),CAST(:granted AS jsonb),
+                    :status,:consented_at,:expires_at,:now
                 )
                 """
             ),
@@ -698,6 +728,9 @@ def create_remote_session(
                 "requested_by_user_id": user_id,
                 "requested_by_name": user_label,
                 "capabilities": _json(capabilities),
+                "granted": _json(capabilities if service_authorized else []),
+                "status": "CONSENTED" if service_authorized else "REQUESTED",
+                "consented_at": now if service_authorized else None,
                 "expires_at": now + timedelta(minutes=5),
                 "now": now,
             },
@@ -708,8 +741,14 @@ def create_remote_session(
             "TECHNICIAN_REQUESTED",
             "TECHNICIAN",
             user_label,
-            {"capabilities": capabilities},
+            {"capabilities": capabilities, "serviceAuthorized": service_authorized},
         )
+        if service_authorized:
+            _audit(
+                connection, session_id, "OWNER_SERVICE_GRANT_AUTHORIZED",
+                "BACKEND", "Multi-Servis",
+                {"granted": capabilities},
+            )
         connection.execute(
             text(
                 """
