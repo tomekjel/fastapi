@@ -805,6 +805,24 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert linked["service_device_id"] is None
     assert linked["installation_id"]==direct_id
     assert linked["sale_kind"]=="DIRECT"
+    # Reinstall may leave a paid link while discovery appears WAITING.
+    # Never re-enable workshop PRO over this customer entitlement.
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.pending_installations SET status='WAITING'
+            WHERE installation_id=:id
+        """),{"id":direct_id})
+    from fastapi import HTTPException as CIServiceConflict
+    try:
+        license._set_workshop_grant(direct_id,"PRO","STABLE",True)
+        raise AssertionError("Paid entitlement must block parallel service grant")
+    except CIServiceConflict as exc:
+        assert exc.status_code==409
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.pending_installations SET status='ASSIGNED'
+            WHERE installation_id=:id
+        """),{"id":direct_id})
     with engine.connect() as db:
         conversion=db.execute(text("""
             SELECT before_state,after_state
