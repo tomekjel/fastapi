@@ -3113,9 +3113,44 @@ def multiguard_panel_pending(
             + " miesięcy · " + _panel_escape({"UNASSIGNED":"Przypisana","SERVICE_TEST":"Przygotowana","PENDING_ACCEPTANCE":"Oczekuje na akceptację","ACTIVE":"Aktywna","EXPIRED":"Wygasła","REVOKED":"Cofnięta"}.get(direct["lifecycle"],"Nieznana"))
             + "</p>"
             + (
-                f'<p><a class="button-link" href="/multiguard/panel/license/installation/{installation_id}/extend">'
-                'PRZEDŁUŻ LICENCJĘ</a></p>'
-                if direct["lifecycle"]=="ACTIVE" else ""
+                f'''<section class="card" id="computer-license-actions">
+                  <h3>Zarządzanie licencją tego komputera</h3>
+                  <p class="muted">Wszystkie operacje dotyczą istniejącej licencji. Nie zakładaj nowej.</p>
+                  <details open><summary>Zmień edycję Standard / Pro</summary>
+                    <form method="post" action="/multiguard/panel/license/manage/{direct["id"]}/change-plan">
+                      <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+                      <input type="hidden" name="operation_id" value="{uuid.uuid4()}">
+                      <input type="hidden" name="expected_end" value="{_panel_escape(_iso(direct["valid_until"]))}">
+                      <input type="hidden" name="target_edition" value="{"STANDARD" if direct["plan_code"]=="multi_guard_pro" else "PRO"}">
+                      <p>Nowa edycja: <strong>{"Standard" if direct["plan_code"]=="multi_guard_pro" else "Pro"}</strong>. Zachowujemy klucz i koniec ważności.</p>
+                      <label>Powód zmiany<input name="reason" minlength="3" maxlength="1000" required></label>
+                      <label><input type="checkbox" name="confirmed" value="yes" required> Potwierdzam zmianę edycji</label>
+                      <button type="submit">ZAPISZ ZMIANĘ EDYCJI</button>
+                    </form>
+                  </details>
+                  <details><summary>Przedłuż o 3 / 6 / 12 miesięcy</summary>
+                    <form method="post" action="/multiguard/panel/license/installation/{installation_id}/extend">
+                      <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+                      <input type="hidden" name="operation_id" value="{uuid.uuid4()}">
+                      <label>Przedłużenie<select name="months"><option value="3">+3 miesiące</option><option value="6">+6 miesięcy</option><option value="12">+12 miesięcy</option></select></label>
+                      <label><input type="checkbox" name="payment_confirmed" value="yes" required> Potwierdzam otrzymanie płatności</label>
+                      <button type="submit">POTWIERDŹ PRZEDŁUŻENIE</button>
+                    </form>
+                  </details>
+                  <details><summary>Cofnij licencję</summary>
+                    <form method="post" action="/multiguard/panel/license/manage/{direct["id"]}/revoke">
+                      <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+                      <input type="hidden" name="operation_id" value="{uuid.uuid4()}">
+                      <input type="hidden" name="expected_end" value="{_panel_escape(_iso(direct["valid_until"]))}">
+                      <label>Powód cofnięcia<input name="reason" minlength="3" maxlength="1000" required></label>
+                      <label><input type="checkbox" name="confirmed" value="yes" required> Potwierdzam nieodwracalne cofnięcie licencji</label>
+                      <button type="submit">COFNIJ LICENCJĘ</button>
+                    </form>
+                  </details>
+                  <p class="muted">Zmiana na bezterminowy tryb serwisowy wymaga oddzielnej kontrolowanej operacji; nie cofamy przy tym automatycznie płatnej licencji.</p>
+                </section>'''
+                if direct["lifecycle"]=="ACTIVE" and direct.get("valid_until")
+                else ''
             )
         )
         direct_buttons = (
