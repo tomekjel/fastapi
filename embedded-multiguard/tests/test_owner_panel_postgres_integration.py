@@ -1495,6 +1495,37 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             UPDATE guard.license_links SET lifecycle='ACTIVE'
             WHERE keygate_license_id='ci-keygate-remote-pro'
         """))
+    # Remote permissions follow the current server-side paid edition and
+    # expiration, even when the agent's PRO/ACTIVE mirror remains unchanged.
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.license_links SET plan_code='multi_guard'
+            WHERE keygate_license_id='ci-keygate-remote-pro'
+        """))
+    with engine.connect() as db:
+        assert not remote._has_verified_remote_pro(
+            db,dict(valid_remote),_time.now(_utc.utc)), (
+            'Paid Standard must never authorize remote access')
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.license_links
+               SET plan_code='multi_guard_pro',valid_until=now()-interval '1 minute'
+            WHERE keygate_license_id='ci-keygate-remote-pro'
+        """))
+    with engine.connect() as db:
+        assert not remote._has_verified_remote_pro(
+            db,dict(valid_remote),_time.now(_utc.utc)), (
+            'Expired paid Pro must never authorize remote access')
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.license_links SET valid_until=now()+interval '1 day'
+            WHERE keygate_license_id='ci-keygate-remote-pro'
+        """))
+    with engine.connect() as db:
+        assert remote._has_verified_remote_pro(
+            db,dict(valid_remote),_time.now(_utc.utc)), (
+            'Restored paid Pro must authorize remote access')
+
     # During a Standard/Pro conversion, both the OWNER workspace and the
     # underlying routes must fail closed. No fake "request consent" action.
     with engine.begin() as db:
