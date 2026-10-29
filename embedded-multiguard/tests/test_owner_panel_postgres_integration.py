@@ -1262,6 +1262,22 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         assert "serial_number" in match["matchingAttributes"]
         assert mock_calls["create"]==1
         assert not deactivated
+        # An explicit OWNER selection is still required after candidate review.
+        # Refuse transfer of revoked/expired rights before contacting KeyGate.
+        with engine.begin() as db:
+            db.execute(text("""
+                UPDATE guard.license_links SET lifecycle='REVOKED'
+                WHERE keygate_license_id='ci-transfer-key'
+            """))
+        revoked_transfer=c.post("/multiguard/licenses/direct/transfer",
+                                auth=auth,json=transfer_payload)
+        assert revoked_transfer.status_code==409,revoked_transfer.text
+        assert not deactivated
+        with engine.begin() as db:
+            db.execute(text("""
+                UPDATE guard.license_links SET lifecycle='ACTIVE'
+                WHERE keygate_license_id='ci-transfer-key'
+            """))
         # A stale discovery record cannot silently become the licensed host.
         with engine.begin() as db:
             db.execute(text("""
