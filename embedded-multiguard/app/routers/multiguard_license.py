@@ -3476,11 +3476,17 @@ def owner_disable_workshop(
     # authorize unattended access. Until the service share cleanup is fully
     # integrated, reject the change rather than leave silent remote access.
     with engine.connect() as con:
-        active_remote = con.execute(text("""
+        # The workshop remote subsystem is optional in legacy or isolated
+        # deployments. Do not break entitlement revocation if its table is
+        # absent; no workshop remote session can exist in that database.
+        remote_table = con.execute(text(
+            "SELECT to_regclass('guard.workshop_remote_sessions')"
+        )).scalar_one_or_none()
+        active_remote = (con.execute(text("""
             SELECT count(*) FROM guard.workshop_remote_sessions
             WHERE installation_id=:iid
               AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
-        """), {"iid": installation_id}).scalar_one()
+        """), {"iid": installation_id}).scalar_one() if remote_table else 0)
     if active_remote:
         raise HTTPException(
             409, "Przed cofnięciem trybu serwisowego trzeba zakończyć "
