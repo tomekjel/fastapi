@@ -1091,14 +1091,26 @@ def _assign_direct_customer_license(
         """), {"id": installation_id}).mappings().first()
         if pending is None:
             raise HTTPException(404, "Komputer nie został zarejestrowany.")
+        existing = con.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE installation_id=:id LIMIT 1
+        """), {"id": installation_id}).mappings().first()
+        if existing:
+            attempt = con.execute(text("""
+                SELECT state,keygate_license_id,edition,duration_months,release_channel
+                FROM guard.direct_keygate_attempts WHERE installation_id=:id
+            """), {"id":installation_id}).mappings().first()
+            if (attempt and attempt["state"]=="CREATED"
+                    and existing["sale_kind"]=="DIRECT"
+                    and str(attempt["keygate_license_id"])==str(existing["keygate_license_id"])
+                    and attempt["edition"]==edition
+                    and attempt["duration_months"]==months
+                    and attempt["release_channel"]==channel
+                    and pending["assigned_license_id"]==existing["keygate_license_id"]):
+                return _normalize_link(dict(existing))
+            raise HTTPException(409, "Istnieje już inna licencja tej instalacji.")
         if pending["status"] != "WAITING" or pending["assigned_license_id"]:
             raise HTTPException(409, "Komputer ma już przypisaną licencję.")
-        existing = con.execute(text("""
-            SELECT id FROM guard.license_links
-            WHERE installation_id=:id LIMIT 1
-        """), {"id": installation_id}).first()
-        if existing:
-            raise HTTPException(409, "Istnieje już powiązanie tej instalacji.")
     # A KeyGate workspace reference identifies the installation, not
     # an imaginary repair order. No service.order record is created.
     reference = "MG-DIRECT-" + installation_id.hex
