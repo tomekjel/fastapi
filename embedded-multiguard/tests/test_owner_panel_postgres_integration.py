@@ -878,6 +878,32 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert direct_link["valid_from"] is not None
     assert direct_link["accepted_at"] is not None
 
+    # A reinstalled client with its original authenticated identity can ask
+    # again, but never receive a secret after OWNER revokes or the term ends.
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.license_links SET lifecycle='REVOKED'
+            WHERE installation_id=:iid
+        """),{"iid":direct_id})
+    assert c.post("/v1/multi-guard/discovery/assignment",
+                  json=discovery).status_code==409
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.license_links
+            SET lifecycle='ACTIVE',valid_until=now()-interval '1 day'
+            WHERE installation_id=:iid
+        """),{"iid":direct_id})
+    assert c.post("/v1/multi-guard/discovery/assignment",
+                  json=discovery).status_code==409
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.license_links SET valid_until=:until
+            WHERE installation_id=:iid
+        """),{"iid":direct_id,"until":direct_link["valid_until"]})
+    assert c.post("/v1/multi-guard/discovery/assignment",
+                  json=discovery).status_code==200
+    assert mock_calls["create"]==1
+
     # Strict idempotent renewal. Two clicks with the same ID must not
     # add two years; the beginning of the term never changes.
     renewal_id=str(uuid.uuid4())
