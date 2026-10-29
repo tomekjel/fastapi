@@ -1475,6 +1475,25 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             FROM guard.installations WHERE id=:internal_id
         """),{'order_id':order_b,'device_id':pc_b,'key_hash':'7'*64,
               'cred':'1'*64,'internal_id':install_b})
+    # Agent-controlled mirror must not authorize remote support by itself.
+    with engine.connect() as db:
+        valid_remote=db.execute(text("""
+            SELECT * FROM guard.installations WHERE id=:id
+        """),{"id":install_b}).mappings().one()
+        assert remote._has_verified_remote_pro(
+            db,dict(valid_remote),_time.now(_utc.utc))
+        with engine.begin() as change:
+            change.execute(text("""
+                UPDATE guard.license_links SET lifecycle='REVOKED'
+                WHERE keygate_license_id='ci-keygate-remote-pro'
+            """))
+        assert not remote._has_verified_remote_pro(
+            db,dict(valid_remote),_time.now(_utc.utc))
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.license_links SET lifecycle='ACTIVE'
+            WHERE keygate_license_id='ci-keygate-remote-pro'
+        """))
     # During a Standard/Pro conversion, both the OWNER workspace and the
     # underlying routes must fail closed. No fake "request consent" action.
     with engine.begin() as db:
