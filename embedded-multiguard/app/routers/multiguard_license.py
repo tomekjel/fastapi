@@ -1942,14 +1942,18 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
             "Instalacja jest przypisana do zlecenia bez licencji Multi-Guard.",
         )
 
-    if (
-        link.get("installation_id")
-        and link["installation_id"] != pending["installation_id"]
-    ):
+    # Rebinding releases a licence from its OLD computer. A stale discovery
+    # receipt must not receive the KeyGate provisioning token in the gap
+    # between release and activation on the replacement computer.
+    if (link.get("rebind_pending")
+            or link.get("installation_id") != pending["installation_id"]):
         raise HTTPException(
-            409,
-            "Licencja została przypisana do innej instalacji Multi-Guard.",
+            409, "Licencja została odłączona od tego komputera.",
         )
+    if (link["lifecycle"] in {"REVOKED", "EXPIRED"}
+            or (link.get("valid_until")
+                and link["valid_until"] <= _utcnow())):
+        raise HTTPException(409, "Licencja została cofnięta lub wygasła.")
 
     return {
         "assigned": True,
