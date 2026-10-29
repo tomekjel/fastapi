@@ -2369,12 +2369,29 @@ def acceptance(req: AcceptanceRequest):
     if len(req.documents) != len(required) or received != expected:
         raise HTTPException(400, "Zaakceptowane dokumenty nie są aktualnym zestawem.")
 
-    started = _utcnow()
-    valid_until = _add_months(started, int(link["duration_months"]))
-    _keygate_set_valid_until(link["keygate_license_id"], valid_until)
-
     accepted_documents = [item.model_dump() for item in req.documents]
     with engine.begin() as connection:
+        # Serialise client acceptance and verify the state again under lock.
+        # Otherwise concurrent requests can both call KeyGate and restart time.
+        current = connection.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE id=:id AND installation_id=:installation_id
+            FOR UPDATE
+        """), {"id": link["id"], "installation_id": link["installation_id"]}).mappings().first()
+        if current is None:
+            raise HTTPException(409, "Licencja nie jest już przypisana do tej instalacji.")
+        current = _normalize_link(dict(current))
+        if (current["lifecycle"] != "PENDING_ACCEPTANCE"
+                or current.get("rebind_pending")
+                or current.get("device_id") != req.device_id
+                or not current.get("credential_sha256")
+                or not secrets.compare_digest(
+                    current["credential_sha256"], _hash(req.installation_credential)
+                )):
+            raise HTTPException(409, "Stan licencji zmienił się przed akceptacją.")
+        started = _utcnow()
+        valid_until = _add_months(started, int(current["duration_months"]))
+        _keygate_set_valid_until(current["keygate_license_id"], valid_until)
         row = connection.execute(
             text(
                 """
@@ -2386,7 +2403,7 @@ def acceptance(req: AcceptanceRequest):
                     accepted_documents=CAST(:documents AS jsonb),
                     app_version=:app_version,
                     updated_at=now()
-                WHERE id=:id
+                WHERE id=:id AND lifecycle='PENDING_ACCEPTANCE'
                 RETURNING *
                 """
             ),
