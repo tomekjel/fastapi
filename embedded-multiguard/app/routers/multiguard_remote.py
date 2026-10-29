@@ -207,11 +207,16 @@ def _has_verified_remote_pro(connection, installation, now: datetime) -> bool:
           ON p.installation_id=w.installation_id
         JOIN guard.installations gi
           ON gi.installation_external_id=p.installation_id
-        WHERE gi.id=:id LIMIT 1
+        WHERE gi.id=:id
+          AND NOT EXISTS (
+              SELECT 1 FROM guard.license_links l
+              WHERE l.installation_id=w.installation_id
+          )
+        LIMIT 1
     """), {"id":internal_id}).mappings().first()
     return bool(grant and grant["enabled"]
                 and grant["edition"]=="PRO"
-                and grant["status"] not in ("UNINSTALLED","ARCHIVED"))
+                and grant["status"] == "WAITING")
 
 
 def _owner_label(user: CurrentUser) -> tuple[Optional[uuid.UUID], str]:
