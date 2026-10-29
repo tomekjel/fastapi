@@ -6,14 +6,24 @@ SOURCE="${2:-/root/multiguard-pr30-validated}"
 APP=/opt/multiservis/app/routers
 SERVICE=multiservis-api.service
 FILES=(multiguard_license.py multiguard_remote.py)
+# Production SHA-256 baselines recorded on 2026-10-29 before staging.
+BASELINE_LICENSE=2ce182d97bd7b97482301d99d6ef39e24fde08df10ed36d4ab3a7dcc60c2eaec
+BASELINE_REMOTE=fdf567edec7bdd79db80bbe495786622352afa0bef5b822a7a5396ba5d0bfc5a
+BASELINES=("$BASELINE_LICENSE" "$BASELINE_REMOTE")
 if [[ ! -f "$SOURCE/multiguard_license.py" && -f "$SOURCE/embedded-multiguard/app/routers/multiguard_license.py" ]]; then
   SOURCE="$SOURCE/embedded-multiguard/app/routers"
 fi
 [[ "$MODE" == check || "$MODE" == deploy ]] || { echo "Usage: $0 check|deploy [source_directory]"; exit 2; }
 [[ "$(id -u)" == 0 ]] || { echo "Run as root inside LXC103"; exit 2; }
 [[ -d "$APP" && -x /opt/multiservis/.venv/bin/python ]] || { echo "Unexpected production layout"; exit 2; }
-for f in "${FILES[@]}"; do
+for i in "${!FILES[@]}"; do
+  f="${FILES[$i]}"
   [[ -f "$SOURCE/$f" && -f "$APP/$f" ]] || { echo "Missing $f"; exit 2; }
+  actual=$(sha256sum "$APP/$f"); actual="${actual%% *}"
+  if [[ "$actual" != "${BASELINES[$i]}" ]]; then
+    echo "BLOCKED: unexpected live $f hash. Manual diff review required; no deploy."
+    exit 3
+  fi
   /opt/multiservis/.venv/bin/python -m py_compile "$SOURCE/$f"
   printf '%s production: ' "$f"; sha256sum "$APP/$f"
   printf '%s candidate:  ' "$f"; sha256sum "$SOURCE/$f"
@@ -21,6 +31,7 @@ for f in "${FILES[@]}"; do
   echo "Difference saved to /tmp/multiguard-pr30-${f}.diff"
 done
 if [[ "$MODE" == check ]]; then echo "CHECK ONLY: no production files changed"; exit 0; fi
+[[ "${MULTIGUARD_DEPLOY_APPROVED:-}" == "YES" ]] || { echo "BLOCKED: deploy requires explicit MULTIGUARD_DEPLOY_APPROVED=YES"; exit 3; }
 BACKUP="/var/backups/multiguard-pr30/$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$BACKUP"
 chmod 700 "$BACKUP"
