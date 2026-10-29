@@ -121,6 +121,14 @@ class GenerateLicenseRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class DirectTransferRequest(BaseModel):
+    source_installation_id: uuid.UUID = Field(alias="sourceInstallationId")
+    target_installation_id: uuid.UUID = Field(alias="targetInstallationId")
+    expected_valid_until: datetime = Field(alias="expectedValidUntil")
+
+    model_config = {"populate_by_name": True}
+
+
 class DirectLicenseRequest(BaseModel):
     edition: str
     months: int
@@ -540,6 +548,15 @@ ALTER TABLE guard.direct_keygate_attempts ADD COLUMN IF NOT EXISTS duration_mont
 ALTER TABLE guard.direct_keygate_attempts ADD COLUMN IF NOT EXISTS release_channel TEXT;
 CREATE INDEX IF NOT EXISTS idx_guard_direct_keygate_attempts_state
     ON guard.direct_keygate_attempts(state);
+
+CREATE TABLE IF NOT EXISTS guard.license_transfer_audit (
+    id BIGSERIAL PRIMARY KEY,
+    license_link_id UUID NOT NULL REFERENCES guard.license_links(id),
+    source_installation_id UUID NOT NULL,
+    target_installation_id UUID NOT NULL,
+    valid_until TIMESTAMPTZ NOT NULL,
+    transferred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS guard.license_shortening (
     id UUID PRIMARY KEY,
@@ -1897,8 +1914,7 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
             # An old installation can reappear after uninstall or restore.
             # Never hand its provisioning secret back when OWNER has revoked
             # the licence or its original validity period has elapsed.
-            if (link.get("rebind_pending")
-                    or link.get("installation_id") != pending["installation_id"]):
+            if link.get("installation_id") != pending["installation_id"]:
                 raise HTTPException(409, "Licencja została odłączona od tego komputera.")
             if (link["lifecycle"] in {"REVOKED", "EXPIRED"}
                     or (link.get("valid_until")
@@ -2581,6 +2597,96 @@ def assign_pending_installation(
     }
 
 
+
+
+def _transfer_direct_license(req: DirectTransferRequest) -> dict[str, Any]:
+    """OWNER-only explicit transfer: keep the same KeyGate licence and expiry.
+
+    Do not issue another key. The target must already have an authenticated
+    discovery record but no prior paid grant or unresolved KeyGate attempt.
+    """
+    source_id, target_id = req.source_installation_id, req.target_installation_id
+    if source_id == target_id:
+        raise HTTPException(400, "Wybierz dwa różne komputery.")
+    _ensure_schema()
+    with engine.begin() as con:
+        # Stable lock order avoids deadlocks with other transfer requests.
+        pending = con.execute(text("""
+            SELECT * FROM guard.pending_installations
+            WHERE installation_id IN (:source,:target)
+            ORDER BY installation_id FOR UPDATE
+        """), {"source":source_id,"target":target_id}).mappings().all()
+        hosts = {row["installation_id"]:row for row in pending}
+        if source_id not in hosts or target_id not in hosts:
+            raise HTTPException(404, "Nie znaleziono obu komputerów.")
+        source, target = hosts[source_id], hosts[target_id]
+        link = con.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE installation_id=:id AND sale_kind='DIRECT' FOR UPDATE
+        """), {"id":source_id}).mappings().first()
+        if not link:
+            raise HTTPException(409, "Komputer źródłowy nie ma licencji DIRECT.")
+        if link["lifecycle"]!="ACTIVE" or not link["valid_until"] or link["valid_until"]<=_utcnow():
+            raise HTTPException(409, "Przenieść można wyłącznie aktywną licencję.")
+        if link["valid_until"]!=req.expected_valid_until:
+            raise HTTPException(409, "Data ważności uległa zmianie. Odśwież listę.")
+        if link["rebind_pending"]:
+            raise HTTPException(409, "Licencja już oczekuje na przeniesienie.")
+        if (target["status"]!="WAITING" or target["assigned_license_id"]
+                or target["assigned_reception_id"]):
+            raise HTTPException(409, "Komputer docelowy nie oczekuje na nową licencję.")
+        occupied=con.execute(text("""
+            SELECT EXISTS(SELECT 1 FROM guard.license_links
+                          WHERE installation_id=:id)
+                OR EXISTS(SELECT 1 FROM guard.direct_keygate_attempts
+                          WHERE installation_id=:id)
+                OR EXISTS(SELECT 1 FROM guard.workshop_grants
+                          WHERE installation_id=:id AND enabled=TRUE)
+        """),{"id":target_id}).scalar_one()
+        if occupied:
+            raise HTTPException(409, "Docelowy komputer ma uprawnienia lub próbę KeyGate.")
+        if _owner_pending_plan_change(con,link["id"]):
+            raise HTTPException(409, "Najpierw dokończ zmianę edycji.")
+        # External deactivation is intentionally before the SQL handover:
+        # if KeyGate fails, never attach the licence to a second computer.
+        if link["device_id"]:
+            _keygate_deactivate(_keygate_reveal(link["keygate_license_id"]),link["device_id"])
+        con.execute(text("""
+            UPDATE guard.pending_installations
+            SET status='WAITING',assigned_license_id=NULL,assigned_reception_id=NULL,
+                assigned_at=NULL,updated_at=now()
+            WHERE installation_id=:id
+        """),{"id":source_id})
+        con.execute(text("""
+            UPDATE guard.license_links
+            SET installation_id=:target,device_id=NULL,credential_sha256=NULL,
+                rebind_pending=TRUE,rebind_requested_at=now(),updated_at=now()
+            WHERE id=:id
+        """),{"target":target_id,"id":link["id"]})
+        con.execute(text("""
+            UPDATE guard.pending_installations
+            SET status='ASSIGNED',assigned_license_id=:license,
+                assigned_at=now(),updated_at=now()
+            WHERE installation_id=:id
+        """),{"id":target_id,"license":link["keygate_license_id"]})
+        con.execute(text("""
+            INSERT INTO guard.license_transfer_audit(
+                license_link_id,source_installation_id,target_installation_id,valid_until
+            ) VALUES (:link,:source,:target,:until)
+        """),{"link":link["id"],"source":source_id,"target":target_id,
+                "until":link["valid_until"]})
+        return {"transferred":True,"licenseId":link["keygate_license_id"],
+                "sourceInstallationId":str(source_id),
+                "targetInstallationId":str(target_id),
+                "validUntil":_iso(link["valid_until"])}
+
+
+@router.post("/multiguard/licenses/direct/transfer")
+def transfer_direct_license_api(
+    req: DirectTransferRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    return _transfer_direct_license(req)
 
 
 @router.post("/multiguard/pending-installations/{installation_id}/direct")
