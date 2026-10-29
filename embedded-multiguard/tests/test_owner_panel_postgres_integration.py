@@ -1483,6 +1483,9 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"id":install_b}).mappings().one()
         assert remote._has_verified_remote_pro(
             db,dict(valid_remote),_time.now(_utc.utc))
+        assert not remote._has_verified_service_remote_pro(
+            db,dict(valid_remote),_time.now(_utc.utc)), (
+            'Paid PRO may not silently bypass per-session customer consent')
         with engine.begin() as change:
             change.execute(text("""
                 UPDATE guard.license_links SET lifecycle='REVOKED'
