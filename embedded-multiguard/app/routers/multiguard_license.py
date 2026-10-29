@@ -3472,6 +3472,20 @@ def owner_disable_workshop(
     grant = _workshop_grant(installation_id)
     if not grant or not grant["enabled"]:
         raise HTTPException(409, "Tryb serwisowy nie jest aktywny.")
+    # Never report a service grant revoked while a Mesh share could still
+    # authorize unattended access. Until the service share cleanup is fully
+    # integrated, reject the change rather than leave silent remote access.
+    with engine.connect() as con:
+        active_remote = con.execute(text("""
+            SELECT count(*) FROM guard.workshop_remote_sessions
+            WHERE installation_id=:iid
+              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+        """), {"iid": installation_id}).scalar_one()
+    if active_remote:
+        raise HTTPException(
+            409, "Przed cofnięciem trybu serwisowego trzeba zakończyć "
+                 "aktywne sesje zdalne. Licencja nie została zmieniona."
+        )
     _set_workshop_grant(
         installation_id,grant["edition"],grant["release_channel"],False,
     )
