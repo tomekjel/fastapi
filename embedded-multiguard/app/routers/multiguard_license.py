@@ -2123,73 +2123,98 @@ def provision(req: ProvisionRequest):
             raise HTTPException(409, "Licencja nie jest przydzielona temu komputerowi.")
 
 
-    activated = _keygate_activate(
-        license_key, req.device_id, str(installation_id)
-    )
-    returned_license_id = str(activated.get("license_id", "")).strip()
-    if returned_license_id and returned_license_id != link["keygate_license_id"]:
-        raise HTTPException(409, "KeyGate zwrócił inną licencję.")
-
-    credential = secrets.token_urlsafe(48)
-    credential_hash = _hash(credential)
-    # Keep an explicit OWNER handover even when the computer provisions
-    # later. Do not silently downgrade to workshop privileges.
-    lifecycle = (
-        link["lifecycle"]
-        if (link.get("rebind_pending")
-            or link.get("sale_kind") == "DIRECT")
-            and link["lifecycle"] != "UNASSIGNED"
-        else "SERVICE_TEST"
-    )
-
+    # Serialize provisioning against OWNER transfer. Both operations lock
+    # pending installations first, then the licence link; the KeyGate
+    # activation must not race an OWNER reassignment.
     with engine.begin() as connection:
-        row = connection.execute(
-            text(
-                """
-                UPDATE guard.license_links
-                SET installation_id=:installation_id,
-                    device_id=:device_id,
-                    credential_sha256=:credential_sha256,
-                    app_version=:app_version,
-                    lifecycle=:lifecycle,
-                    provisioned_at=COALESCE(provisioned_at,now()),
-                    rebind_pending=FALSE,
-                    updated_at=now()
-                WHERE id=:id
-                RETURNING *
-                """
-            ),
-            {
-                "installation_id": installation_id,
-                "device_id": req.device_id,
-                "credential_sha256": credential_hash,
-                "app_version": req.app_version,
-                "lifecycle": lifecycle,
-                "id": link["id"],
-            },
-        ).mappings().one()
-        link = _normalize_link(dict(row))
-        _update_installation_mirror(connection, link)
-        connection.execute(
-            text(
-                """
-                UPDATE guard.pending_installations
-                SET
-                    status='PROVISIONED',
-                    assigned_reception_id=:reception_id,
-                    assigned_license_id=:license_id,
-                    provisioned_at=COALESCE(provisioned_at,now()),
-                    last_seen_at=now(),
-                    updated_at=now()
-                WHERE installation_id=:installation_id
-                """
-            ),
-            {
-                "reception_id": link["reception_id"],
-                "license_id": link["keygate_license_id"],
-                "installation_id": installation_id,
-            },
+        current_pending = connection.execute(text("""
+            SELECT * FROM guard.pending_installations
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id":installation_id}).mappings().first()
+        current_link = connection.execute(text("""
+            SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE
+        """), {"id":link["id"]}).mappings().first()
+        if current_link is None:
+            raise HTTPException(409, "Licencja została usunięta.")
+        link = _normalize_link(dict(current_link))
+        if (link.get("installation_id") not in (None, installation_id)
+                or (link.get("device_id") and link["device_id"] != req.device_id)
+                or link["lifecycle"] in {"REVOKED", "EXPIRED"}
+                or (link.get("valid_until") and link["valid_until"] <= _utcnow())):
+            raise HTTPException(409, "Stan licencji zmienił się przed aktywacją.")
+        if link.get("sale_kind") == "DIRECT":
+            if (current_pending is None
+                    or current_pending["device_id"] != req.device_id
+                    or current_pending["assigned_license_id"] != link["keygate_license_id"]
+                    or current_pending["status"] in {"ARCHIVED", "UNINSTALLED"}):
+                raise HTTPException(409, "Licencja nie należy już do tego komputera.")
+
+        activated = _keygate_activate(
+            license_key, req.device_id, str(installation_id)
         )
+        returned_license_id = str(activated.get("license_id", "")).strip()
+        if returned_license_id and returned_license_id != link["keygate_license_id"]:
+            raise HTTPException(409, "KeyGate zwrócił inną licencję.")
+
+        credential = secrets.token_urlsafe(48)
+        credential_hash = _hash(credential)
+        # Keep an explicit OWNER handover even when the computer provisions
+        # later. Do not silently downgrade to workshop privileges.
+        lifecycle = (
+            link["lifecycle"]
+            if (link.get("rebind_pending")
+                or link.get("sale_kind") == "DIRECT")
+                and link["lifecycle"] != "UNASSIGNED"
+            else "SERVICE_TEST"
+        )
+
+            row = connection.execute(
+                text(
+                    """
+                    UPDATE guard.license_links
+                    SET installation_id=:installation_id,
+                        device_id=:device_id,
+                        credential_sha256=:credential_sha256,
+                        app_version=:app_version,
+                        lifecycle=:lifecycle,
+                        provisioned_at=COALESCE(provisioned_at,now()),
+                        rebind_pending=FALSE,
+                        updated_at=now()
+                    WHERE id=:id
+                    RETURNING *
+                    """
+                ),
+                {
+                    "installation_id": installation_id,
+                    "device_id": req.device_id,
+                    "credential_sha256": credential_hash,
+                    "app_version": req.app_version,
+                    "lifecycle": lifecycle,
+                    "id": link["id"],
+                },
+            ).mappings().one()
+            link = _normalize_link(dict(row))
+            _update_installation_mirror(connection, link)
+            connection.execute(
+                text(
+                    """
+                    UPDATE guard.pending_installations
+                    SET
+                        status='PROVISIONED',
+                        assigned_reception_id=:reception_id,
+                        assigned_license_id=:license_id,
+                        provisioned_at=COALESCE(provisioned_at,now()),
+                        last_seen_at=now(),
+                        updated_at=now()
+                    WHERE installation_id=:installation_id
+                    """
+                ),
+                {
+                    "reception_id": link["reception_id"],
+                    "license_id": link["keygate_license_id"],
+                    "installation_id": installation_id,
+                },
+            )
 
     return {
         "requestId": req.request_id,
