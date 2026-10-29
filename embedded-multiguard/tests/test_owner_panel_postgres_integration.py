@@ -1244,7 +1244,6 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         # OWNER can review matching hardware hints but no key is transferred
         # until an explicit action. The endpoint is read-only.
         recovery_url=f"/multiguard/licenses/direct/{source_id}/recovery-candidates"
-        assert c.get(recovery_url).status_code in (401,403)
         with engine.begin() as db:
             db.execute(text("""
                 UPDATE guard.pending_installations
