@@ -2226,6 +2226,11 @@ def refresh(req: RefreshRequest):
                 UPDATE guard.license_links
                 SET lifecycle=:lifecycle, app_version=:app_version, updated_at=now()
                 WHERE id=:id
+                  AND installation_id=:installation_id
+                  AND device_id=:device_id
+                  AND credential_sha256=:credential_hash
+                  AND rebind_pending=FALSE
+                  AND lifecycle NOT IN ('REVOKED','EXPIRED')
                 RETURNING *
                 """
             ),
@@ -2233,8 +2238,13 @@ def refresh(req: RefreshRequest):
                 "lifecycle": lifecycle,
                 "app_version": req.app_version,
                 "id": link["id"],
+                "installation_id": link["installation_id"],
+                "device_id": req.device_id,
+                "credential_hash": _hash(req.installation_credential),
             },
-        ).mappings().one()
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(409, "Licencja zmieniła właściciela lub została cofnięta.")
         link = _normalize_link(dict(row))
         _update_installation_mirror(connection, link)
 
@@ -2662,6 +2672,11 @@ def _transfer_direct_license(req: DirectTransferRequest) -> dict[str, Any]:
         # if KeyGate fails, never attach the licence to a second computer.
         if link["device_id"]:
             _keygate_deactivate(_keygate_reveal(link["keygate_license_id"]),link["device_id"])
+        # The previous runtime identity must not remain listed as current.
+        con.execute(text("""
+            UPDATE guard.installations SET is_current=FALSE,updated_at=now()
+            WHERE installation_external_id=:id AND is_current=TRUE
+        """),{"id":source_id})
         con.execute(text("""
             UPDATE guard.pending_installations
             SET status='WAITING',assigned_license_id=NULL,assigned_reception_id=NULL,
