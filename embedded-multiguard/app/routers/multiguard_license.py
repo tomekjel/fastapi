@@ -1595,7 +1595,7 @@ def _required_documents() -> list[dict[str, str]]:
     if isinstance(source, str):
         raw = source.strip()
         if not raw:
-            return []
+            raise HTTPException(503, "Brak dokumentów aktywacyjnych Multi-Guard.")
         try:
             source = json.loads(raw)
         except json.JSONDecodeError as exc:
