@@ -3157,7 +3157,15 @@ def multiguard_panel_pending(
                       <button type="submit">COFNIJ LICENCJĘ</button>
                     </form>
                   </details>
-                  <p class="muted">Zmiana na bezterminowy tryb serwisowy wymaga oddzielnej kontrolowanej operacji; nie cofamy przy tym automatycznie płatnej licencji.</p>
+                  <details><summary>Tryb serwisowy — status i zarządzanie</summary>
+                    <p class="muted">Tryb serwisowy to osobne, bezterminowe uprawnienie.
+                    Samo jego przyznanie nie usuwa płatnej licencji klienta.
+                    Zmiana głównego trybu urządzenia wymaga potwierdzenia spójności uprawnień
+                    i nie jest jeszcze udostępniona jako automatyczna konwersja.</p>
+                    <p>Stan uprawnienia serwisowego:
+                      <strong>{"AKTYWNE" if grant and grant["enabled"] else "BRAK AKTYWNEGO"}</strong></p>
+                    <a class="button-link" href="/multiguard/panel/service-mode#service-modes">OTWÓRZ UPRAWNIENIA SERWISOWE</a>
+                  </details>
                 </div>'''
                 if direct["lifecycle"]=="ACTIVE" and direct.get("valid_until") and not pending_plan_change
                 else ''
@@ -3244,7 +3252,7 @@ def multiguard_panel_pending(
             {direct_info}
             {direct_buttons}
           </section>
-          <section class="card"><h2>Licencja klienta — zlecenie serwisowe</h2>
+          <section class="card" {'hidden' if direct else ''}><h2>Licencja klienta — zlecenie serwisowe</h2>
           <form method="post" action="/multiguard/panel/pending/{installation_id}/assign"
             data-owner-service-form>
             <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
