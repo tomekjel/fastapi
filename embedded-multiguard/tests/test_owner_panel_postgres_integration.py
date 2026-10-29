@@ -1475,6 +1475,7 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             FROM guard.installations WHERE id=:internal_id
         """),{'order_id':order_b,'device_id':pc_b,'key_hash':'7'*64,
               'cred':'1'*64,'internal_id':install_b})
+    # A server-side licence record, rather than heartbeat flags, controls remote authorization.
     # Agent-controlled mirror must not authorize remote support by itself.
     with engine.connect() as db:
         valid_remote=db.execute(text("""
