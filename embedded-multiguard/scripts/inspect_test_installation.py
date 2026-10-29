@@ -19,6 +19,7 @@ TABLES = (
     ("guard.direct_keygate_attempts_archive", "installation_id"),
     ("guard.owner_installation_labels", "installation_external_id"),
     ("guard.installations", "installation_external_id"),
+    ("guard.workshop_remote_sessions", "installation_id"),
 )
 
 def inspect(installation_id):
@@ -56,6 +57,19 @@ def inspect(installation_id):
         print("  FOREIGN KEY DEPENDENCIES:")
         for child, parent, definition in dependencies:
             print(f"    {child} -> {parent}: {definition}")
+        other_columns = con.execute(text("""
+            SELECT table_schema, table_name, column_name
+            FROM information_schema.columns
+            WHERE table_schema='guard'
+              AND column_name IN ('installation_id','installation_external_id')
+            ORDER BY table_name,column_name
+        """)).all()
+        known = set(TABLES)
+        print("  OTHER POSSIBLE DEPENDENCIES:")
+        for schema, table, column in other_columns:
+            if (f"{schema}.{table}", column) not in known:
+                print(f"    {schema}.{table}.{column} (review before reset)")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
