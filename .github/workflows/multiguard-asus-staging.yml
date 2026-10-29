@@ -1,4 +1,4 @@
-name: MultiGuard Asus safe staging (no deploy)
+name: MultiGuard safe staging (no deploy)
 on:
   pull_request:
     paths:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 jobs:
   stage:
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
