@@ -1929,6 +1929,11 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
                 "edition": "PRO" if link["plan_code"]=="multi_guard_pro" else "STANDARD",
                 "durationMonths":int(link["duration_months"]),
                 "releaseChannel":link.get("release_channel") or "STABLE",
+                # Reinstallation must preserve the original contract dates.
+                # These are informational; KeyGate and signed licences remain
+                # authoritative and no paid period is restarted here.
+                "validFrom":_iso(link.get("valid_from")),
+                "validUntil":_iso(link.get("valid_until")),
                 "provisioningToken":_keygate_reveal(link["keygate_license_id"]),
                 "serverTime":_iso(_utcnow()),
             }
