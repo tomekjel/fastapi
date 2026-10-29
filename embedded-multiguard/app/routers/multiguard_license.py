@@ -4225,7 +4225,7 @@ def _revoke_owner_license(link_id: uuid.UUID, operation_id: uuid.UUID,
         if str(keygate_state.get("status", "")).strip().lower() != "revoked":
             _keygate_revoke(link["keygate_license_id"])
             keygate_state = _keygate_license(link["keygate_license_id"])
-        if str(remote.get("status", "")).strip().lower() != "revoked":
+        if str(keygate_state.get("status", "")).strip().lower() != "revoked":
             raise HTTPException(502, "KeyGate nie potwierdził cofnięcia licencji.")
         if link.get("installation_id"):
             sessions = con.execute(text("""
