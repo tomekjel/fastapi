@@ -1714,6 +1714,20 @@ def multi_guard_panel_computers(
                 </form>
                 <form method="dialog"><button type="submit">ANULUJ</button></form>
               </dialog>"""
+        archive_option = ""
+        if not row['service_mode'] and not active_license_id:
+            archive_dialog = "archive-" + str(iid).replace("-", "")
+            archive_option = f"""
+              <button type="button" onclick="document.getElementById('{archive_dialog}').showModal()">ARCHIWIZUJ OCZEKUJĄCY</button>
+              <dialog id="{archive_dialog}">
+                <h3>Archiwizacja komputera</h3>
+                <p>{name} — usuwa jedynie wpis z listy oczekujących, nie cofa licencji KeyGate i nie usuwa historii.</p>
+                <form method="post" action="/multiguard/panel/computers/pending/{iid}/archive">
+                  <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+                  <button type="submit">POTWIERDŹ ARCHIWIZACJĘ</button>
+                </form>
+                <form method="dialog"><button type="submit">ANULUJ</button></form>
+              </dialog>"""
         rows_html.append(f"""<tr data-installation="{iid}">
           <td><input type="checkbox" class="mg-row-select" aria-label="Zaznacz {_panel_h(str(iid))}" value="{_panel_h(str(iid))}"> <a href="{detail}">{_panel_h(_short_installation_id(iid))}</a></td>
           <td><details class="mg-inline-name"><summary class="owner-machine-display" title="Edytuj nazwę: {name}">{name} ✎</summary><form method="post" action="/multiguard/panel/installation/{iid}/name"><input type="hidden" name="csrf_token" value="{_workshop_csrf()}"><input type="hidden" name="return_to" value="computers"><input name="friendly_name" maxlength="420" value="{_panel_h(row['friendly_name'] or '')}" placeholder="Nazwisko, telefon lub własna nazwa"><button type="submit">ZAPISZ</button></form></details>
@@ -1723,7 +1737,7 @@ def multi_guard_panel_computers(
           <td><span class="presence-dot presence-{presence_style}"></span>{_panel_h(presence_label)}
               <span class="inventory-hardware">{_panel_dt(row['last_seen_at'])}</span></td>
           <td>{_panel_h(row['app_version'] or '—')}</td>
-          <td><details class="mg-inline-device"><summary>OPERACJE · {_panel_h(row['service_order_count'])} napraw</summary><div><a href="{detail}">KOMPUTER / EDYTUJ NAZWĘ</a> · {license_action} · <a href="/multiguard/panel/service-mode#service-modes">TRYB SERWISOWY</a>{disable_service}</div><div><small>Cofnięcie licencji płatnej jest dostępne w zarządzaniu jej rekordem; usunięcie komputera to osobna operacja.</small></div></details>
+          <td><details class="mg-inline-device"><summary>OPERACJE · {_panel_h(row['service_order_count'])} napraw</summary><div><a href="{detail}">KOMPUTER / EDYTUJ NAZWĘ</a> · {license_action} · <a href="/multiguard/panel/service-mode#service-modes">TRYB SERWISOWY</a>{disable_service}{archive_option}</div><div><small>Cofnięcie licencji płatnej jest dostępne w zarządzaniu jej rekordem; usunięcie komputera to osobna operacja.</small></div></details>
               <span class="inventory-hardware">{_panel_h(row['health_level'] or 'Brak raportu')} · {_panel_h(row['owner_priority'])}</span></td>
         </tr>""")
     if not rows_html:
