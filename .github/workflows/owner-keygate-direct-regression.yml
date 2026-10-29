@@ -5,6 +5,7 @@ on:
     paths:
       - embedded-multiguard/app/routers/multiguard_runtime.py
       - embedded-multiguard/scripts/inspect_test_installation.py
+      - embedded-multiguard/tests/test_revoke_source_regression.py
       - embedded-multiguard/app/routers/multiguard_license.py
       - .github/workflows/owner-keygate-direct-regression.yml
   pull_request:
