@@ -878,6 +878,21 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert direct_link["valid_from"] is not None
     assert direct_link["accepted_at"] is not None
 
+    # The authenticated original identity survives a normal uninstall and
+    # restores the SAME paid contract, not a fresh KeyGate licence.
+    uninstall_payload={**discovery,"uninstallEventId":str(uuid.uuid4()),
+                       "appVersion":"0.3.46"}
+    removed=c.post("/v1/multi-guard/discovery/uninstall",json=uninstall_payload)
+    ensure(removed.status_code,200,"Uninstall keeps paid licence")
+    reinstated=c.post("/v1/multi-guard/discovery/assignment",json=discovery)
+    ensure(reinstated.status_code,200,"Reinstall with original discovery identity")
+    assert reinstated.json()["assigned"] is True
+    assert reinstated.json()["validFrom"]==license._iso(direct_link["valid_from"])
+    assert reinstated.json()["validUntil"]==license._iso(direct_link["valid_until"])
+    assert reinstated.json()["edition"]=="PRO"
+    assert mock_calls["create"]==1
+    assert license._link_by_installation(direct_id)["valid_until"]==direct_link["valid_until"]
+
     # A reinstalled client with its original authenticated identity can ask
     # again, but never receive a secret after OWNER revokes or the term ends.
     with engine.begin() as db:
