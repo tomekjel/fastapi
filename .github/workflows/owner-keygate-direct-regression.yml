@@ -8,6 +8,7 @@ on:
       - embedded-multiguard/tests/test_revoke_source_regression.py
       - embedded-multiguard/app/routers/multiguard_license.py
       - embedded-multiguard/tests/test_activation_documents_contract.py
+      - embedded-multiguard/tests/test_owner_panel_postgres_integration.py
       - .github/workflows/owner-keygate-direct-regression.yml
   pull_request:
     paths:
