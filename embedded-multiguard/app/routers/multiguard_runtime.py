@@ -1602,6 +1602,9 @@ def _fetch_owner_inventory(limit, presence_filter, search, offset, silence_days)
                 COALESCE(d.model,p.model) AS model,
                 COALESCE(d.hostname,p.hostname) AS hostname,
                 COALESCE(d.serial_number,p.serial_number) AS serial_number,
+                (SELECT ll.id FROM guard.license_links ll
+                  WHERE ll.installation_id=ids.external_id AND ll.lifecycle='ACTIVE'
+                  ORDER BY ll.updated_at DESC, ll.id DESC LIMIT 1) AS active_license_link_id,
                 labels.friendly_name, COALESCE(gi.app_version,p.app_version) AS app_version,
                 COALESCE(notes.priority,'NORMAL') AS owner_priority,
                 (SELECT count(*) FROM service.service_orders so
@@ -1693,6 +1696,9 @@ def multi_guard_panel_computers(
             (row['manufacturer'],row['model'],row['serial_number']) if v))
         entitlement = ('SERWIS · ' if row['service_mode'] else '') + str(row['plan_code'] or '—')
         state = 'Bezterminowo' if row['service_mode'] else _human_license_state(row['lifecycle'])
+        active_license_id = row['active_license_link_id']
+        license_action = (f'<a href="/multiguard/panel/license/manage/{active_license_id}">ZMIEN / PRZEDLUZ / COFNIJ LICENCJE</a>'
+                          if active_license_id else '<span>Brak aktywnej licencji platnej</span>')
         disable_service = ""
         if row['service_mode']:
             dialog_id = "disable-service-" + str(iid).replace("-", "")
@@ -1717,7 +1723,7 @@ def multi_guard_panel_computers(
           <td><span class="presence-dot presence-{presence_style}"></span>{_panel_h(presence_label)}
               <span class="inventory-hardware">{_panel_dt(row['last_seen_at'])}</span></td>
           <td>{_panel_h(row['app_version'] or '—')}</td>
-          <td><details class="mg-inline-device"><summary>OPERACJE · {_panel_h(row['service_order_count'])} napraw</summary><div><a href="{detail}">KOMPUTER / EDYTUJ NAZWĘ</a> · <a href="/multiguard/panel/licenses">LICENCJE</a> · <a href="/multiguard/panel/service-mode#service-modes">TRYB SERWISOWY</a>{disable_service}</div><div><small>Cofnięcie licencji płatnej jest dostępne w zarządzaniu jej rekordem; usunięcie komputera to osobna operacja.</small></div></details>
+          <td><details class="mg-inline-device"><summary>OPERACJE · {_panel_h(row['service_order_count'])} napraw</summary><div><a href="{detail}">KOMPUTER / EDYTUJ NAZWĘ</a> · {license_action} · <a href="/multiguard/panel/service-mode#service-modes">TRYB SERWISOWY</a>{disable_service}</div><div><small>Cofnięcie licencji płatnej jest dostępne w zarządzaniu jej rekordem; usunięcie komputera to osobna operacja.</small></div></details>
               <span class="inventory-hardware">{_panel_h(row['health_level'] or 'Brak raportu')} · {_panel_h(row['owner_priority'])}</span></td>
         </tr>""")
     if not rows_html:
