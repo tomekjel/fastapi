@@ -1452,6 +1452,71 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     # Only MeshCentral transport is replaced; never contact a real customer.
     remote=importlib.import_module('app.routers.multiguard_remote')
     remote._ensure_schema()
+    # A separate synthetic installation proves that permanent OWNER service
+    # authorization creates a consented session without asking the client.
+    service_internal=uuid.uuid4()
+    service_external=uuid.uuid4()
+    service_support=uuid.uuid4()
+    with engine.begin() as db:
+        db.execute(text("""
+            INSERT INTO guard.installations(
+                id,service_device_id,installation_external_id,
+                device_id_hash,credential_sha256,lifecycle,last_seen_at,
+                plan_code,app_version,mesh_node_id)
+            VALUES(:internal,:device,:external,'ci-service-device',:cred,
+                   'ACTIVE',now(),'PRO','0.3.35','node/ci-service')
+        """), {"internal":service_internal,"device":pc_b,
+                "external":service_external,"cred":"8"*64})
+        db.execute(text("""
+            INSERT INTO guard.pending_installations(
+                installation_id,device_id,discovery_credential_sha256,
+                app_version,hostname,manufacturer,model,status)
+            VALUES(:external,'ci-service-device',:hash,'0.3.35',
+                   'ci-service','Lenovo','CI-Service','WAITING')
+        """), {"external":service_external,"hash":"8"*64})
+        db.execute(text("""
+            INSERT INTO guard.workshop_grants(
+                installation_id,edition,release_channel,enabled)
+            VALUES(:external,'PRO','STABLE',TRUE)
+        """), {"external":service_external})
+        db.execute(text("""
+            INSERT INTO guard.support_requests(
+                id,local_request_id,installation_id,service_device_id,
+                subject,description,created_at)
+            VALUES(:id,:local,:internal,:device,'CI service consent',
+                   'Synthetic owner authorization only',now())
+        """), {"id":service_support,"local":uuid.uuid4(),
+                "internal":service_internal,"device":pc_b})
+    with engine.connect() as db:
+        service_install=db.execute(text("""
+            SELECT * FROM guard.installations WHERE id=:id
+        """),{"id":service_internal}).mappings().one()
+        assert remote._has_verified_remote_pro(
+            db,dict(service_install),_time.now(_utc.utc))
+        assert remote._has_verified_service_remote_pro(
+            db,dict(service_install),_time.now(_utc.utc))
+    service_session=remote.create_remote_session(
+        remote.OwnerRemoteCreateBody(supportRequestId=service_support),
+        security.CurrentUser(),
+    )
+    assert service_session['status']=='CONSENTED'
+    assert service_session['grantedCapabilities']==['desktop']
+    with engine.connect() as db:
+        assert db.execute(text("""
+            SELECT count(*) FROM guard.remote_session_events
+            WHERE remote_session_id=:id
+              AND event_type='OWNER_SERVICE_GRANT_AUTHORIZED'
+        """),{"id":uuid.UUID(service_session['sessionId'])}).scalar_one()==1
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.workshop_grants SET enabled=FALSE
+            WHERE installation_id=:id
+        """),{"id":service_external})
+    with engine.connect() as db:
+        assert not remote._has_verified_remote_pro(
+            db,dict(service_install),_time.now(_utc.utc))
+    remote.remote_session_end(service_session['sessionId'],security.CurrentUser())
+
     support_id=uuid.uuid4()
     with engine.begin() as db:
         db.execute(text("UPDATE guard.installations SET mesh_node_id='ci-node-123', lifecycle='ACTIVE', valid_until=now()+interval '1 day' WHERE id=:id"),{'id':install_b})
