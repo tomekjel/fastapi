@@ -30,6 +30,12 @@ for i in "${!FILES[@]}"; do
   diff -u "$APP/$f" "$SOURCE/$f" > "/tmp/multiguard-pr30-${f}.diff" || test "$?" -eq 1
   echo "Difference saved to /tmp/multiguard-pr30-${f}.diff"
 done
+# Never deploy a remote module that lacks the OWNER page API.
+# An earlier rollout produced HTTP 500 when this function was absent.
+if ! grep -Fq 'def owner_remote_overview(' "$SOURCE/multiguard_remote.py"; then
+  echo "BLOCKED: remote module lacks owner_remote_overview; OWNER remote page would return HTTP 500."
+  exit 4
+fi
 if [[ "$MODE" == check ]]; then echo "CHECK ONLY: no production files changed"; exit 0; fi
 [[ "${MULTIGUARD_DEPLOY_APPROVED:-}" == "YES" ]] || { echo "BLOCKED: deploy requires explicit MULTIGUARD_DEPLOY_APPROVED=YES"; exit 3; }
 BACKUP="/var/backups/multiguard-pr30/$(date -u +%Y%m%dT%H%M%SZ)"
