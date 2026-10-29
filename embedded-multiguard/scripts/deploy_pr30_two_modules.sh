@@ -6,6 +6,9 @@ SOURCE="${2:-/root/multiguard-pr30-validated}"
 APP=/opt/multiservis/app/routers
 SERVICE=multiservis-api.service
 FILES=(multiguard_license.py multiguard_remote.py)
+if [[ ! -f "$SOURCE/multiguard_license.py" && -f "$SOURCE/embedded-multiguard/app/routers/multiguard_license.py" ]]; then
+  SOURCE="$SOURCE/embedded-multiguard/app/routers"
+fi
 [[ "$MODE" == check || "$MODE" == deploy ]] || { echo "Usage: $0 check|deploy [source_directory]"; exit 2; }
 [[ "$(id -u)" == 0 ]] || { echo "Run as root inside LXC103"; exit 2; }
 [[ -d "$APP" && -x /opt/multiservis/.venv/bin/python ]] || { echo "Unexpected production layout"; exit 2; }
