@@ -886,6 +886,35 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     accept_docs=[{"kind":d["kind"],"version":d["version"],
                   "sha256":hashlib.sha256(d["content_markdown"].encode()).hexdigest()}
                  for d in docs]
+    # Rejection paths must not activate or start paid time.
+    invalid_cases=[
+      ("missing",[]),
+      ("incomplete",accept_docs[:2]),
+      ("duplicate",[accept_docs[0],accept_docs[0],accept_docs[2]]),
+      ("tampered-hash",[{**accept_docs[0],"sha256":"0"*64},*accept_docs[1:]]),
+      ("old-version",[{**accept_docs[0],"version":"obsolete"},*accept_docs[1:]]),
+    ]
+    for label,invalid in invalid_cases:
+        rejected=c.post("/v1/multi-guard/acceptance",
+                        json={**refresh_fields,"documents":invalid})
+        assert rejected.status_code==400,(label,rejected.status_code,rejected.text)
+        assert license._link_by_installation(direct_id)["lifecycle"]=="PENDING_ACCEPTANCE",label
+        assert not mock_calls["keygate_end"],label
+
+    # An authenticated refresh must expose all full texts and keep the
+    # three-month period unstarted until acceptance.
+    refreshed=c.post("/v1/multi-guard/refresh",json=refresh_fields)
+    ensure(refreshed.status_code,200,"Direct pending refresh documents")
+    pending_payload=json.loads(refreshed.json()["signedLicense"]["payload"])
+    assert pending_payload["lifecycle"]=="PENDING_ACCEPTANCE"
+    assert pending_payload["validUntil"] is None
+    assert len(refreshed.json()["requiredDocuments"])==3
+    for expected,received in zip(docs,refreshed.json()["requiredDocuments"]):
+        assert received["contentMarkdown"]==expected["content_markdown"]
+        assert received["sha256"]==hashlib.sha256(
+            expected["content_markdown"].encode()).hexdigest()
+    assert not mock_calls["keygate_end"]
+
     accepted=c.post("/v1/multi-guard/acceptance",
                     json={**refresh_fields,"documents":accept_docs})
     ensure(accepted.status_code,200,"Direct client activation after three documents")
@@ -895,6 +924,17 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     direct_link=license._link_by_installation(direct_id)
     assert direct_link["valid_from"] is not None
     assert direct_link["accepted_at"] is not None
+    assert direct_link["keygate_license_id"]=="fake-direct-ci"
+    assert direct_link["valid_until"] is not None
+    assert len(direct_link["accepted_documents"])==3
+    assert {d["kind"] for d in direct_link["accepted_documents"]}=={
+        "terms","privacy","safety"}
+    # A second acceptance must fail instead of adding time or rewriting consent.
+    repeated=c.post("/v1/multi-guard/acceptance",
+                    json={**refresh_fields,"documents":accept_docs})
+    assert repeated.status_code==409
+    assert len(mock_calls["keygate_end"])==1
+
 
     # The authenticated original identity survives a normal uninstall and
     # restores the SAME paid contract, not a fresh KeyGate licence.
