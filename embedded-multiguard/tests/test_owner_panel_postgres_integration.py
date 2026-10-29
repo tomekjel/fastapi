@@ -918,16 +918,24 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
             UPDATE guard.license_links SET lifecycle='REVOKED'
             WHERE installation_id=:iid
         """),{"iid":direct_id})
-    assert c.post("/v1/multi-guard/discovery/assignment",
-                  json=discovery).status_code==409
+    unlicensed=c.post("/v1/multi-guard/discovery/assignment",json=discovery)
+    assert unlicensed.status_code==200
+    assert unlicensed.json()["assigned"] is False
+    assert unlicensed.json()["status"]=="WAITING"
+    assert unlicensed.json()["releaseChannel"] is None
+    assert "provisioningToken" not in unlicensed.json()
     with engine.begin() as db:
         db.execute(text("""
             UPDATE guard.license_links
             SET lifecycle='ACTIVE',valid_until=now()-interval '1 day'
             WHERE installation_id=:iid
         """),{"iid":direct_id})
-    assert c.post("/v1/multi-guard/discovery/assignment",
-                  json=discovery).status_code==409
+    unlicensed=c.post("/v1/multi-guard/discovery/assignment",json=discovery)
+    assert unlicensed.status_code==200
+    assert unlicensed.json()["assigned"] is False
+    assert unlicensed.json()["status"]=="WAITING"
+    assert unlicensed.json()["releaseChannel"] is None
+    assert "provisioningToken" not in unlicensed.json()
     with engine.begin() as db:
         db.execute(text("""
             UPDATE guard.license_links SET valid_until=:until
