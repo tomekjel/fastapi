@@ -1189,6 +1189,74 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     }).status_code==409
     print("PASS: OWNER KeyGate revocation verified, retry after lost response, 401/403/409, single audit and signed state mirror.")
 
+    # Transfer a separate active DIRECT licence without creating a new key.
+    source_id,target_id=uuid.uuid4(),uuid.uuid4()
+    source_cred="ci-transfer-source-secret-0123456789-abcdefgh"
+    target_cred="ci-transfer-target-secret-0123456789-abcdefgh"
+    transfer_end=license._utcnow()+timedelta(days=60)
+    with engine.begin() as db:
+        for iid,device,credential,status,assigned in [
+            (source_id,"ci-transfer-source-1234567890",source_cred,"PROVISIONED","ci-transfer-key"),
+            (target_id,"ci-transfer-target-1234567890",target_cred,"WAITING",None),
+        ]:
+            db.execute(text("""
+                INSERT INTO guard.pending_installations(
+                    installation_id,device_id,discovery_credential_sha256,
+                    app_version,hostname,status,assigned_license_id)
+                VALUES(:id,:device,:hash,'0.3.46','CI transfer',:status,:assigned)
+            """),{"id":iid,"device":device,"hash":hashlib.sha256(credential.encode()).hexdigest(),
+                 "status":status,"assigned":assigned})
+        db.execute(text("""
+            INSERT INTO guard.license_links(
+                reception_number,keygate_license_id,keygate_plan_id,license_key_hash,
+                plan_code,duration_months,release_channel,lifecycle,
+                installation_id,device_id,valid_from,valid_until,sale_kind)
+            VALUES('CI-TRANSFER','ci-transfer-key','ci-plan',:hash,
+                'multi_guard_pro',12,'STABLE','ACTIVE',
+                :source,:device,now()-interval '2 months',:until,'DIRECT')
+        """),{"hash":"a"*64,"source":source_id,
+            "device":"ci-transfer-source-1234567890","until":transfer_end})
+    fake_deactivate_before=license._keygate_deactivate
+    deactivated=[]
+    license._keygate_deactivate=lambda key,device:deactivated.append((key,device))
+    license._keygate_reveal=lambda _:token_key
+    transfer_payload={"sourceInstallationId":str(source_id),
+                      "targetInstallationId":str(target_id),
+                      "expectedValidUntil":license._iso(transfer_end)}
+    try:
+        transferred=c.post("/multiguard/licenses/direct/transfer",
+                           auth=auth,json=transfer_payload)
+        ensure(transferred.status_code,200,"DIRECT transfer between two computers")
+        assert transferred.json()["validUntil"]==license._iso(transfer_end)
+        assert len(deactivated)==1 and deactivated[0][1]=="ci-transfer-source-1234567890"
+        assert c.post("/multiguard/licenses/direct/transfer",
+                      auth=auth,json=transfer_payload).status_code==409
+        src={"installationId":str(source_id),"deviceId":"ci-transfer-source-1234567890",
+             "discoveryCredential":source_cred}
+        dst={"installationId":str(target_id),"deviceId":"ci-transfer-target-1234567890",
+             "discoveryCredential":target_cred}
+        assert c.post("/v1/multi-guard/discovery/assignment",json=src).json()["assigned"] is False
+        dst_result=c.post("/v1/multi-guard/discovery/assignment",json=dst)
+        ensure(dst_result.status_code,200,"New device receives previous KeyGate licence")
+        assert dst_result.json()["provisioningToken"]==token_key
+        assert mock_calls["create"]==1
+        with engine.connect() as db:
+            moved=db.execute(text("""
+                SELECT installation_id,valid_until,rebind_pending
+                FROM guard.license_links WHERE keygate_license_id='ci-transfer-key'
+            """)).mappings().one()
+            assert moved["installation_id"]==target_id
+            assert moved["valid_until"]==transfer_end
+            assert moved["rebind_pending"] is True
+            assert db.execute(text("""
+                SELECT count(*) FROM guard.license_transfer_audit
+                WHERE source_installation_id=:source
+            """),{"source":source_id}).scalar_one()==1
+    finally:
+        license._keygate_deactivate=fake_deactivate_before
+    print("PASS: DIRECT transfer preserves one KeyGate key, original expiry and removes old assignment.")
+
+
 
 
     # Gate future deployment on read-only compatibility with the historical
