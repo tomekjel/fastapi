@@ -1,5 +1,11 @@
 name: OWNER KeyGate DIRECT regression no deploy
 on:
+  push:
+    branches: [fix/owner-keygate-direct-reconcile-20261029]
+    paths:
+      - embedded-multiguard/app/routers/multiguard_runtime.py
+      - embedded-multiguard/app/routers/multiguard_license.py
+      - .github/workflows/owner-keygate-direct-regression.yml
   pull_request:
     paths:
       - embedded-multiguard/app/routers/multiguard_license.py
