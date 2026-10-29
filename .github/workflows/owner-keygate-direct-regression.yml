@@ -9,6 +9,7 @@ on:
       - embedded-multiguard/app/routers/multiguard_license.py
       - embedded-multiguard/tests/test_activation_documents_contract.py
       - embedded-multiguard/tests/test_activation_document_preflight.py
+      - embedded-multiguard/tests/test_license_month_arithmetic.py
       - embedded-multiguard/scripts/check_activation_documents.py
       - embedded-multiguard/tests/test_owner_panel_postgres_integration.py
       - .github/workflows/owner-keygate-direct-regression.yml
@@ -22,6 +23,7 @@ on:
       - embedded-multiguard/tests/test_revoke_source_regression.py
       - embedded-multiguard/tests/test_activation_documents_contract.py
       - embedded-multiguard/tests/test_activation_document_preflight.py
+      - embedded-multiguard/tests/test_license_month_arithmetic.py
       - embedded-multiguard/scripts/check_activation_documents.py
       - .github/workflows/owner-keygate-direct-regression.yml
 permissions:
@@ -42,6 +44,7 @@ jobs:
           python embedded-multiguard/tests/test_revoke_source_regression.py
           python embedded-multiguard/tests/test_activation_documents_contract.py
           python embedded-multiguard/tests/test_activation_document_preflight.py
+          python embedded-multiguard/tests/test_license_month_arithmetic.py
       - name: Check required duplicate-safety regression assertions
         shell: bash
         run: |
