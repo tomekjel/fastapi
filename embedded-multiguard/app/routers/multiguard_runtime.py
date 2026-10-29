@@ -1701,7 +1701,7 @@ def multi_guard_panel_computers(
           <td><span class="presence-dot presence-{presence_style}"></span>{_panel_h(presence_label)}
               <span class="inventory-hardware">{_panel_dt(row['last_seen_at'])}</span></td>
           <td>{_panel_h(row['app_version'] or '—')}</td>
-          <td><a href="{detail}">SZCZEGÓŁY · {_panel_h(row['service_order_count'])} napraw</a>
+          <td><details class="mg-inline-device"><summary>ROZWIŃ · {_panel_h(row['service_order_count'])} napraw</summary><a href="{detail}">ZARZĄDZAJ URZĄDZENIEM / LICENCJĄ</a></details>
               <span class="inventory-hardware">{_panel_h(row['health_level'] or 'Brak raportu')} · {_panel_h(row['owner_priority'])}</span></td>
         </tr>""")
     if not rows_html:
