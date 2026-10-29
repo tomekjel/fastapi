@@ -24,8 +24,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $paths = @(
             'embedded-multiguard/app/routers/multiguard_license.py',
-            'embedded-multiguard/app/routers/multiguard_remote.py',
-            'embedded-multiguard/scripts/deploy_pr30_two_modules.sh'
+            'embedded-multiguard/app/routers/multiguard_remote.py'
           )
           $py = Get-Command py -ErrorAction SilentlyContinue
           if ($py) { & py -3 -m py_compile @paths }
@@ -34,7 +33,10 @@ jobs:
             & python -m py_compile @paths
           }
           if ($LASTEXITCODE -ne 0) { throw 'Python syntax check failed' }
-          $rows = foreach ($p in $paths) {
+          & bash -n embedded-multiguard/scripts/deploy_pr30_two_modules.sh
+          if ($LASTEXITCODE -ne 0) { throw 'Bash syntax check failed' }
+          $manifestPaths = @($paths) + @('embedded-multiguard/scripts/deploy_pr30_two_modules.sh')
+          $rows = foreach ($p in $manifestPaths) {
             $file = Get-Item $p
             [pscustomobject]@{
               path = $p
