@@ -3105,6 +3105,16 @@ def multiguard_panel_pending(
                 WHERE sale_kind='DIRECT' AND installation_id=:iid
                   AND keygate_license_id=:license_id
             """), {"iid":iid,"license_id":pending["assigned_license_id"]}).mappings().first()
+    # A pending plan transaction must be reconciled before another OWNER
+    # mutation. Keep all computer actions in one location, but fail closed.
+    pending_plan_change = None
+    if direct:
+        with engine.connect() as plan_con:
+            pending_plan_change = plan_con.execute(text("""
+                SELECT id, new_plan_code FROM guard.license_plan_changes
+                WHERE license_link_id=:link_id AND status='PENDING'
+                LIMIT 1
+            """), {"link_id": direct["id"]}).mappings().first()
     if direct:
         direct_info = (
             "<p class='ok'>Licencja klienta: "
@@ -3113,7 +3123,7 @@ def multiguard_panel_pending(
             + " miesięcy · " + _panel_escape({"UNASSIGNED":"Przypisana","SERVICE_TEST":"Przygotowana","PENDING_ACCEPTANCE":"Oczekuje na akceptację","ACTIVE":"Aktywna","EXPIRED":"Wygasła","REVOKED":"Cofnięta"}.get(direct["lifecycle"],"Nieznana"))
             + "</p>"
             + (
-                f'''<section class="card" id="computer-license-actions">
+                f'''<div id="computer-license-actions" class="owner-license-actions">
                   <h3>Zarządzanie licencją tego komputera</h3>
                   <p class="muted">Wszystkie operacje dotyczą istniejącej licencji. Nie zakładaj nowej.</p>
                   <details open><summary>Zmień edycję Standard / Pro</summary>
@@ -3148,11 +3158,18 @@ def multiguard_panel_pending(
                     </form>
                   </details>
                   <p class="muted">Zmiana na bezterminowy tryb serwisowy wymaga oddzielnej kontrolowanej operacji; nie cofamy przy tym automatycznie płatnej licencji.</p>
-                </section>'''
-                if direct["lifecycle"]=="ACTIVE" and direct.get("valid_until")
+                </div>'''
+                if direct["lifecycle"]=="ACTIVE" and direct.get("valid_until") and not pending_plan_change
                 else ''
             )
         )
+        if pending_plan_change:
+            direct_info += (
+                '<p class="muted">Zmiana edycji wymaga dokończenia. '
+                'Kolejne operacje licencyjne są wstrzymane.</p>'
+                + f'<p><a class="button-link" href="/multiguard/panel/license/manage/{direct["id"]}">'
+                'DOKOŃCZ ZMIANĘ EDYCJI</a></p>'
+            )
         direct_buttons = (
             f'<form method="post" action="/multiguard/panel/pending/{installation_id}/handover">'
             f'<input type="hidden" name="csrf_token" value="{_workshop_csrf()}">'
