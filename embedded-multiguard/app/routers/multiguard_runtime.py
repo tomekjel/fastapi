@@ -1710,7 +1710,7 @@ def multi_guard_panel_computers(
               </dialog>"""
         rows_html.append(f"""<tr data-installation="{iid}">
           <td><a href="{detail}">{_panel_h(_short_installation_id(iid))}</a></td>
-          <td><a class="owner-machine-display" href="{detail}#owner-name" title="Edytuj nazwę: {name}">{name} ✎</a>
+          <td><details class="mg-inline-name"><summary class="owner-machine-display" title="Edytuj nazwę: {name}">{name} ✎</summary><form method="post" action="/multiguard/panel/installation/{iid}/name"><input type="hidden" name="csrf_token" value="{_workshop_csrf()}"><input type="hidden" name="return_to" value="computers"><input name="friendly_name" maxlength="420" value="{_panel_h(row['friendly_name'] or '')}" placeholder="Nazwisko, telefon lub własna nazwa"><button type="submit">ZAPISZ</button></form></details>
               <span class="inventory-hardware" title="{hardware}">{hardware}</span></td>
           <td>{_panel_h(entitlement)}<span class="inventory-hardware">{_panel_h(state)}</span></td>
           <td>{_panel_dt(row['installed_at'])}</td>
