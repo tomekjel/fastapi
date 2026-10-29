@@ -785,7 +785,13 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     direct_url=f"/multiguard/pending-installations/{direct_id}/direct"
     ensure(c.post(direct_url,json={"edition":"PRO","months":12}).status_code,
            200,"Direct licence without service reception")
-    assert c.post(direct_url,json={"edition":"PRO","months":12}).status_code==409
+    # Repeated identical request must return the already-linked KeyGate
+    # licence without another external POST. A different plan must still fail.
+    assert c.post(direct_url,json={"edition":"PRO","months":12}).status_code==200
+    assert mock_calls["create"]==1
+    assert c.post(direct_url,json={"edition":"STANDARD","months":12}).status_code==409
+    assert c.post(direct_url,json={"edition":"PRO","months":6}).status_code==409
+    assert mock_calls["create"]==1
     with engine.connect() as db:
         assert db.execute(text("""
             SELECT count(*) FROM service.service_orders
