@@ -3814,6 +3814,13 @@ def set_reception_release_channel(
         raise HTTPException(404, "Zlecenie nie ma licencji Multi-Guard.")
 
     with engine.begin() as connection:
+        current = connection.execute(text("""
+            SELECT lifecycle FROM guard.license_links WHERE id=:id FOR UPDATE
+        """), {"id":link["id"]}).scalar_one_or_none()
+        if current != "ACTIVE":
+            raise HTTPException(409, "Kanał można zmienić tylko aktywnej licencji.")
+        if _owner_pending_plan_change(connection, link["id"]):
+            raise HTTPException(409, "Najpierw zakończ zmianę edycji licencji.")
         row = connection.execute(
             text(
                 """
