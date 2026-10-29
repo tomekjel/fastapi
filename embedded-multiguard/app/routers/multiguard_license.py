@@ -931,6 +931,19 @@ def _set_workshop_grant(
             raise HTTPException(409,
                 "Komputer ma już przypisaną licencję klienta. "
                 "Nie można równocześnie uruchomić trybu serwisowego.")
+        # WAITING alone does not prove there are no paid rights. For
+        # example, uninstall/reinstall can reset discovery status while a
+        # KeyGate licence is still attached. Never grant parallel service
+        # entitlements on such an installation.
+        paid = con.execute(text("""
+            SELECT lifecycle FROM guard.license_links
+            WHERE installation_id=:id LIMIT 1
+        """), {"id":installation_id}).mappings().first()
+        if paid:
+            raise HTTPException(
+                409, "Komputer ma zapisane powiązanie licencji klienta. "
+                     "Najpierw rozlicz lub przenieś tę licencję."
+            )
         existing = con.execute(text("""
             SELECT edition,release_channel,enabled,monitoring_profile
             FROM guard.workshop_grants
