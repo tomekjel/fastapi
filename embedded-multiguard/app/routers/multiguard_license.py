@@ -1894,6 +1894,15 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
                     "installation_id":pending["installation_id"]}).mappings().first()
         if direct:
             link = _normalize_link(dict(direct))
+            # An old installation can reappear after uninstall or restore.
+            # Never hand its provisioning secret back when OWNER has revoked
+            # the licence or its original validity period has elapsed.
+            if (link["lifecycle"] in {"REVOKED", "EXPIRED"}
+                    or (link.get("valid_until")
+                        and link["valid_until"] <= _utcnow())):
+                raise HTTPException(
+                    409, "Licencja została cofnięta lub jej ważność wygasła."
+                )
             return {
                 "assigned":True,
                 "status":pending["status"],
