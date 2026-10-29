@@ -902,6 +902,22 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
         """),{"iid":direct_id,"until":direct_link["valid_until"]})
     assert c.post("/v1/multi-guard/discovery/assignment",
                   json=discovery).status_code==200
+    # A licence in the middle of OWNER's device transfer cannot be
+    # recovered from the old computer even if its secret still matches.
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.license_links SET rebind_pending=TRUE
+            WHERE installation_id=:iid
+        """),{"iid":direct_id})
+    assert c.post("/v1/multi-guard/discovery/assignment",
+                  json=discovery).status_code==409
+    with engine.begin() as db:
+        db.execute(text("""
+            UPDATE guard.license_links SET rebind_pending=FALSE
+            WHERE installation_id=:iid
+        """),{"iid":direct_id})
+    assert c.post("/v1/multi-guard/discovery/assignment",
+                  json=discovery).status_code==200
     assert mock_calls["create"]==1
 
     # Strict idempotent renewal. Two clicks with the same ID must not
