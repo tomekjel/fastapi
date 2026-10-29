@@ -1,7 +1,6 @@
 name: OWNER KeyGate DIRECT regression no deploy
 on:
   pull_request:
-    branches: [main]
     paths:
       - embedded-multiguard/app/routers/multiguard_license.py
       - embedded-multiguard/app/routers/multiguard_remote.py
