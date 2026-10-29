@@ -1532,7 +1532,7 @@ def _owner_license_queue(queue_status: str = "WAITING") -> str:
           <div class="table-wrap"><table class="pending-computers-table"><colgroup>
               <col style="width:11%"><col style="width:24%"><col style="width:7%">
               <col style="width:15%"><col style="width:12%"><col style="width:31%">
-            </colgroup><thead><tr><th>ID</th><th>Komputer</th><th>Wersja</th>
+            </colgroup><thead><tr><th><input type="checkbox" id="mg-select-all" aria-label="Zaznacz widoczne komputery"> ID</th><th>Komputer</th><th>Wersja</th>
             <th>Stan</th><th>Ostatni kontakt</th><th>Akcje</th></tr></thead>
             <tbody>{''.join(pending_trs) or '<tr><td colspan="6" class="muted">Brak oczekujących instalacji.</td></tr>'}</tbody>
           </table></div>
@@ -1715,7 +1715,7 @@ def multi_guard_panel_computers(
                 <form method="dialog"><button type="submit">ANULUJ</button></form>
               </dialog>"""
         rows_html.append(f"""<tr data-installation="{iid}">
-          <td><a href="{detail}">{_panel_h(_short_installation_id(iid))}</a></td>
+          <td><input type="checkbox" class="mg-row-select" aria-label="Zaznacz {_panel_h(str(iid))}" value="{_panel_h(str(iid))}"> <a href="{detail}">{_panel_h(_short_installation_id(iid))}</a></td>
           <td><details class="mg-inline-name"><summary class="owner-machine-display" title="Edytuj nazwę: {name}">{name} ✎</summary><form method="post" action="/multiguard/panel/installation/{iid}/name"><input type="hidden" name="csrf_token" value="{_workshop_csrf()}"><input type="hidden" name="return_to" value="computers"><input name="friendly_name" maxlength="420" value="{_panel_h(row['friendly_name'] or '')}" placeholder="Nazwisko, telefon lub własna nazwa"><button type="submit">ZAPISZ</button></form></details>
               <span class="inventory-hardware" title="{hardware}">{hardware}</span></td>
           <td>{_panel_h(entitlement)}<span class="inventory-hardware">{_panel_h(state)}</span></td>
@@ -1764,6 +1764,23 @@ def multi_guard_panel_computers(
             </table>
           </div>
           <div class="pagination">{device_paging}</div>
+          <p id="mg-selection-status" aria-live="polite">Zaznaczono: 0 komputerów. Operacje zbiorcze wymagają osobnego potwierdzenia.</p>
+          <script>
+            (() => {{
+              const root = document.getElementById('devices');
+              const boxes = Array.from(root.querySelectorAll('.mg-row-select'));
+              const all = document.getElementById('mg-select-all');
+              const status = document.getElementById('mg-selection-status');
+              function refresh() {{
+                const count = boxes.filter(box => box.checked).length;
+                status.textContent = 'Zaznaczono: ' + count + ' komputerów. Operacje zbiorcze wymagają osobnego potwierdzenia.';
+                all.checked = boxes.length > 0 && count === boxes.length;
+                all.indeterminate = count > 0 && count < boxes.length;
+              }}
+              all.addEventListener('change', () => {{ boxes.forEach(box => box.checked = all.checked); refresh(); }});
+              boxes.forEach(box => box.addEventListener('change', refresh));
+            }})();
+          </script>
         </section>
         """
     )
