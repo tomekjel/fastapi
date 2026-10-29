@@ -31,6 +31,7 @@ from app.routers.multiguard_license import (
     _ensure_schema as _ensure_license_schema,
     _panel_auth,
     _panel_html,
+    _workshop_csrf,
 )
 
 
@@ -1692,6 +1693,21 @@ def multi_guard_panel_computers(
             (row['manufacturer'],row['model'],row['serial_number']) if v))
         entitlement = ('SERWIS · ' if row['service_mode'] else '') + str(row['plan_code'] or '—')
         state = 'Bezterminowo' if row['service_mode'] else _human_license_state(row['lifecycle'])
+        disable_service = ""
+        if row['service_mode']:
+            dialog_id = "disable-service-" + str(iid).replace("-", "")
+            disable_service = f"""
+              <button type="button" onclick="document.getElementById('{dialog_id}').showModal()">COFNIJ TRYB SERWISOWY</button>
+              <dialog id="{dialog_id}">
+                <h3>Cofnij uprawnienia serwisowe</h3>
+                <p>Komputer: {name}. Ta operacja wyłącza bezterminowy tryb serwisowy; nie usuwa urządzenia ani historii napraw.</p>
+                <form method="post" action="/multiguard/panel/workshop/{iid}/disable">
+                  <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+                  <input type="hidden" name="confirmation" value="CONFIRM_DISABLE">
+                  <button type="submit">POTWIERDŹ COFNIĘCIE</button>
+                </form>
+                <form method="dialog"><button type="submit">ANULUJ</button></form>
+              </dialog>"""
         rows_html.append(f"""<tr data-installation="{iid}">
           <td><a href="{detail}">{_panel_h(_short_installation_id(iid))}</a></td>
           <td><a class="owner-machine-display" href="{detail}#owner-name" title="Edytuj nazwę: {name}">{name} ✎</a>
@@ -1701,7 +1717,7 @@ def multi_guard_panel_computers(
           <td><span class="presence-dot presence-{presence_style}"></span>{_panel_h(presence_label)}
               <span class="inventory-hardware">{_panel_dt(row['last_seen_at'])}</span></td>
           <td>{_panel_h(row['app_version'] or '—')}</td>
-          <td><details class="mg-inline-device"><summary>OPERACJE · {_panel_h(row['service_order_count'])} napraw</summary><div><a href="{detail}">KOMPUTER / EDYTUJ NAZWĘ</a> · <a href="/multiguard/panel/licenses">LICENCJE</a> · <a href="/multiguard/panel/service-mode#service-modes">TRYB SERWISOWY / WYŁĄCZ</a></div><div><small>Cofnięcie licencji płatnej jest dostępne w zarządzaniu jej rekordem; usunięcie komputera to osobna operacja.</small></div></details>
+          <td><details class="mg-inline-device"><summary>OPERACJE · {_panel_h(row['service_order_count'])} napraw</summary><div><a href="{detail}">KOMPUTER / EDYTUJ NAZWĘ</a> · <a href="/multiguard/panel/licenses">LICENCJE</a> · <a href="/multiguard/panel/service-mode#service-modes">TRYB SERWISOWY</a>{disable_service}</div><div><small>Cofnięcie licencji płatnej jest dostępne w zarządzaniu jej rekordem; usunięcie komputera to osobna operacja.</small></div></details>
               <span class="inventory-hardware">{_panel_h(row['health_level'] or 'Brak raportu')} · {_panel_h(row['owner_priority'])}</span></td>
         </tr>""")
     if not rows_html:
