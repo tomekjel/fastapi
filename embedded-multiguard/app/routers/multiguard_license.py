@@ -1882,7 +1882,7 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
     reception_id = pending.get("assigned_reception_id")
     # Direct client licences have no reception_id. Use the stored KeyGate
     # licence identity, never a fabricated repair order.
-    if (not reception_id and pending["status"] == "ASSIGNED"
+    if (not reception_id and pending["status"] in {"ASSIGNED", "PROVISIONED"}
             and pending.get("assigned_license_id")):
         with engine.connect() as con:
             direct = con.execute(text("""
