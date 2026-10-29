@@ -807,6 +807,29 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert linked["sale_kind"]=="DIRECT"
     assert mock_calls["create"]==1
 
+    # Ambiguous KeyGate response must NEVER be retried into duplicate paid
+    # rights, even when a separate installation is still WAITING.
+    ambiguous_id=uuid.uuid4()
+    with engine.begin() as db:
+        db.execute(text("""
+            INSERT INTO guard.pending_installations(
+                installation_id,device_id,credential_sha256,app_version,
+                hostname,manufacturer,model,status
+            ) VALUES (:id,'ci-ambiguous-device',:cred,'0.3.46',
+                      'CI-Ambiguous','Lenovo','ThinkPad','WAITING')
+        """),{"id":ambiguous_id,"cred":hashlib.sha256(b"ambiguous").hexdigest()})
+        db.execute(text("""
+            INSERT INTO guard.direct_keygate_attempts(
+                installation_id,workspace_reference,edition,duration_months,
+                release_channel,state
+            ) VALUES (:id,:reference,'PRO',12,'STABLE','RECONCILIATION_REQUIRED')
+        """),{"id":ambiguous_id,"reference":"MG-DIRECT-"+ambiguous_id.hex})
+    ambiguous_url=f"/multiguard/pending-installations/{ambiguous_id}/direct"
+    conflict=c.post(ambiguous_url,json={"edition":"PRO","months":12})
+    assert conflict.status_code==409
+    assert "RECONCILIATION_REQUIRED" in conflict.text
+    assert mock_calls["create"]==1
+
     before_handover=c.post("/v1/multi-guard/discovery/assignment",json=discovery)
     ensure(before_handover.status_code,200,"Direct assignment online")
     assert before_handover.json()["assigned"] is True
