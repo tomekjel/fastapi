@@ -944,6 +944,23 @@ def _set_workshop_grant(
                 409, "Komputer ma zapisane powiązanie licencji klienta. "
                      "Najpierw rozlicz lub przenieś tę licencję."
             )
+        # Perform the service-session check under the same installation row
+        # lock as the grant mutation. An earlier handler-level check can race.
+        if not enabled:
+            has_remote_table = con.execute(text(
+                "SELECT to_regclass('guard.workshop_remote_sessions')"
+            )).scalar_one_or_none()
+            if has_remote_table:
+                outstanding = con.execute(text("""
+                    SELECT count(*) FROM guard.workshop_remote_sessions
+                    WHERE installation_id=:id
+                      AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+                """), {"id": installation_id}).scalar_one()
+                if outstanding:
+                    raise HTTPException(
+                        409, "Nie cofnięto licencji: istnieją aktywne sesje "
+                             "zdalne, których zakończenia MeshCentral nie potwierdził."
+                    )
         existing = con.execute(text("""
             SELECT edition,release_channel,enabled,monitoring_profile
             FROM guard.workshop_grants
