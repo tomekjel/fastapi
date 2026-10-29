@@ -805,6 +805,16 @@ with tempfile.TemporaryDirectory(prefix="multiservis-panel-ci-media-") as media_
     assert linked["service_device_id"] is None
     assert linked["installation_id"]==direct_id
     assert linked["sale_kind"]=="DIRECT"
+    with engine.connect() as db:
+        conversion=db.execute(text("""
+            SELECT before_state,after_state
+            FROM guard.workshop_grant_audit
+            WHERE installation_id=:id
+            ORDER BY id DESC LIMIT 1
+        """),{"id":direct_id}).mappings().one()
+        assert conversion["before_state"]["enabled"] is True
+        assert conversion["after_state"]["enabled"] is False
+        assert conversion["after_state"]["converted_to_keygate_license"]=="fake-direct-ci"
     assert mock_calls["create"]==1
 
     # Ambiguous KeyGate response must NEVER be retried into duplicate paid
