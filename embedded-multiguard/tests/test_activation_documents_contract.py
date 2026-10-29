@@ -50,6 +50,13 @@ class ActivationDocumentContract(unittest.TestCase):
     def test_missing_documents(self):
         self.assert_rejected([])
 
+    def test_empty_string_config(self):
+        self.assert_rejected("")
+        self.assert_rejected("   ")
+
+    def test_json_empty_list(self):
+        self.assert_rejected("[]")
+
     def test_wrong_document_counts(self):
         for n in (1, 2, 4):
             with self.subTest(count=n):
