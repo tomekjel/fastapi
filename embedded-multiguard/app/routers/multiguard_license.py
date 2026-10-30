@@ -4855,3 +4855,125 @@ def panel_change_license_plan(link_id: uuid.UUID,
         f"/multiguard/panel/license/manage/{link_id}",
         status_code=303,headers={"Cache-Control":"private, no-store"},
     )
+
+
+# OWNER licensing grid v1: separate preview route while transactional mutations
+# continue through the existing audited endpoints.
+@router.get("/multiguard/panel/licenses-grid", response_class=HTMLResponse)
+def panel_licenses_grid(_: None = Depends(_panel_auth)):
+    _ensure_schema()
+    with engine.connect() as conn:
+        links = conn.execute(text("""
+            SELECT id, installation_id, reception_number, plan_code,
+                   lifecycle, sale_kind, valid_until, release_channel,
+                   keygate_license_id
+            FROM guard.license_links
+            ORDER BY valid_until NULLS LAST, id
+            LIMIT 500
+        """)).mappings().all()
+    trs = []
+    for row in links:
+        lid = _panel_escape(str(row["id"]))
+        iid = _panel_escape(str(row["installation_id"] or ""))
+        license_id = _panel_escape(str(row["keygate_license_id"] or ""))
+        reception = _panel_escape(str(row["reception_number"] or ""))
+        plan = "Pro" if row["plan_code"] == "multi_guard_pro" else "Standard"
+        kind = "Serwisowa" if row["sale_kind"] == "SERVICE" else "Czasowa"
+        until = row["valid_until"]
+        expiry = _panel_escape(until.strftime("%Y-%m-%d") if until else "—")
+        state = _panel_escape(str(row["lifecycle"]))
+        channel = _panel_escape(str(row["release_channel"] or "—"))
+        css = "grid-on" if row["lifecycle"] == "ACTIVE" else "grid-off"
+        details = f"/multiguard/panel/license/manage/{lid}"
+        search = _panel_escape(" ".join([iid, license_id, reception, plan, kind, state]))
+        trs.append(f"""<tr class="{css}" data-search="{search}" data-state="{state}"
+            data-expiry="{expiry}">
+          <td title="{iid}"><span class="ellipsis">{iid}</span><small>ID komputera</small></td>
+          <td title="{license_id}"><span class="ellipsis">{license_id}</span><small>ID licencji</small></td>
+          <td>—<small>Brak danych klienta w powiązaniu</small></td>
+          <td>{reception or 'Bez zlecenia'}</td>
+          <td>{plan}<small>{state}</small></td>
+          <td>{kind}</td>
+          <td>{expiry}<small>{channel}</small></td>
+          <td><a href="{details}">Zarządzaj</a></td>
+        </tr>""")
+    page = """<section class="card">
+      <h1>Licencje — widok tabelaryczny</h1>
+      <p class="muted">Pierwszy etap nowej tabeli OWNER. Podgląd danych rzeczywistych;
+      zmiany licencji pozostają w sprawdzonych formularzach do czasu wdrożenia
+      bezpiecznego zapisywania wierszy.</p>
+      <div class="grid-filters">
+        <label>Szukaj<input id="grid-find" type="search" placeholder="ID licencji, komputera, zlecenie..."></label>
+        <button type="button" data-filter="all">Wszystkie</button>
+        <button type="button" data-filter="ACTIVE">Aktywne</button>
+        <button type="button" data-filter="soon">Kończące się</button>
+        <label id="grid-period-wrap" hidden>W ciągu <select id="grid-period"><option value="30">30 dni</option><option value="14">14 dni</option><option value="7">7 dni</option></select></label>
+      </div>
+      <div class="table-wrap"><table class="grid-licenses" id="grid-licenses">
+      <thead><tr><th>ID komputera</th><th>ID licencji</th><th>Klient</th>
+      <th>Zlecenie</th><th>Edycja / stan</th><th>Licencja</th>
+      <th>Ważna do / kanał</th><th>Operacje</th></tr></thead>
+      <tbody>""" + "".join(trs) + """</tbody></table></div>
+      <p class="muted" id="grid-count"></p>
+    </section>
+    <style>
+    .grid-filters{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:12px 0}
+    .grid-filters label{display:grid;gap:4px}
+    .grid-filters input{width:290px;max-width:90vw}
+    .grid-filters button{padding:8px 12px}
+    .grid-licenses{table-layout:fixed;min-width:1100px;width:100%;border-collapse:collapse}
+    .grid-licenses th{position:relative;user-select:none}
+    .grid-licenses th:after{content:"";position:absolute;top:0;right:0;height:100%;width:6px;cursor:col-resize}
+    .grid-licenses td{vertical-align:middle;overflow:hidden;white-space:nowrap}
+    .grid-licenses td small{display:block;font-size:10px;opacity:.7}
+    .grid-licenses .ellipsis{display:block;overflow:hidden;text-overflow:ellipsis}
+    .grid-licenses .grid-on{border-left:3px solid #2d9d70}
+    .grid-licenses .grid-off{border-left:3px solid #b68a55}
+    </style>
+    <script>
+    (function(){
+      const table=document.getElementById('grid-licenses');
+      const rows=[...table.tBodies[0].rows];
+      const input=document.getElementById('grid-find');
+      const period=document.getElementById('grid-period');
+      const wrap=document.getElementById('grid-period-wrap');
+      const count=document.getElementById('grid-count');
+      let filter='all';
+      function apply(){
+        const text=input.value.trim().toLowerCase();
+        const today=new Date(),dayMs=86400000;
+        let visible=0;
+        for(const r of rows){
+          const expiry=r.dataset.expiry;
+          const left=expiry==='—'?Infinity:(new Date(expiry+'T23:59:59')-today)/dayMs;
+          const passes=filter==='all'||(filter==='ACTIVE'&&r.dataset.state==='ACTIVE')||
+            (filter==='soon'&&r.dataset.state==='ACTIVE'&&left>=0&&left<=Number(period.value));
+          r.hidden=!(passes&&r.dataset.search.toLowerCase().includes(text));
+          if(!r.hidden)visible++;
+        }
+        count.textContent='Wyświetlono: '+visible+' z '+rows.length;
+      }
+      input.addEventListener('input',apply);
+      period.addEventListener('change',apply);
+      document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{
+        filter=button.dataset.filter;wrap.hidden=filter!=='soon';apply();
+      }));
+      // Persist per-column widths for OWNER browser without affecting data.
+      [...table.tHead.rows[0].cells].forEach((th,i)=>{
+        const key='ms-grid-column-'+i;
+        const saved=localStorage.getItem(key);
+        if(saved)th.style.width=saved+'px';
+        th.addEventListener('pointerdown',e=>{
+          if(th.getBoundingClientRect().right-e.clientX>9)return;
+          const start=e.clientX, width=th.getBoundingClientRect().width;
+          const move=ev=>{th.style.width=Math.max(72,width+ev.clientX-start)+'px'};
+          const stop=()=>{localStorage.setItem(key,String(Math.round(th.getBoundingClientRect().width)));
+            window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop)};
+          window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop);
+          e.preventDefault();
+        });
+      });
+      apply();
+    })();
+    </script>"""
+    return HTMLResponse(_panel_html(page), headers={"Cache-Control":"private, no-store"})
