@@ -5402,7 +5402,8 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
                    l.keygate_license_id,
                    COALESCE(sel.selected_mode, 'CLIENT') AS owner_mode,
                    grant.enabled AS service_enabled,
-                   grant.valid_until AS service_valid_until
+                   grant.valid_until AS service_valid_until,
+                   grant.release_channel AS service_channel
             FROM guard.license_links l
             LEFT JOIN guard.owner_entitlement_selections sel
               ON sel.installation_id=l.installation_id
@@ -5439,14 +5440,16 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
                             else row["lifecycle"] == "ACTIVE"
                             and row["valid_until"] is not None
                             and row["valid_until"] > _utcnow())
-        kind = ("Brak" if not effective_active
-                else "Serwisowa" if selected_mode == "SERVICE"
-                else "Czasowa")
+        kind = ("Serwisowa" if selected_mode == "SERVICE"
+                else "Czasowa" if effective_active else "Brak")
         from zoneinfo import ZoneInfo
         expiry = _panel_escape(until.astimezone(ZoneInfo("Europe/Warsaw")).strftime("%Y-%m-%d") if until else "Bezterminowa" if service_active else "—")
         state = "ACTIVE" if effective_active else "INACTIVE"
-        channel = _panel_escape(str(row["release_channel"] or "—"))
-        css = "grid-on" if row["lifecycle"] == "ACTIVE" else "grid-off"
+        channel = _panel_escape(str(
+            (row["service_channel"] if selected_mode == "SERVICE"
+             else row["release_channel"]) or "—"
+        ))
+        css = "grid-on" if effective_active else "grid-off"
         status_label = ("Aktywna" if effective_active
                         else "Wygasła" if until is not None and until <= _utcnow()
                         else "Nieaktywna")
@@ -5653,7 +5656,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         let visible=0;
         for(const r of rows){
           const expiry=r.dataset.expiry;
-          const left=expiry==='—'?Infinity:(new Date(expiry+'T23:59:59')-today)/dayMs;
+          const left=(expiry==='—'||expiry==='Bezterminowa')?Infinity:(new Date(expiry+'T23:59:59')-today)/dayMs;
           const passes=filter==='all'||filter==='online'&&r.dataset.online==='true'||(filter==='ACTIVE'&&r.dataset.state==='ACTIVE')||
             (filter==='soon'&&r.dataset.state==='ACTIVE'&&left>=0&&left<=Number(period.value));
           r.hidden=!(passes&&r.dataset.search.toLowerCase().includes(text));
@@ -5661,7 +5664,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         }
         count.textContent='Wyświetlono: '+visible+' z '+rows.length;
         document.getElementById('grid-soon').textContent=rows.filter(r=>{
-          const e=r.dataset.expiry;const l=e==='—'?Infinity:(new Date(e+'T23:59:59')-today)/dayMs;
+          const e=r.dataset.expiry;const l=(e==='—'||e==='Bezterminowa')?Infinity:(new Date(e+'T23:59:59')-today)/dayMs;
           return r.dataset.state==='ACTIVE'&&l>=0&&l<=Number(period.value)
         }).length;
       }
