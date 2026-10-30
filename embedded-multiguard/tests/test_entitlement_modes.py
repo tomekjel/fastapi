@@ -108,6 +108,24 @@ class SixLicenseVariantsTests(unittest.TestCase):
         self.assertTrue(license_within_period("PERPETUAL", None, NOW))
         self.assertFalse(license_within_period("PERPETUAL", LATER, NOW))
 
+    def test_paid_perpetual_must_be_explicit_not_inferred(self):
+        self.assertFalse(paid_pro_authorized(
+            "CLIENT", edition="PRO", lifecycle="ACTIVE",
+            valid_until=None, now=NOW,
+        ))
+        self.assertTrue(paid_pro_authorized(
+            "CLIENT", edition="PRO", lifecycle="ACTIVE",
+            valid_until=None, now=NOW, period="PERPETUAL",
+        ))
+        self.assertFalse(paid_pro_authorized(
+            "SERVICE", edition="PRO", lifecycle="ACTIVE",
+            valid_until=None, now=NOW, period="PERPETUAL",
+        ))
+        self.assertFalse(paid_pro_authorized(
+            "CLIENT", edition="STANDARD", lifecycle="ACTIVE",
+            valid_until=None, now=NOW, period="PERPETUAL",
+        ))
+
     def test_missing_expiry_does_not_make_paid_pro_perpetual(self):
         self.assertFalse(license_within_period("TIMED", None, NOW))
 

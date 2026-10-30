@@ -5044,8 +5044,7 @@ def _owner_select_effective_mode(
         if previous:
             if (previous["license_link_id"] != link_id
                     or previous["target_mode"] != target_record
-                    or (target_mode == "SERVICE"
-                        and previous["target_valid_until"] != service_end)):
+):
                 raise HTTPException(409, "Identyfikator operacji został już wykorzystany.")
             if previous["state"] == "COMPLETED":
                 applied = con.execute(text("""
@@ -5053,6 +5052,14 @@ def _owner_select_effective_mode(
                     WHERE installation_id=:iid
                 """), {"iid": iid}).scalar_one_or_none()
                 if applied == target_mode:
+                    if target_mode == "SERVICE":
+                        current_deadline = con.execute(text("""
+                            SELECT valid_until FROM guard.workshop_grants
+                            WHERE installation_id=:iid
+                        """), {"iid": iid}).scalar_one_or_none()
+                        if current_deadline != previous["target_valid_until"]:
+                            raise HTTPException(409,
+                                "Termin serwisowy zmieniono po poprzedniej operacji.")
                     return
                 raise HTTPException(409,
                     "Identyfikator odnosi się do poprzedniego trybu.")

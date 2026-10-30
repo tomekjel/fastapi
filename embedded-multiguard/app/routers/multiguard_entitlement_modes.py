@@ -203,17 +203,18 @@ def paid_pro_authorized(
     lifecycle: str,
     valid_until: datetime | None,
     now: datetime,
+    period: str = "TIMED",
 ) -> bool:
-    """Paid Pro remote support ALWAYS requires a separate per-session consent."""
-    current = _utc_aware(now)
-    end = _utc_aware(valid_until)
+    """Pro remote requires verified current CLIENT rights AND per-session consent.
+
+    Perpetual rights are explicit (period=PERPETUAL). A legacy missing expiry
+    never converts a paid timed licence into a perpetual one.
+    """
     return bool(
         mode == "CLIENT"
         and edition == "PRO"
         and lifecycle == "ACTIVE"
-        and current is not None
-        and end is not None
-        and current < end
+        and license_within_period(period, valid_until, now)
     )
 
 
