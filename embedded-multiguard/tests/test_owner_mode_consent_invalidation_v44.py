@@ -59,12 +59,23 @@ class OwnerConsentInvalidationTests(unittest.TestCase):
         self.assertEqual(once,again)
 
     def test_partial_or_weakened_security_fails_closed(self):
-        with self.assertRaisesRegex(RuntimeError,"Partial"):
-            stage.patch(BEFORE.replace(
-                stage.SCHEMA_ANCHOR,stage.SCHEMA_CHANGE,1))
-        with self.assertRaisesRegex(RuntimeError,"Missing audited"):
-            stage.patch(BEFORE.replace("mesh_public_id IS NOT NULL",
-                                       "mesh_public_id IS NULL",1))
+        original = stage.target_text(BEFORE)
+        partial = BEFORE.replace(
+            original,
+            original.replace(stage.SCHEMA_ANCHOR, stage.SCHEMA_CHANGE, 1),
+            1,
+        )
+        with self.assertRaisesRegex(RuntimeError, "Partial"):
+            stage.patch(partial)
+
+        weakened = BEFORE.replace(
+            original,
+            original.replace("mesh_public_id IS NOT NULL",
+                             "mesh_public_id IS NULL", 1),
+            1,
+        )
+        with self.assertRaisesRegex(RuntimeError, "Missing audited"):
+            stage.patch(weakened)
 
     def test_consent_revoked_before_mode_selection(self):
         after,_=stage.patch(BEFORE)
