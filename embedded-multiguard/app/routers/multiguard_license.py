@@ -5231,6 +5231,7 @@ def panel_grid_save(
     term_choice: str = Form("KEEP"),
     term_date: str = Form(""),
     term_edit_preview: str = Form("0"),
+    payment_confirmed: str = Form(""),
     _: None = Depends(_panel_auth),
 ):
     """Save one grid row. Verify all local inputs before any KeyGate mutation."""
@@ -5244,17 +5245,16 @@ def panel_grid_save(
     choice = term_choice.strip().upper()
     if choice not in {"KEEP", "3", "6", "12", "CALENDAR", "PERPETUAL"}:
         raise HTTPException(400, "Nieprawidłowy wybór okresu.")
-    if term_edit_preview == "1" and (choice != "KEEP" or
-                                     target_edition.strip().upper() == "SERVICE"):
-        raise HTTPException(409,
-            "Nowy rodzaj licencji i kalendarz nie są jeszcze aktywne w backendzie. "
-            "Obecna licencja pozostała bez zmian.")
+    if term_edit_preview not in {"0", "1"}:
+        raise HTTPException(400, "Nieprawidłowy formularz okresu.")
+    if choice != "CALENDAR" and term_date.strip():
+        raise HTTPException(400, "Data dotyczy wyłącznie wyboru kalendarzowego.")
     name = " ".join(friendly_name.strip().split())
     if len(name) > 420 or any(ord(ch) < 32 for ch in name):
         raise HTTPException(400, "Nieprawidłowa nazwa komputera.")
     edition = target_edition.strip().upper()
     initial = original_edition.strip().upper()
-    if edition not in {"STANDARD", "PRO"} or initial not in {"STANDARD", "PRO"}:
+    if edition not in {"STANDARD", "PRO", "SERVICE"} or initial not in {"STANDARD", "PRO", "SERVICE"}:
         raise HTTPException(400, "Nieprawidłowa edycja.")
     _ensure_schema()
     _owner_labels_schema()
@@ -5266,9 +5266,20 @@ def panel_grid_save(
         if not link or not link["installation_id"]:
             raise HTTPException(404, "Nie znaleziono komputera.")
         iid = link["installation_id"]
-        current_edition = "PRO" if link["plan_code"] == "multi_guard_pro" else "STANDARD"
+        paid_edition = "PRO" if link["plan_code"] == "multi_guard_pro" else "STANDARD"
+        mode = _owner_effective_entitlement_mode(con, iid)
+        current_edition = "SERVICE" if mode == "SERVICE" else paid_edition
+        if mode not in ("SERVICE", "CLIENT"):
+            raise HTTPException(409, "Nie ma aktywnego trybu do edycji.")
         if current_edition != initial:
             raise HTTPException(409, "Edycja zmieniła się. Odśwież tabelę.")
+        if (expected_end or "") != (_iso(link["valid_until"]) or ""):
+            raise HTTPException(409, "Termin licencji zmienił się. Odśwież tabelę.")
+        service_end = con.execute(text("""
+            SELECT valid_until FROM guard.workshop_grants
+            WHERE installation_id=:iid
+        """), {"iid": iid}).scalar_one_or_none()
+
         detected = con.execute(text("""
             SELECT hostname, manufacturer, model FROM guard.pending_installations
             WHERE installation_id=:iid
@@ -5281,11 +5292,78 @@ def panel_grid_save(
     current_name = str(stored_name or owner_detected_name(detected or {}))
     if current_name != original_name:
         raise HTTPException(409, "Nazwa zmieniła się. Odśwież tabelę.")
+    from app.routers.multiguard_entitlement_modes import plan_grid_license_change
+    try:
+        decision = plan_grid_license_change(
+            current_mode=mode,
+            current_edition=current_edition,
+            target_edition=edition,
+            term_choice=choice,
+            term_date=term_date,
+            now=_utcnow(),
+            paid_valid_until=link["valid_until"],
+            service_valid_until_current=service_end,
+            paid_edition=paid_edition,
+            explicit_paid_perpetual_supported=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    action = decision["action"]
     change_name = name != current_name
-    change_plan = edition != initial
-    if not change_name and not change_plan:
+    if action != "NONE" and change_name:
+        raise HTTPException(409,
+            "Zmień nazwę komputera oddzielnie, żeby zapis licencji był niezależny.")
+    # Never turn a dropdown preview into an unapproved KeyGate operation.
+    if action in ("PAID_EXTEND", "PAID_CALENDAR", "PAID_PERPETUAL"):
+        if str(_setting("MULTIGUARD_OWNER_GRID_PAID_TERM_ENABLED", "false")).lower() not in ("true","1","yes"):
+            raise HTTPException(409, "Zapis okresu klienta nie jest jeszcze włączony.")
+    if action in ("ENTER_SERVICE", "SERVICE_TERM", "RESTORE_PAID"):
+        if str(_setting("MULTIGUARD_OWNER_GRID_SERVICE_ENABLED", "false")).lower() not in ("true","1","yes"):
+            raise HTTPException(409, "Przełączenie trybu serwisowego nie jest jeszcze włączone.")
+
+    if action == "PAID_EXTEND":
+        if payment_confirmed != "yes":
+            raise HTTPException(400, "Potwierdź otrzymanie płatności za przedłużenie.")
+        _extend_active_license(
+            uuid.UUID(str(iid)), int(choice), operation_id,
+            source="WEB", payment_confirmed=True, by_installation=True,
+            expected_end=link["valid_until"],
+        )
+        return RedirectResponse("/multiguard/panel/licenses-grid", status_code=303,
+                                headers={"Cache-Control":"private, no-store"})
+
+    if action == "PAID_CALENDAR":
+        new_end = decision["valid_until"]
+        if new_end is None or link["valid_until"] is None:
+            raise HTTPException(409, "Brak poprawnego okresu licencji.")
+        if new_end >= link["valid_until"]:
+            raise HTTPException(409,
+                "Data późniejsza wymaga odrębnego przedłużenia z potwierdzeniem płatności.")
+        _shorten_owner_license(link_id, operation_id, link["valid_until"],
+                               new_end, "Zmiana daty przez OWNER w tabeli")
+        return RedirectResponse("/multiguard/panel/licenses-grid", status_code=303,
+                                headers={"Cache-Control":"private, no-store"})
+
+    if action in ("ENTER_SERVICE", "SERVICE_TERM", "RESTORE_PAID"):
+        # Independent service grant: never revoke/reissue the paid KeyGate key.
+        # The underlying transaction checks prior mode, active Mesh shares,
+        # customer plan operations, and the original paid expiry.
+        target_mode = decision["mode"]
+        _owner_select_effective_mode(
+            link_id, operation_id, target_mode, mode,
+            "Zmiana trybu licencji w tabeli OWNER",
+            choice if target_mode == "SERVICE" else "",
+            term_date if target_mode == "SERVICE" else "",
+        )
+        return RedirectResponse("/multiguard/panel/licenses-grid", status_code=303,
+                                headers={"Cache-Control":"private, no-store"})
+
+    if action == "PAID_PERPETUAL":
+        raise HTTPException(409, "KeyGate nie potwierdził obsługi bezterminowej licencji płatnej.")
+    if action == "NONE" and not change_name:
         return RedirectResponse("/multiguard/panel/licenses-grid", status_code=303)
-    if change_plan:
+    if action == "PAID_EDITION":
         _owner_change_plan(link_id, operation_id, _license_operation_date(expected_end),
                            edition, "Zmiana edycji w tabeli OWNER")
     if change_name:
