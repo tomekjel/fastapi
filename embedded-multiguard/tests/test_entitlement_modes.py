@@ -17,6 +17,7 @@ from app.routers.multiguard_entitlement_modes import (  # noqa: E402
     calendar_valid_until,
     service_valid_until,
     owner_valid_until,
+    plan_grid_license_change,
 )
 
 NOW = datetime(2026, 10, 30, 16, 0, tzinfo=timezone.utc)
@@ -235,6 +236,113 @@ class SixLicenseVariantsTests(unittest.TestCase):
             ).astimezone(__import__("zoneinfo").ZoneInfo("Europe/Warsaw")).strftime("%Y-%m-%d %H:%M"),
             "2026-11-16 00:00",
         )
+
+class GridSavePlanningTests(unittest.TestCase):
+    """No SQL, KeyGate or remote calls in the Save decision engine."""
+
+    def plan(self, **overrides):
+        args = dict(
+            current_mode="CLIENT", current_edition="PRO",
+            target_edition="PRO", term_choice="KEEP", term_date="",
+            now=NOW, paid_valid_until=LATER,
+        )
+        args.update(overrides)
+        return plan_grid_license_change(**args)
+
+    def test_existing_licence_keep_means_no_operation(self):
+        result = self.plan()
+        self.assertEqual(result["action"], "NONE")
+        self.assertEqual(result["valid_until"], LATER)
+
+    def test_paid_edition_change_preserves_keygate_expiry(self):
+        result = self.plan(target_edition="STANDARD")
+        self.assertEqual(result["action"], "PAID_EDITION")
+        self.assertEqual(result["valid_until"], LATER)
+
+    def test_paid_extension_adds_to_existing_term_not_current_date(self):
+        old = datetime(2026, 12, 30, 16, tzinfo=timezone.utc)
+        result = self.plan(
+            paid_valid_until=old, term_choice="12",
+        )
+        self.assertEqual(result["action"], "PAID_EXTEND")
+        self.assertEqual(result["valid_until"],
+                         datetime(2027, 12, 30, 16, tzinfo=timezone.utc))
+
+    def test_client_to_service_requires_explicit_term(self):
+        with self.assertRaises(ValueError):
+            self.plan(target_edition="SERVICE")
+        result = self.plan(target_edition="SERVICE", term_choice="PERPETUAL")
+        self.assertEqual(result["action"], "ENTER_SERVICE")
+        self.assertEqual(result["mode"], "SERVICE")
+        self.assertIsNone(result["valid_until"])
+
+    def test_service_calendar_is_local_end_of_day(self):
+        result = self.plan(
+            target_edition="SERVICE",
+            term_choice="CALENDAR", term_date="2026-11-15",
+        )
+        self.assertEqual(result["valid_until"],
+                         calendar_valid_until(date(2026, 11, 15), now=NOW))
+
+    def test_service_change_does_not_modify_paid_term(self):
+        result = self.plan(
+            current_mode="SERVICE", current_edition="SERVICE",
+            target_edition="SERVICE", term_choice="3",
+            service_valid_until_current=LATER,
+        )
+        self.assertEqual(result["action"], "SERVICE_TERM")
+        self.assertEqual(result["valid_until"],
+                         datetime(2027, 1, 30, 16, tzinfo=timezone.utc))
+        self.assertEqual(self.plan(
+            current_mode="SERVICE", current_edition="SERVICE",
+            target_edition="SERVICE", term_choice="KEEP",
+            service_valid_until_current=LATER,
+        )["valid_until"], LATER)
+
+    def test_return_to_paid_does_not_change_paid_expiry(self):
+        result = self.plan(
+            current_mode="SERVICE", current_edition="SERVICE",
+            target_edition="PRO", term_choice="KEEP",
+        )
+        self.assertEqual(result["action"], "RESTORE_PAID")
+        self.assertEqual(result["valid_until"], LATER)
+
+    def test_paid_perpetual_requires_keygate_capability(self):
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            self.plan(term_choice="PERPETUAL")
+        result = self.plan(
+            term_choice="PERPETUAL",
+            explicit_paid_perpetual_supported=True,
+        )
+        self.assertEqual(result["action"], "PAID_PERPETUAL")
+        self.assertIsNone(result["valid_until"])
+
+    def test_date_picker_and_paid_change_edition_are_independent(self):
+        with self.assertRaises(ValueError):
+            self.plan(target_edition="STANDARD", term_choice="12")
+        result = self.plan(
+            term_choice="CALENDAR", term_date="2026-11-15",
+        )
+        self.assertEqual(result["action"], "PAID_CALENDAR")
+        self.assertEqual(result["valid_until"],
+                         calendar_valid_until(date(2026, 11, 15), now=NOW))
+
+    def test_invalid_or_stale_inputs_fail_before_mutations(self):
+        cases = (
+            dict(current_mode="NONE"),
+            dict(current_mode="SERVICE", current_edition="PRO"),
+            dict(current_edition="SERVICE"),
+            dict(target_edition="INVALID"),
+            dict(term_choice="KEEP", term_date="2026-11-15"),
+            dict(target_edition="SERVICE", term_choice="3",
+                 term_date="2026-11-15"),
+            dict(term_choice="12", paid_valid_until=EARLIER),
+        )
+        for options in cases:
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                self.plan(**options)
+
+
 
 
 class EntitlementModeTests(unittest.TestCase):
