@@ -554,11 +554,31 @@ class CompactGridPickerTests(unittest.TestCase):
         self.assertIn("class=\"mg-grid-term-picker\"", body)
         self.assertIn("chosenDate.hidden=!calendar", body)
 
-    def test_unwired_period_cannot_be_silently_saved(self):
+    def test_new_period_requires_explicit_owner_switches(self):
         body = self.function_source("panel_grid_save")
-        self.assertIn('term_edit_preview == "1"', body)
-        self.assertIn('choice != "KEEP"', body)
+        self.assertIn("plan_grid_license_change(", body)
+        self.assertIn("MULTIGUARD_OWNER_GRID_PAID_TERM_ENABLED", body)
+        self.assertIn("MULTIGUARD_OWNER_GRID_SERVICE_ENABLED", body)
+        self.assertIn("MULTIGUARD_MODE_SWITCH_ENABLED", body)
         self.assertIn('raise HTTPException(409', body)
+        self.assertNotIn("_keygate_create_license(", body)
+        self.assertNotIn("_keygate_revoke(", body)
+
+    def test_paid_extension_rechecks_original_expiry_and_payment(self):
+        source = self.function_source("_extend_active_license")
+        self.assertIn("expected_end: datetime | None = None", source)
+        self.assertIn("if expected_end is not None and end != expected_end", source)
+        save = self.function_source("panel_grid_save")
+        self.assertIn('if payment_confirmed != "yes":', save)
+        self.assertIn('expected_end=link["valid_until"]', save)
+        picker = self.function_source("panel_licenses_grid")
+        self.assertIn('name="payment_confirmed"', picker)
+        self.assertIn("payment.required=needed", picker)
+
+    def test_no_paid_perpetual_without_keygate_support(self):
+        save = self.function_source("panel_grid_save")
+        self.assertIn("explicit_paid_perpetual_supported=False", save)
+        self.assertIn('action == "PAID_PERPETUAL"', save)
 
 
 class WorkshopRemoteSourceTests(unittest.TestCase):
