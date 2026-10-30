@@ -98,7 +98,13 @@ def prepare(live,old,new):
     for protected in ("panel_licenses_grid","panel_grid_archive_license_safe",
                       "panel_revoke_license","panel_grid_save_name",
                       "panel_grid_save_channel","panel_grid_extend_license"):
-        if canon(live,protected)!=canon(combined,protected):
+        before_names={x.name for x in ast.parse(live).body
+                      if isinstance(x,(ast.FunctionDef,ast.AsyncFunctionDef))}
+        after_names={x.name for x in ast.parse(combined).body
+                     if isinstance(x,(ast.FunctionDef,ast.AsyncFunctionDef))}
+        if (protected in before_names)!=(protected in after_names):
+            raise RuntimeError("Protected V4.4 function inserted/removed: "+protected)
+        if protected in before_names and canon(live,protected)!=canon(combined,protected):
             raise RuntimeError("Unexpected modified V4.4 function: "+protected)
     if "STAGE2 HARD STOP: DO NOT ALLOW OWNER RIGHTS TRANSITIONS YET." not in combined:
         raise RuntimeError("Stage2 mode-switch lock not preserved")
