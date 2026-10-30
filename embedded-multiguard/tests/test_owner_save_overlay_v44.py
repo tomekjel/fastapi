@@ -10,7 +10,8 @@ stage=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(stage)
 
 new=(ROOT/"app/routers/multiguard_license.py").read_text()
-fixture=new.replace("def panel_grid_save(", "def panel_grid_save_row(",1)
+fixture=("# STAGE2 HARD STOP: DO NOT ALLOW OWNER RIGHTS TRANSITIONS YET.\n"
+         + new.replace("def panel_grid_save(", "def panel_grid_save_row(",1))
 
 
 class StagedGridSaveTests(unittest.TestCase):
