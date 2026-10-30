@@ -282,8 +282,13 @@ def verify_real_v44_rows():
     import importlib
     import sys
     sys.path.insert(0,str(ROOT))
+    from unittest.mock import patch
     module=importlib.import_module("app.routers.multiguard_license")
-    response=module.panel_licenses_grid()
+    # Manual CLI runs do not inherit the FastAPI systemd authentication secret.
+    # Replace only the CSRF *renderer* in this short-lived Python process.
+    # Never read, print, rewrite or disable production authentication config.
+    with patch.object(module, "_workshop_csrf", return_value="V44-CHECK-ONLY"):
+        response=module.panel_licenses_grid()
     if response.status_code != 200 or not hasattr(response,"body"):
         raise RuntimeError("Nie można wyrenderować produkcyjnej tabeli V4.4.")
     original=response.body.decode("utf-8")
