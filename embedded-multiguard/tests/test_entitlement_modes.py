@@ -116,5 +116,62 @@ class EntitlementModeTests(unittest.TestCase):
         self.assertFalse(self.paid("CLIENT", lifecycle="PENDING_ACCEPTANCE"))
 
 
+class IntegrationSourceSafetyTests(unittest.TestCase):
+    """Guardrails against exposing partial live conversion or mutating KeyGate."""
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+        root = Path(__file__).resolve().parents[1]
+        cls.license_source = (root / "app/routers/multiguard_license.py").read_text()
+        cls.remote_source = (root / "app/routers/multiguard_remote.py").read_text()
+        cls.tree = ast.parse(cls.license_source)
+
+    def find_function(self, name):
+        import ast
+        return next(n for n in self.tree.body
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and n.name == name)
+
+    def test_owner_mode_switch_never_calls_keygate_mutators(self):
+        import ast
+        func = self.find_function("_owner_select_effective_mode")
+        calls = [n.func.id for n in ast.walk(func)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+        self.assertFalse(any(x.startswith("_keygate") for x in calls))
+        self.assertNotIn("_set_workshop_grant", calls)
+
+    def test_owner_route_stays_disabled_by_default(self):
+        import ast
+        fn = self.find_function("panel_owner_select_effective_mode")
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name) and n.func.id == "_setting"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([x.value for x in calls[0].args], [
+            "MULTIGUARD_MODE_SWITCH_ENABLED", "false"
+        ])
+
+    def test_owner_mode_requires_remote_session_shutdown(self):
+        fn = self.find_function("_owner_select_effective_mode")
+        import ast
+        body = ast.get_source_segment(self.license_source, fn)
+        self.assertIn("guard.remote_sessions", body)
+        self.assertIn("guard.workshop_remote_sessions", body)
+        self.assertIn("mesh_public_id IS NOT NULL", body)
+        self.assertIn("owner_license_mode_transitions", body)
+
+    def test_paid_refresh_checks_selection_before_keygate_get(self):
+        import ast
+        fn = self.find_function("refresh")
+        body = ast.get_source_segment(self.license_source, fn)
+        self.assertLess(body.index("_owner_effective_entitlement_mode"),
+                        body.index("_keygate_license"))
+
+    def test_paid_remote_verifies_client_mode_and_never_unattended(self):
+        self.assertIn(') != "CLIENT":', self.remote_source)
+        self.assertIn('def _has_verified_service_remote_pro', self.remote_source)
+        self.assertIn('return False', self.remote_source)
+
+
 if __name__ == "__main__":
     unittest.main()
