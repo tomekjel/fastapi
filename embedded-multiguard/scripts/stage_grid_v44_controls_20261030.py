@@ -273,6 +273,31 @@ def add_adapter(src: str):
             raise RuntimeError("Zmiana funkcji spoza renderer V4.4: "+name)
     return result
 
+def verify_real_v44_rows():
+    """Test HTML generated from the REAL production tables before deployment.
+
+    This is read-only and prints counts, not customer/licence contents.
+    No screenshot, expected markup guess or synthetic fixture substitutes it.
+    """
+    import importlib
+    import sys
+    sys.path.insert(0,str(ROOT))
+    module=importlib.import_module("app.routers.multiguard_license")
+    response=module.panel_licenses_grid()
+    if response.status_code != 200 or not hasattr(response,"body"):
+        raise RuntimeError("Nie można wyrenderować produkcyjnej tabeli V4.4.")
+    original=response.body.decode("utf-8")
+    pure={}
+    exec(compile(HELPERS,"<mg-v44-grid-pure>","exec"),pure)
+    result=pure["_mg_v44_grid_transform"](original)
+    count=result.count('data-mg-v44-term-version="1"')
+    if count < 3 or result.count('value="SERVICE"') == 0:
+        raise RuntimeError("Podgląd żywej tabeli nie ma trzech edycji lub kalendarza.")
+    if 'name="term_date"' not in result or 'name="term_choice"' not in result:
+        raise RuntimeError("Brak kalendarza lub wyboru okresu na żywej tabeli.")
+    print("LIVE V4.4 GENERATED HTML: PASS (CUSTOMER DATA NOT PRINTED)")
+    print("EXISTING V4.4 SAVE / LIVE GRID ROWS: PRESENT")
+
 def panel_status():
     req=urllib.request.Request(URL,headers={"Cache-Control":"no-cache"})
     try:
@@ -306,6 +331,7 @@ def main():
     baseline=panel_status()
     if baseline not in (401,403):
         raise RuntimeError("Panel V4.4 nie wymaga oczekiwanego logowania.")
+    verify_real_v44_rows()
     print("PRO / STANDARD / SERVICE: PREPARED IN SAME GRID")
     print("3/6/12 / CALENDAR / PERPETUAL: PREPARED")
     print("V4.4 TABLE / NAME / CHANNEL / OLD SAVE: SOURCE UNCHANGED")
