@@ -118,6 +118,48 @@ def license_within_period(
     return False
 
 
+
+def service_valid_until(
+    choice: str, calendar_day: str, *, now: datetime,
+) -> datetime | None:
+    """Explicit service term; None is permitted ONLY for selected PERPETUAL.
+
+    CALENDAR means through the end of the selected day in Europe/Warsaw.
+    Fixed month terms use the current UTC instant and clamp month-end days.
+    This pure policy never touches an existing paid KeyGate expiry.
+    """
+    current = _utc_aware(now)
+    if current is None:
+        raise ValueError("Current UTC time is required")
+    selected = choice.strip().upper()
+    raw_day = calendar_day.strip()
+    if selected == "PERPETUAL":
+        if raw_day:
+            raise ValueError("Perpetual licence cannot retain a calendar date")
+        return None
+    if selected == "CALENDAR":
+        if not raw_day:
+            raise ValueError("A calendar day is required")
+        try:
+            chosen = date.fromisoformat(raw_day)
+        except ValueError as exc:
+            raise ValueError("Invalid calendar day") from exc
+        if chosen.isoformat() != raw_day:
+            raise ValueError("Calendar day must be ISO YYYY-MM-DD")
+        return calendar_valid_until(chosen, now=current)
+    if selected in ("3", "6", "12"):
+        if raw_day:
+            raise ValueError("Preset months cannot include a calendar day")
+        import calendar
+        months = int(selected)
+        month_index = current.month - 1 + months
+        year = current.year + month_index // 12
+        month = month_index % 12 + 1
+        day = min(current.day, calendar.monthrange(year, month)[1])
+        return current.replace(year=year, month=month, day=day)
+    raise ValueError("An explicit service term is required")
+
+
 Mode = Literal["CLIENT", "SERVICE", "NONE"]
 _ALLOWED_MODES = frozenset(("CLIENT", "SERVICE", "NONE"))
 _PENDING_ALLOWED = frozenset(("WAITING", "ASSIGNED", "PROVISIONED"))

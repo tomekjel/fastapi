@@ -4970,6 +4970,7 @@ def panel_change_license_plan(link_id: uuid.UUID,
 def _owner_select_effective_mode(
     link_id: uuid.UUID, operation_id: uuid.UUID,
     target_mode: str, expected_mode: str, reason: str,
+    service_term_choice: str = "", service_term_date: str = "",
 ) -> None:
     """Single SQL transaction: select between independent paid and service rights.
 
@@ -4978,7 +4979,7 @@ def _owner_select_effective_mode(
     The service grant remains in the database when CLIENT is selected; every
     entitlement, discovery and remote path must honor the selected mode.
     """
-    from app.routers.multiguard_entitlement_modes import resolve_mode
+    from app.routers.multiguard_entitlement_modes import resolve_mode, service_valid_until
     target_mode = target_mode.strip().upper()
     expected_mode = expected_mode.strip().upper()
     reason = reason.strip()
@@ -4988,6 +4989,18 @@ def _owner_select_effective_mode(
         raise HTTPException(400, "Nieprawidłowy poprzedni tryb.")
     if not 3 <= len(reason) <= 1000:
         raise HTTPException(400, "Podaj powód zmiany (3–1000 znaków).")
+    # Service can never silently default to indefinite. A signed, fixed
+    # expiry must be selected before any SQL or KeyGate/Mesh operation.
+    service_end = None
+    if target_mode == "SERVICE":
+        try:
+            service_end = service_valid_until(
+                service_term_choice, service_term_date, now=_utcnow(),
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    elif service_term_choice.strip() or service_term_date.strip():
+        raise HTTPException(400, "Okres serwisowy dotyczy tylko trybu Serwisowa.")
 
     _ensure_schema()
     with engine.begin() as con:
@@ -5019,7 +5032,7 @@ def _owner_select_effective_mode(
             raise HTTPException(409, "Najpierw dokończ zmianę Standard / Pro.")
 
         previous = con.execute(text("""
-            SELECT license_link_id,target_mode,state
+            SELECT license_link_id,target_mode,target_valid_until,state
             FROM guard.owner_license_mode_transitions
             WHERE id=:op FOR UPDATE
         """), {"op": operation_id}).mappings().one_or_none()
@@ -5030,7 +5043,9 @@ def _owner_select_effective_mode(
         )
         if previous:
             if (previous["license_link_id"] != link_id
-                    or previous["target_mode"] != target_record):
+                    or previous["target_mode"] != target_record
+                    or (target_mode == "SERVICE"
+                        and previous["target_valid_until"] != service_end)):
                 raise HTTPException(409, "Identyfikator operacji został już wykorzystany.")
             if previous["state"] == "COMPLETED":
                 applied = con.execute(text("""
@@ -5059,7 +5074,12 @@ def _owner_select_effective_mode(
         if current != expected_mode:
             raise HTTPException(409, "Tryb został zmieniony. Odśwież tabelę.")
         if current == target_mode:
-            return
+            if target_mode != "SERVICE":
+                return
+            # Changing a service term while remaining in SERVICE is a real
+            # operation; unchanged term is an idempotent no-op.
+            if grant and grant["enabled"] and grant["valid_until"] == service_end:
+                return
 
         if target_mode == "CLIENT":
             end = link.get("valid_until")
@@ -5108,12 +5128,12 @@ def _owner_select_effective_mode(
                     installation_id,edition,release_channel,enabled,
                     monitoring_profile,valid_until
                 ) VALUES (
-                    :iid,'PRO',:channel,TRUE,'OFF',NULL
+                    :iid,'PRO',:channel,TRUE,'OFF',:service_end
                 )
                 ON CONFLICT (installation_id) DO UPDATE SET
-                    edition='PRO',enabled=TRUE,valid_until=NULL,
+                    edition='PRO',enabled=TRUE,valid_until=EXCLUDED.valid_until,
                     monitoring_profile='OFF',updated_at=now()
-            """), {"iid": iid,
+            """), {"iid": iid, "service_end": service_end,
                     "channel": link.get("release_channel") or "STABLE"})
             con.execute(text("""
                 INSERT INTO guard.workshop_grant_audit(
@@ -5124,7 +5144,7 @@ def _owner_select_effective_mode(
                 "old": json.dumps(before, default=str),
                 "new": json.dumps({
                     "edition": "PRO", "enabled": True,
-                    "valid_until": None,
+                    "valid_until": _iso(service_end),
                     "monitoring_profile": "OFF",
                     "operation_id": str(operation_id),
                     "independent_paid_link_preserved": str(link_id),
@@ -5154,7 +5174,7 @@ def _owner_select_effective_mode(
         """), {
             "op": operation_id, "iid": iid, "link": link_id,
             "source": source_record, "target": target_record,
-            "expiry": link.get("valid_until") if target_mode == "CLIENT" else None,
+            "expiry": link.get("valid_until") if target_mode == "CLIENT" else service_end,
             "reason": reason,
         })
 
@@ -5166,6 +5186,8 @@ def panel_owner_select_effective_mode(
     target_mode: str = Form(...),
     expected_mode: str = Form(...),
     reason: str = Form(...),
+    service_term_choice: str = Form(""),
+    service_term_date: str = Form(""),
     confirmed: str = Form(""),
     csrf_token: str = Form(...),
     _: None = Depends(_panel_auth),
@@ -5179,6 +5201,7 @@ def panel_owner_select_effective_mode(
         raise HTTPException(403, "Potwierdź zmianę trybu właściciela.")
     _owner_select_effective_mode(
         link_id, operation_id, target_mode, expected_mode, reason,
+        service_term_choice, service_term_date,
     )
     return RedirectResponse("/multiguard/panel/licenses-grid", status_code=303,
                             headers={"Cache-Control": "private, no-store"})

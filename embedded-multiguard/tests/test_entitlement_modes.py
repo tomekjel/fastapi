@@ -15,6 +15,7 @@ from app.routers.multiguard_entitlement_modes import (  # noqa: E402
     license_within_period,
     license_term_selection,
     calendar_valid_until,
+    service_valid_until,
 )
 
 NOW = datetime(2026, 10, 30, 16, 0, tzinfo=timezone.utc)
@@ -128,6 +129,40 @@ class SixLicenseVariantsTests(unittest.TestCase):
             license_within_period("TIMED", datetime(2026, 11, 1), NOW)
         )
         self.assertFalse(license_within_period("OTHER", None, NOW))
+
+
+
+    def test_service_terms_are_explicit_and_never_implicitly_perpetual(self):
+        for choice in ("", "KEEP", "7", "UNKNOWN"):
+            with self.subTest(choice=choice), self.assertRaises(ValueError):
+                service_valid_until(choice, "", now=NOW)
+        self.assertIsNone(service_valid_until("PERPETUAL", "", now=NOW))
+        with self.assertRaises(ValueError):
+            service_valid_until("PERPETUAL", "2026-11-15", now=NOW)
+
+    def test_service_calendar_and_months_are_independent(self):
+        self.assertEqual(
+            service_valid_until("CALENDAR", "2026-11-15", now=NOW),
+            calendar_valid_until(date(2026, 11, 15), now=NOW),
+        )
+        self.assertEqual(
+            service_valid_until("3", "", now=NOW),
+            datetime(2027, 1, 30, 16, tzinfo=timezone.utc),
+        )
+        for choice, date_string in (("3", "2026-11-15"),
+                                    ("CALENDAR", ""),
+                                    ("CALENDAR", "2026-10-29"),
+                                    ("CALENDAR", "2026-11-31")):
+            with self.subTest(choice=choice, date_string=date_string), self.assertRaises(ValueError):
+                service_valid_until(choice, date_string, now=NOW)
+
+    def test_service_calendar_dst_keeps_exclusive_local_midnight(self):
+        self.assertEqual(
+            service_valid_until(
+                "CALENDAR", "2026-11-15", now=NOW
+            ).astimezone(__import__("zoneinfo").ZoneInfo("Europe/Warsaw")).strftime("%Y-%m-%d %H:%M"),
+            "2026-11-16 00:00",
+        )
 
 
 class EntitlementModeTests(unittest.TestCase):
@@ -244,6 +279,23 @@ class IntegrationSourceSafetyTests(unittest.TestCase):
         return next(n for n in self.tree.body
                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
                     and n.name == name)
+
+    def test_owner_service_term_is_never_written_as_unconditional_null(self):
+        import ast
+        fn = self.find_function("_owner_select_effective_mode")
+        body = ast.get_source_segment(self.license_source, fn)
+        self.assertIn("service_valid_until(", body)
+        self.assertIn("valid_until=EXCLUDED.valid_until", body)
+        self.assertIn('"service_end": service_end', body)
+        self.assertNotIn("edition='PRO',enabled=TRUE,valid_until=NULL", body)
+
+    def test_mode_route_requires_term_fields_and_remains_flag_gated(self):
+        import ast
+        fn = self.find_function("panel_owner_select_effective_mode")
+        body = ast.get_source_segment(self.license_source, fn)
+        self.assertIn("service_term_choice", body)
+        self.assertIn("service_term_date", body)
+        self.assertIn("MULTIGUARD_MODE_SWITCH_ENABLED", body)
 
     def test_owner_mode_switch_never_calls_keygate_mutators(self):
         import ast
