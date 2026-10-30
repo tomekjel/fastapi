@@ -101,6 +101,10 @@ def patch(source: str) -> tuple[str,bool]:
     ):
         if marker not in fn:
             raise RuntimeError("Missing audited OWNER safety guard: "+marker)
+    # Both client and workshop remote session paths must reject unrevoked
+    # public shares. A single surviving marker does not prove both are safe.
+    if fn.count("mesh_public_id IS NOT NULL") != 2:
+        raise RuntimeError("Missing audited two-mode Mesh share safeguards")
     fn = replace_unique(fn, IMPORT_ANCHOR, IMPORT_CHANGE, "import")
     fn = replace_unique(fn, SCHEMA_ANCHOR, SCHEMA_CHANGE, "schema")
     fn = replace_unique(fn, GRANT_ANCHOR, GRANT_CHANGE, "transaction")
