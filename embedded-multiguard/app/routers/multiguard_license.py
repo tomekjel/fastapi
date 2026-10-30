@@ -4973,7 +4973,8 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         plan = "Pro" if row["plan_code"] == "multi_guard_pro" else "Standard"
         kind = "Serwisowa" if row["sale_kind"] == "SERVICE" else "Czasowa"
         until = row["valid_until"]
-        expiry = _panel_escape(until.strftime("%Y-%m-%d") if until else "—")
+        from zoneinfo import ZoneInfo
+        expiry = _panel_escape(until.astimezone(ZoneInfo("Europe/Warsaw")).strftime("%Y-%m-%d") if until else "—")
         state = _panel_escape(str(row["lifecycle"]))
         channel = _panel_escape(str(row["release_channel"] or "—"))
         css = "grid-on" if row["lifecycle"] == "ACTIVE" else "grid-off"
@@ -4985,8 +4986,10 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
                         owner_detected_name(device)) if device and iid else "Nieznany komputer"
         name = _panel_escape(display_name)
         version = _panel_escape(str(device.get("app_version") or "—"))
-        seen = _panel_escape(device["last_seen_at"].strftime("%d.%m.%Y %H:%M")
-                             if device.get("last_seen_at") else "Brak kontaktu")
+        seen = _panel_escape(
+            device["last_seen_at"].astimezone(ZoneInfo("Europe/Warsaw")).strftime("%d.%m.%Y %H:%M")
+            if device.get("last_seen_at") else "Brak kontaktu"
+        )
         search = _panel_escape(" ".join([name, iid, license_id, reception, plan, kind, state]))
         actual_order = reception if reception and not reception.startswith("MG-DIRECT-") else ""
         # Use the existing audited plan-change endpoint, never invent a new key.
