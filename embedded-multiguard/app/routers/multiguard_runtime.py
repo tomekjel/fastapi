@@ -31,6 +31,7 @@ from app.routers.multiguard_license import (
     _ensure_schema as _ensure_license_schema,
     _panel_auth,
     _panel_html,
+    _workshop_csrf,
 )
 
 
@@ -1531,7 +1532,7 @@ def _owner_license_queue(queue_status: str = "WAITING") -> str:
           <div class="table-wrap"><table class="pending-computers-table"><colgroup>
               <col style="width:11%"><col style="width:24%"><col style="width:7%">
               <col style="width:15%"><col style="width:12%"><col style="width:31%">
-            </colgroup><thead><tr><th>ID</th><th>Komputer</th><th>Wersja</th>
+            </colgroup><thead><tr><th><input type="checkbox" id="mg-select-all" aria-label="Zaznacz widoczne komputery"> ID</th><th>Komputer</th><th>Wersja</th>
             <th>Stan</th><th>Ostatni kontakt</th><th>Akcje</th></tr></thead>
             <tbody>{''.join(pending_trs) or '<tr><td colspan="6" class="muted">Brak oczekujących instalacji.</td></tr>'}</tbody>
           </table></div>
@@ -1593,6 +1594,7 @@ def _fetch_owner_inventory(limit, presence_filter, search, offset, silence_days)
             SELECT ids.external_id AS installation_external_id, gi.id AS installation_id,
                 COALESCE(w.enabled,FALSE) AS service_mode,
                 CASE WHEN w.enabled THEN w.edition ELSE gi.plan_code END AS plan_code,
+                p.status AS pending_status, p.assigned_license_id AS pending_license_id,
                 gi.lifecycle, gi.health_level,
                 COALESCE(p.first_seen_at,gi.created_at,w.created_at) AS installed_at,
                 COALESCE(gi.last_seen_at,p.last_seen_at) AS last_seen_at,
@@ -1601,6 +1603,9 @@ def _fetch_owner_inventory(limit, presence_filter, search, offset, silence_days)
                 COALESCE(d.model,p.model) AS model,
                 COALESCE(d.hostname,p.hostname) AS hostname,
                 COALESCE(d.serial_number,p.serial_number) AS serial_number,
+                (SELECT ll.id FROM guard.license_links ll
+                  WHERE ll.installation_id=ids.external_id AND ll.lifecycle='ACTIVE'
+                  ORDER BY ll.updated_at DESC, ll.id DESC LIMIT 1) AS active_license_link_id,
                 labels.friendly_name, COALESCE(gi.app_version,p.app_version) AS app_version,
                 COALESCE(notes.priority,'NORMAL') AS owner_priority,
                 (SELECT count(*) FROM service.service_orders so
@@ -1663,9 +1668,9 @@ def multi_guard_panel_computers(
     device_search_form = f"""
         <form class="service-search" method="get" action="/multiguard/panel/computers">
           <input type="hidden" name="presence" value="{_panel_h(presence)}">
-          <label>Wyszukaj model, producenta, numer seryjny, hostname lub zlecenie
+          <label>Szukaj po nazwie własnej (także nazwisku lub telefonie), nazwie Windows, modelu, S/N lub zleceniu
             <input name="q" maxlength="120" value="{_panel_h(q)}"
-              placeholder="np. Lenovo, MG-2026, S/N">
+              placeholder="np. Kowalski, 600123456, Lenovo, MG-2026">
           </label>
           <button type="submit">SZUKAJ</button>
         </form>
@@ -1692,16 +1697,50 @@ def multi_guard_panel_computers(
             (row['manufacturer'],row['model'],row['serial_number']) if v))
         entitlement = ('SERWIS · ' if row['service_mode'] else '') + str(row['plan_code'] or '—')
         state = 'Bezterminowo' if row['service_mode'] else _human_license_state(row['lifecycle'])
+        active_license_id = row['active_license_link_id']
+        license_action = (f'<a href="/multiguard/panel/license/manage/{active_license_id}">ZMIEN / PRZEDLUZ / COFNIJ LICENCJE</a>'
+                          if active_license_id else '<span>Brak aktywnej licencji platnej</span>')
+        disable_service = ""
+        if row['service_mode']:
+            dialog_id = "disable-service-" + str(iid).replace("-", "")
+            disable_service = f"""
+              <button type="button" onclick="document.getElementById('{dialog_id}').showModal()">COFNIJ TRYB SERWISOWY</button>
+              <dialog id="{dialog_id}">
+                <h3>Cofnij uprawnienia serwisowe</h3>
+                <p>Komputer: {name}. Ta operacja wyłącza bezterminowy tryb serwisowy; nie usuwa urządzenia ani historii napraw.</p>
+                <form method="post" action="/multiguard/panel/workshop/{iid}/disable">
+                  <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+                  <input type="hidden" name="confirmation" value="CONFIRM_DISABLE">
+                  <button type="submit">POTWIERDŹ COFNIĘCIE</button>
+                </form>
+                <form method="dialog"><button type="submit">ANULUJ</button></form>
+              </dialog>"""
+        archive_option = ""
+        if (not row['service_mode'] and not active_license_id
+                and row['pending_status'] in ('WAITING', 'IGNORED')
+                and not row['pending_license_id']):
+            archive_dialog = "archive-" + str(iid).replace("-", "")
+            archive_option = f"""
+              <button type="button" onclick="document.getElementById('{archive_dialog}').showModal()">ARCHIWIZUJ OCZEKUJĄCY</button>
+              <dialog id="{archive_dialog}">
+                <h3>Archiwizacja komputera</h3>
+                <p>{name} — usuwa jedynie wpis z listy oczekujących, nie cofa licencji KeyGate i nie usuwa historii.</p>
+                <form method="post" action="/multiguard/panel/computers/pending/{iid}/archive">
+                  <input type="hidden" name="csrf_token" value="{_workshop_csrf()}">
+                  <button type="submit">POTWIERDŹ ARCHIWIZACJĘ</button>
+                </form>
+                <form method="dialog"><button type="submit">ANULUJ</button></form>
+              </dialog>"""
         rows_html.append(f"""<tr data-installation="{iid}">
-          <td><a href="{detail}">{_panel_h(_short_installation_id(iid))}</a></td>
-          <td><a class="owner-machine-display" href="{detail}#owner-name" title="Edytuj nazwę: {name}">{name} ✎</a>
+          <td><input type="checkbox" class="mg-row-select" aria-label="Zaznacz {_panel_h(str(iid))}" value="{_panel_h(str(iid))}"> <a href="{detail}">{_panel_h(_short_installation_id(iid))}</a></td>
+          <td><details class="mg-inline-name"><summary class="owner-machine-display" title="Edytuj nazwę: {name}">{name} ✎</summary><form method="post" action="/multiguard/panel/installation/{iid}/name"><input type="hidden" name="csrf_token" value="{_workshop_csrf()}"><input type="hidden" name="return_to" value="computers"><input name="friendly_name" maxlength="420" value="{_panel_h(row['friendly_name'] or '')}" placeholder="Nazwisko, telefon lub własna nazwa"><button type="submit">ZAPISZ</button></form></details>
               <span class="inventory-hardware" title="{hardware}">{hardware}</span></td>
           <td>{_panel_h(entitlement)}<span class="inventory-hardware">{_panel_h(state)}</span></td>
           <td>{_panel_dt(row['installed_at'])}</td>
           <td><span class="presence-dot presence-{presence_style}"></span>{_panel_h(presence_label)}
               <span class="inventory-hardware">{_panel_dt(row['last_seen_at'])}</span></td>
           <td>{_panel_h(row['app_version'] or '—')}</td>
-          <td><a href="{detail}">SZCZEGÓŁY · {_panel_h(row['service_order_count'])} napraw</a>
+          <td><details class="mg-inline-device"><summary>OPERACJE · {_panel_h(row['service_order_count'])} napraw</summary><div><a href="{detail}">KOMPUTER / EDYTUJ NAZWĘ</a> · {license_action} · <a href="/multiguard/panel/service-mode#service-modes">TRYB SERWISOWY</a>{disable_service}{archive_option}</div><div><small>Cofnięcie licencji płatnej jest dostępne w zarządzaniu jej rekordem; usunięcie komputera to osobna operacja.</small></div></details>
               <span class="inventory-hardware">{_panel_h(row['health_level'] or 'Brak raportu')} · {_panel_h(row['owner_priority'])}</span></td>
         </tr>""")
     if not rows_html:
@@ -1742,6 +1781,23 @@ def multi_guard_panel_computers(
             </table>
           </div>
           <div class="pagination">{device_paging}</div>
+          <p id="mg-selection-status" aria-live="polite">Zaznaczono: 0 komputerów. Operacje zbiorcze wymagają osobnego potwierdzenia.</p>
+          <script>
+            (() => {{
+              const root = document.getElementById('devices');
+              const boxes = Array.from(root.querySelectorAll('.mg-row-select'));
+              const all = document.getElementById('mg-select-all');
+              const status = document.getElementById('mg-selection-status');
+              function refresh() {{
+                const count = boxes.filter(box => box.checked).length;
+                status.textContent = 'Zaznaczono: ' + count + ' komputerów. Operacje zbiorcze wymagają osobnego potwierdzenia.';
+                all.checked = boxes.length > 0 && count === boxes.length;
+                all.indeterminate = count > 0 && count < boxes.length;
+              }}
+              all.addEventListener('change', () => {{ boxes.forEach(box => box.checked = all.checked); refresh(); }});
+              boxes.forEach(box => box.addEventListener('change', refresh));
+            }})();
+          </script>
         </section>
         """
     )

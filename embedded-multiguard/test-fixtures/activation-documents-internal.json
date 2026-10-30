@@ -1,0 +1,20 @@
+[
+  {
+    "kind": "terms",
+    "version": "0.1-internal",
+    "title": "Regulamin MultiGuard — wyłącznie test wewnętrzny",
+    "content_markdown": "# Regulamin MultiGuard — wersja wewnętrzna\n\n**WYŁĄCZNIE TEST WEWNĘTRZNY — NIE DO DYSTRYBUCJI KLIENTOM.**\n\nMultiGuard to program do ochrony i diagnostyki komputerów Windows, oferowany przez Multi-Servis w Bydgoszczy. Wersje Standard i Pro korzystają z licencji na 3, 6 albo 12 miesięcy. Czas licencji rozpoczyna się po zakończeniu procesu aktywacji. Przedłużenie dodaje zakupiony czas do pozostałego okresu. Zmiana edycji nie powinna wymagać nowego klucza. Tryb serwisowy jest odrębnym uprawnieniem. Wersja Pro umożliwia zdalną pomoc na warunkach właściwych dla danego typu licencji. Program nie gwarantuje wykrycia każdego zagrożenia.\n\nTreść jest nieostatecznym materiałem do testów aktywacji. Warunki handlowe, reklamacje, odstąpienie od umowy oraz pozostałe wymagane informacje zostaną uzupełnione przed publikacją."
+  },
+  {
+    "kind": "privacy",
+    "version": "0.1-internal",
+    "title": "Polityka prywatności MultiGuard — wyłącznie test wewnętrzny",
+    "content_markdown": "# Polityka prywatności — wersja wewnętrzna\n\n**WYŁĄCZNIE TEST WEWNĘTRZNY — NIE DO DYSTRYBUCJI KLIENTOM.**\n\nAdministratorem danych wykorzystywanych podczas świadczenia usługi jest Multi-Servis, Bydgoszcz. W ramach funkcji programu przetwarzane mogą być identyfikator instalacji, informacje o licencji, dane diagnostyczne sprzętu, informacje o zagrożeniach i zdarzeniach systemowych oraz historia zgłoszeń i sesji pomocy. Przetwarzanie danych niezbędnych do obsługi licencji i usługi nie jest oparte na dobrowolnej zgodzie. Dobrowolne funkcje wymagające zgody zostaną opisane i obsłużone osobno.\n\nPełne dane przedsiębiorcy, podstawy prawne, okresy przechowywania, odbiorcy danych oraz uprawnienia użytkownika wymagają dopracowania przed publikacją. Ta wersja służy wyłącznie do testu mechanizmu dostarczania dokumentów."
+  },
+  {
+    "kind": "safety",
+    "version": "0.1-internal",
+    "title": "Monitoring i zdalna pomoc MultiGuard — wyłącznie test wewnętrzny",
+    "content_markdown": "# Monitoring i zdalna pomoc — wersja wewnętrzna\n\n**WYŁĄCZNIE TEST WEWNĘTRZNY — NIE DO DYSTRYBUCJI KLIENTOM.**\n\nMultiGuard może monitorować stan Windows Defender, zapory, zabezpieczeń, urządzeń oraz błędy i zdarzenia systemowe. Może wyświetlać ostrzeżenia i przygotowywać informacje diagnostyczne dla serwisu Multi-Servis. Funkcje Pro mogą obejmować zdalną pomoc: czasowa licencja Pro wymaga osobnego potwierdzenia przez użytkownika przed każdą sesją, natomiast tryb serwisowy Pro może działać bez każdorazowej akceptacji, zgodnie z wcześniejszym upoważnieniem.\n\nPotwierdzenie zapoznania się z informacją nie stanowi ogólnej zgody na wszystkie formy przetwarzania danych i nie zastępuje zgody na konkretną sesję zdalną. Niniejsza treść jest przeznaczona jedynie do testu wewnętrznego."
+  }
+]

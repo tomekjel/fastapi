@@ -1,0 +1,39 @@
+name: OWNER Lenovo KeyGate read-only audit
+on:
+  push:
+    branches: [fix/owner-keygate-direct-reconcile-20261029]
+    paths: [embedded-multiguard/deploy/keygate-lenovo-audit.trigger]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Establish read-only backend connection
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+          SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?Missing SSH_HOST}"
+          : "${SSH_USER:?Missing SSH_USER}"
+          : "${SSH_KEY:?Missing SSH_KEY}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/multiservis_backend
+          chmod 600 ~/.ssh/multiservis_backend
+          ssh-keyscan -T 10 -p "${SSH_PORT:-22}" "$SSH_HOST" >> ~/.ssh/known_hosts
+      - name: Query Lenovo license state without modifying anything
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/multiservis_backend -p "${SSH_PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "cd /opt/multiservis && .venv/bin/python -" < embedded-multiguard/scripts/audit_owner_lenovo_keygate_readonly.py

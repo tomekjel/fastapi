@@ -1,0 +1,58 @@
+name: MultiGuard safe staging (no deploy)
+on:
+  pull_request:
+    paths:
+      - .github/workflows/multiguard-asus-staging.yml
+  push:
+    branches: [fix/owner-keygate-direct-reconcile-20261029]
+    paths:
+      - .github/workflows/multiguard-asus-staging.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate two modules and prepare comparison manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $paths = @(
+            'embedded-multiguard/app/routers/multiguard_license.py',
+            'embedded-multiguard/app/routers/multiguard_remote.py'
+          )
+          $py = Get-Command py -ErrorAction SilentlyContinue
+          if ($py) { & py -3 -m py_compile @paths }
+          else {
+            $python = Get-Command python -ErrorAction Stop
+            & python -m py_compile @paths
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Python syntax check failed' }
+          & bash -n embedded-multiguard/scripts/deploy_pr30_two_modules.sh
+          if ($LASTEXITCODE -ne 0) { throw 'Bash syntax check failed' }
+          $manifestPaths = @($paths) + @('embedded-multiguard/scripts/deploy_pr30_two_modules.sh')
+          $rows = foreach ($p in $manifestPaths) {
+            $file = Get-Item $p
+            [pscustomobject]@{
+              path = $p
+              sha256 = (Get-FileHash -Algorithm SHA256 $p).Hash.ToLowerInvariant()
+              length = $file.Length
+            }
+          }
+          $rows | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 multiguard-stage-manifest.json
+          Get-Content multiguard-stage-manifest.json
+      - name: Publish validated module bundle (non-production)
+        uses: actions/upload-artifact@v4
+        with:
+          name: multiguard-pr30-validated
+          path: |
+            embedded-multiguard/app/routers/multiguard_license.py
+            embedded-multiguard/app/routers/multiguard_remote.py
+            embedded-multiguard/scripts/deploy_pr30_two_modules.sh
+            multiguard-stage-manifest.json
+          retention-days: 7

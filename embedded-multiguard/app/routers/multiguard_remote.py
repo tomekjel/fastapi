@@ -178,6 +178,74 @@ def _has_active_remote_pro(installation, now: datetime) -> bool:
     )
 
 
+def _has_verified_remote_pro(connection, installation, now: datetime) -> bool:
+    """Authorize from server-owned paid links or OWNER workshop grants.
+
+    Agent heartbeats cannot create an entitlement by claiming PRO/ACTIVE.
+    """
+    if not _has_active_remote_pro(installation, now):
+        return False
+    internal_id = installation.get("installation_id") or installation.get("id")
+    if internal_id is None:
+        return False
+    paid = connection.execute(text("""
+        SELECT l.plan_code,l.lifecycle,l.valid_until
+        FROM guard.license_links l
+        JOIN guard.installations gi
+          ON gi.installation_external_id=l.installation_id
+        WHERE gi.id=:id
+        ORDER BY (l.lifecycle='ACTIVE') DESC, l.valid_until DESC NULLS LAST
+        LIMIT 1
+    """), {"id":internal_id}).mappings().first()
+    if paid:
+        # Any existing customer link takes precedence over service access.
+        # Deny closed on revoked/expired rights; never fall through to grants.
+        return (paid["plan_code"]=="multi_guard_pro"
+                and paid["lifecycle"]=="ACTIVE"
+                and paid["valid_until"] is not None
+                and paid["valid_until"]>now)
+    grant = connection.execute(text("""
+        SELECT w.enabled,w.edition,p.status
+        FROM guard.workshop_grants w
+        JOIN guard.pending_installations p
+          ON p.installation_id=w.installation_id
+        JOIN guard.installations gi
+          ON gi.installation_external_id=p.installation_id
+        WHERE gi.id=:id
+          AND NOT EXISTS (
+              SELECT 1 FROM guard.license_links l
+              WHERE l.installation_id=w.installation_id
+          )
+        LIMIT 1
+    """), {"id":internal_id}).mappings().first()
+    return bool(grant and grant["enabled"]
+                and grant["edition"]=="PRO"
+                and grant["status"] == "WAITING")
+
+
+def _has_verified_service_remote_pro(connection, installation, now: datetime) -> bool:
+    """Only a current OWNER service grant with no paid link may bypass consent."""
+    if not _has_active_remote_pro(installation, now):
+        return False
+    internal_id = installation.get("installation_id") or installation.get("id")
+    if internal_id is None:
+        return False
+    return bool(connection.execute(text("""
+        SELECT 1 FROM guard.workshop_grants w
+        JOIN guard.pending_installations p
+          ON p.installation_id=w.installation_id
+        JOIN guard.installations gi
+          ON gi.installation_external_id=p.installation_id
+        WHERE gi.id=:id AND w.enabled=TRUE AND w.edition='PRO'
+          AND p.status='WAITING'
+          AND NOT EXISTS (
+              SELECT 1 FROM guard.license_links l
+              WHERE l.installation_id=w.installation_id
+          )
+        LIMIT 1
+    """), {"id":internal_id}).first())
+
+
 def _owner_label(user: CurrentUser) -> tuple[Optional[uuid.UUID], str]:
     raw_id = getattr(user, "id", None)
     try:
@@ -334,7 +402,7 @@ def agent_remote_poll(body: AgentRemoteAuthBody):
             )
 
         entitlement_lost = (
-            not _has_active_remote_pro(installation, now)
+            not _has_verified_remote_pro(connection, installation, now)
             or _plan_change_pending(connection, installation["id"])
         )
         # Previously the early return skipped cleanup of a MeshCentral URL
@@ -379,7 +447,7 @@ def agent_remote_decision(body: AgentRemoteDecisionBody):
             body.deviceId,
             body.installationCredential,
         )
-        if (not _has_active_remote_pro(installation, now)
+        if (not _has_verified_remote_pro(connection, installation, now)
                 or _plan_change_pending(connection, installation["id"])) and body.allowDesktop:
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         row = connection.execute(
@@ -606,7 +674,7 @@ def create_remote_session(
 
         if not support:
             raise HTTPException(404, "Nie znaleziono zgłoszenia Multi-Guard.")
-        if (not _has_active_remote_pro(support, now)
+        if (not _has_verified_remote_pro(connection, support, now)
                 or _plan_change_pending(connection,support["installation_id"])):
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         if support["support_status"] in {"RESOLVED", "CANCELLED"}:
@@ -629,6 +697,11 @@ def create_remote_session(
             )
 
         capabilities = ["desktop"] + (["files"] if body.requestFiles else [])
+        # A valid OWNER service grant permits unattended support; a paid
+        # PRO subscription always starts as REQUESTED until client consent.
+        service_authorized = _has_verified_service_remote_pro(
+            connection, support, now
+        )
         session_id = uuid.uuid4()
         connection.execute(
             text(
@@ -636,12 +709,14 @@ def create_remote_session(
                 INSERT INTO guard.remote_sessions(
                     id,support_request_id,installation_id,service_device_id,
                     requested_by_user_id,requested_by_name,
-                    requested_capabilities,expires_at,last_activity_at
+                    requested_capabilities,granted_capabilities,
+                    status,consented_at,expires_at,last_activity_at
                 )
                 VALUES(
                     :id,:support_request_id,:installation_id,:service_device_id,
                     :requested_by_user_id,:requested_by_name,
-                    CAST(:capabilities AS jsonb),:expires_at,:now
+                    CAST(:capabilities AS jsonb),CAST(:granted AS jsonb),
+                    :status,:consented_at,:expires_at,:now
                 )
                 """
             ),
@@ -653,6 +728,9 @@ def create_remote_session(
                 "requested_by_user_id": user_id,
                 "requested_by_name": user_label,
                 "capabilities": _json(capabilities),
+                "granted": _json(capabilities if service_authorized else []),
+                "status": "CONSENTED" if service_authorized else "REQUESTED",
+                "consented_at": now if service_authorized else None,
                 "expires_at": now + timedelta(minutes=5),
                 "now": now,
             },
@@ -663,8 +741,14 @@ def create_remote_session(
             "TECHNICIAN_REQUESTED",
             "TECHNICIAN",
             user_label,
-            {"capabilities": capabilities},
+            {"capabilities": capabilities, "serviceAuthorized": service_authorized},
         )
+        if service_authorized:
+            _audit(
+                connection, session_id, "OWNER_SERVICE_GRANT_AUTHORIZED",
+                "BACKEND", "Multi-Servis",
+                {"granted": capabilities},
+            )
         connection.execute(
             text(
                 """
@@ -754,7 +838,7 @@ def remote_session_connect(
 
         if not row:
             raise HTTPException(404, "Nie znaleziono sesji.")
-        if (not _has_active_remote_pro(row, now)
+        if (not _has_verified_remote_pro(connection, row, now)
                 or _plan_change_pending(connection,row["installation_id"])):
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
         if row["status"] not in {"CONSENTED", "CONNECT_READY", "ACTIVE"}:
@@ -838,13 +922,13 @@ def remote_session_connect(
     try:
         with engine.begin() as connection:
             current = connection.execute(text("""
-                SELECT rs.status,gi.plan_code,gi.lifecycle,gi.valid_until,
+                SELECT rs.status,rs.installation_id,gi.plan_code,gi.lifecycle,gi.valid_until,
                        gi.is_current,gi.mesh_node_id
                 FROM guard.remote_sessions rs
                 JOIN guard.installations gi ON gi.id=rs.installation_id
                 WHERE rs.id=:sid FOR UPDATE OF rs,gi
             """), {"sid": session_uuid}).mappings().first()
-            if (not current or not _has_active_remote_pro(current, datetime.now(timezone.utc))
+            if (not current or not _has_verified_remote_pro(connection, current, datetime.now(timezone.utc))
                     or current["mesh_node_id"] != node_id
                     or _plan_change_pending(connection,row["installation_id"])
                     or current["status"] not in {"CONSENTED", "CONNECT_READY", "ACTIVE"}):
