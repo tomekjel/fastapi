@@ -23,6 +23,10 @@ from datetime import datetime, timezone
 ROOT = Path("/opt/multiservis")
 ROUTERS = ROOT / "app/routers"
 PROD = ROUTERS / "multiguard_remote.py"
+POLICY = ROUTERS / "multiguard_entitlement_modes.py"
+EXPECTED_OLD_POLICY_BLOB = "c1431e538e5933b09d544054eca86035891277c7"
+EXPECTED_NEW_POLICY_BLOB = "986a113ce82ccb1b094bcef7ba27d22b36d7011c"
+NEW_POLICY_COMMIT = "fdde9d46ee4922017f499fc05c90ce62b621dc38"
 PROD_SHA256 = "fdf567edec7bdd79db80bbe495786622352afa0bef5b822a7a5396ba5d0bfc5a"
 STAGE2_BACKUP = ROOT / "backup-mg-license-stage2-20261030-204405"
 PANEL = "https://api.multi-servis.pl/multiguard/panel/licenses-grid"
@@ -75,6 +79,20 @@ def _owner_verified_service_remote(_connection, _installation, _now):
     return False
 
 '''
+
+def git_blob_sha(data:bytes)->str:
+    return hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest()
+
+def policy_bytes()->bytes:
+    url=("https://raw.githubusercontent.com/tomekjel/fastapi/"
+         +NEW_POLICY_COMMIT+
+         "/embedded-multiguard/app/routers/multiguard_entitlement_modes.py")
+    with urllib.request.urlopen(url,timeout=25) as r:
+        raw=r.read()
+    if git_blob_sha(raw)!=EXPECTED_NEW_POLICY_BLOB:
+        raise RuntimeError("Independent licence term module hash mismatch")
+    compile(raw,str(POLICY),"exec")
+    return raw
 
 def digest(path:Path)->str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -185,6 +203,8 @@ def verify_production_shape():
             raise RuntimeError("Expected OWNER stage2 guard not installed: "+marker)
     if digest(PROD)!=PROD_SHA256:
         raise RuntimeError("Paid remote production changed unexpectedly: abort")
+    if not POLICY.is_file() or git_blob_sha(POLICY.read_bytes())!=EXPECTED_OLD_POLICY_BLOB:
+        raise RuntimeError("Existing 6-variant policy unexpected: abort")
 
 def main():
     import argparse
@@ -193,12 +213,15 @@ def main():
     args=p.parse_args()
     verify_production_shape()
     prepared,calls=paid_remote_overlay(PROD.read_text())
+    upgraded_policy=policy_bytes()
     before=check_status()
     if before not in (401,403):
         raise RuntimeError("Protected panel does not return 401/403: abort")
     print("REMOTE MODE-GATE PREFLIGHT: PASS")
     print("PROTECTED ROUTES:", ", ".join(calls))
     print("PAID REMOTE: CLIENT MODE ONLY; SERVICE BYPASS BLOCKED")
+    print("SIX TERM VARIANTS: STANDARD / PRO / SERWISOWA x TIMED / PERPETUAL")
+    print("DURATION ENGINE: 3/6/12 MONTHS, CALENDAR, PRESERVED EXTENSIONS")
     if not args.apply:
         print("DRY RUN: NO CHANGES")
         return
@@ -206,6 +229,7 @@ def main():
     backup=ROOT/("backup-mg-paid-remote-"+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
     backup.mkdir(mode=0o700)
     shutil.copy2(PROD,backup/PROD.name)
+    shutil.copy2(POLICY,backup/POLICY.name)
     written=False
     try:
         fd,tmp=tempfile.mkstemp(prefix=".mg-paid-remote-",dir=ROUTERS)
@@ -218,6 +242,16 @@ def main():
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
+        # Both replacements are protected by verified backups and restoration.
+        fd,p=tempfile.mkstemp(prefix=".mg-license-policy-",dir=ROUTERS)
+        try:
+            with os.fdopen(fd,"wb") as stream:
+                stream.write(upgraded_policy)
+            os.chmod(p,0o644)
+            os.replace(p,POLICY)
+        finally:
+            if os.path.exists(p):
+                os.unlink(p)
         subprocess.run(["systemctl","restart","multiservis-api.service"],check=True,timeout=40)
         for _ in range(12):
             if check_status()==before and subprocess.run(
@@ -231,10 +265,12 @@ def main():
         print("REMOTE MODE-GATE: APPLIED")
         print("OWNER MODE-SWITCH: STILL HARD-DISABLED")
         print("V4.4 / KEYGATE / MESH / LICENCE RECORDS: UNCHANGED")
+        print("SIX-TERM POLICY: UPGRADED")
         print("BACKUP:",backup)
     except Exception:
         if written:
             shutil.copy2(backup/PROD.name,PROD)
+            shutil.copy2(backup/POLICY.name,POLICY)
             subprocess.run(["systemctl","restart","multiservis-api.service"],check=False,timeout=40)
         raise
 
