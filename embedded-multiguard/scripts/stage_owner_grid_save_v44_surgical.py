@@ -203,9 +203,15 @@ def patched(source: str) -> str:
     fn = once(fn,
         '        row,old_name=check_state(con)\n        iid=row["installation_id"]',
         '        row,old_name=check_state(con)\n        iid=row["installation_id"]\n'
-        '        if iid and _owner_effective_entitlement_mode(con, iid) != "CLIENT":\n'
-        '            raise HTTPException(409, "Najpierw przywróć tryb licencji klienta.")',
-        "paid Save must not overwrite selected service mode")
+        '        owner_selected_mode = (_owner_effective_entitlement_mode(con, iid)\n'
+        '                               if iid else "NONE")',
+        "read current OWNER mode before changing paid licence")
+    fn = once(fn,
+        '        channel_changed=channel!=str(row["release_channel"] or "").upper()',
+        '        channel_changed=channel!=str(row["release_channel"] or "").upper()\n'
+        '        if owner_selected_mode == "SERVICE" and (plan_changed or channel_changed):\n'
+        '            raise HTTPException(409, "Tryb serwisowy: edycja i kanał płatnej licencji są zablokowane.")',
+        "preserve service renaming but refuse paid plan edits")
     result = replace_function(source, "panel_grid_save_row", fn)
     result = inject_before_route(result, "panel_grid_save_row", HELPER)
     compile(result, str(LICENSE), "exec")
