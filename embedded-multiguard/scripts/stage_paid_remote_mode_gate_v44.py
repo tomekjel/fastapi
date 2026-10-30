@@ -21,6 +21,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 ROOT = Path("/opt/multiservis")
+sys.path.insert(0,str(ROOT))
 ROUTERS = ROOT / "app/routers"
 PROD = ROUTERS / "multiguard_remote.py"
 POLICY = ROUTERS / "multiguard_entitlement_modes.py"
@@ -174,6 +175,30 @@ def paid_remote_overlay(original: str)->tuple[str,tuple[str,...]]:
     compile(changed,str(PROD),"exec")
     return changed,tuple(calls)
 
+def assert_no_live_remote_sessions():
+    """Do not restart production while any client has an open remote session."""
+    from app.database import engine
+    from sqlalchemy import text
+    with engine.connect() as db:
+        for table in ("guard.remote_sessions","guard.workshop_remote_sessions"):
+            exists=db.execute(text("SELECT to_regclass(:n)"),
+                              {"n":table}).scalar_one_or_none()
+            if exists is None:
+                continue
+            if table=="guard.remote_sessions":
+                statement="""SELECT count(*) FROM guard.remote_sessions
+                   WHERE status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')"""
+            else:
+                statement="""SELECT count(*) FROM guard.workshop_remote_sessions
+                   WHERE status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')"""
+            count=db.execute(text(statement)).scalar_one()
+            if count:
+                raise RuntimeError(
+                    f"Open remote sessions in {table}: {count}; "
+                    "deployment blocked without touching any session"
+                )
+
+
 def check_status():
     req=urllib.request.Request(PANEL,headers={"Cache-Control":"no-cache"})
     try:
@@ -225,6 +250,7 @@ def main():
     if not args.apply:
         print("DRY RUN: NO CHANGES")
         return
+    assert_no_live_remote_sessions()
 
     backup=ROOT/("backup-mg-paid-remote-"+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
     backup.mkdir(mode=0o700)
