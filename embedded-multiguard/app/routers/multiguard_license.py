@@ -5160,6 +5160,11 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         const update=()=>{save.disabled=name.value===initialName&&edition.value===initialEdition};
         name.addEventListener('input',update);edition.addEventListener('change',update);
       });
+      period.addEventListener('change',apply);
+      document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{
+        filter=button.dataset.filter;wrap.hidden=filter!=='soon';
+        document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('selected',b===button));apply();
+      }));
       // Persist per-column widths for OWNER browser without affecting data.
       [...table.tHead.rows[0].cells].forEach((th,i)=>{
         const key='ms-grid-column-'+i;
