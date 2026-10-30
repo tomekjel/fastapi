@@ -52,6 +52,36 @@ def prepared_old_license_fixture():
 
 
 class OverlayTest(unittest.TestCase):
+    def test_only_nullable_transition_metadata_is_added(self):
+        columns = {"id", "installation_id", "license_link_id", "source_mode",
+                   "target_mode", "state", "created_at", "updated_at"}
+        self.assertEqual(
+            overlay.safe_missing_transition_columns(columns),
+            ("target_valid_until", "reason", "last_error"),
+        )
+        self.assertEqual(
+            overlay.safe_missing_transition_columns(
+                columns | {"target_valid_until", "reason", "last_error"}
+            ), (),
+        )
+        self.assertEqual(
+            overlay.safe_missing_transition_columns(
+                columns | {"target_valid_until", "last_error"}
+            ), ("reason",),
+        )
+
+    def test_unknown_missing_ledger_fields_are_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "missing required columns: state"):
+            overlay.safe_missing_transition_columns({"id", "installation_id"})
+
+    def test_sql_migration_is_bounded_and_non_destructive(self):
+        source = SCRIPT.read_text()
+        self.assertIn("SET LOCAL lock_timeout = '3s'", source)
+        self.assertIn("ADD COLUMN IF NOT EXISTS", source)
+        self.assertIn("with engine.begin() as c:", source)
+        self.assertNotIn("DROP TABLE guard.owner_license_mode_transitions", source)
+        self.assertNotIn("DELETE FROM guard.owner_license_mode_transitions", source)
+
     def test_protected_baseline_accepts_only_unauthenticated_or_forbidden(self):
         script = SCRIPT.read_text()
         self.assertIn("if baseline not in (401, 403):", script)

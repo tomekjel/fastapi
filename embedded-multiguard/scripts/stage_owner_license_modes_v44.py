@@ -172,8 +172,32 @@ def produce_workshop(production: str, upstream: str) -> str:
     ast.parse(production)
     return production
 
+def safe_missing_transition_columns(present: set[str]) -> tuple[str, ...]:
+    """Only nullable metadata may be added to an existing transition ledger.
+
+    Existing operations and audit records must never be rewritten. If a core
+    column is missing the migration is incompatible and aborts before DDL.
+    """
+    expected = {
+        "id", "installation_id", "license_link_id",
+        "source_mode", "target_mode", "target_valid_until",
+        "state", "reason", "created_at", "updated_at", "last_error",
+    }
+    missing = expected - present
+    allowed_additions = ("target_valid_until", "reason", "last_error")
+    incompatible = missing - set(allowed_additions)
+    if incompatible:
+        raise RuntimeError(
+            "Existing transition schema has missing required columns: "
+            + ", ".join(sorted(incompatible))
+            + " (no changes performed)"
+        )
+    return tuple(col for col in allowed_additions if col in missing)
+
+
 def sql_bootstrap():
-    # DDL only: creates tables, does not edit or assign any existing rights.
+    # Add ONLY safe nullable metadata to an older transition ledger.
+    # All changes are in one PostgreSQL transaction with a short lock timeout.
     from sqlalchemy import text
     from app.database import engine
     ddl = [
@@ -202,9 +226,50 @@ def sql_bootstrap():
              WHERE state IN ('PREPARED','KEYGATE_REVOKED','LOCAL_APPLIED',
                   'REQUIRES_RECONCILIATION')""",
     ]
+    # A preflight read prevents unnecessary table writes or index rebuilds
+    # if a preexisting ledger is incompatible in a way we cannot safely fix.
+    with engine.connect() as c:
+        from sqlalchemy import text as _sql
+        exists = c.execute(_sql(
+            "SELECT to_regclass('guard.owner_license_mode_transitions')"
+        )).scalar_one_or_none()
+        if exists is not None:
+            current = {x[0]: x[1] for x in c.execute(_sql("""
+                SELECT column_name, udt_name
+                FROM information_schema.columns
+                WHERE table_schema='guard'
+                  AND table_name='owner_license_mode_transitions'
+            """)).all()}
+            missing_allowed = safe_missing_transition_columns(set(current))
+            for field, expected_type in (
+                ("target_valid_until", "timestamptz"),
+                ("reason", "text"),
+                ("last_error", "text"),
+            ):
+                if field in current and current[field] != expected_type:
+                    raise RuntimeError(
+                        "Incompatible transition field type "
+                        + field + ": " + current[field]
+                    )
+        else:
+            missing_allowed = ()
+
     with engine.begin() as c:
-        for statement in ddl:
+        c.execute(text("SET LOCAL lock_timeout = '3s'"))
+        for statement in ddl[:2]:
             c.execute(text(statement))
+        additions = {
+            "target_valid_until": "TIMESTAMPTZ",
+            "reason": "TEXT",
+            "last_error": "TEXT",
+        }
+        for name in missing_allowed:
+            # Identifiers come ONLY from the fixed whitelist above.
+            c.execute(text(
+                "ALTER TABLE guard.owner_license_mode_transitions "
+                f"ADD COLUMN IF NOT EXISTS {name} {additions[name]}"
+            ))
+        c.execute(text(ddl[2]))
         expected = {
             "owner_entitlement_selections": {"installation_id","selected_mode","updated_at"},
             "owner_license_mode_transitions": {"id","installation_id","license_link_id",
@@ -216,7 +281,13 @@ def sql_bootstrap():
                 WHERE table_schema='guard' AND table_name=:name
             """),{"name":name}).all()}
             if not cols.issubset(found):
-                raise RuntimeError("Incompatible existing SQL schema: "+name)
+                raise RuntimeError(
+                    "Incompatible existing SQL schema: " + name
+                    + "; missing " + ", ".join(sorted(cols-found))
+                )
+    if missing_allowed:
+        print("TRANSITION LEDGER: SAFE NULLABLE COLUMNS ADDED:",
+              ", ".join(missing_allowed))
     with engine.connect() as c:
         selected_service = c.execute(text("""
             SELECT count(*) FROM guard.owner_entitlement_selections
@@ -277,7 +348,11 @@ def apply(prepared: dict[str,str], previous_status: int):
         print("KEYGATE / MESH: NO MUTATIONS")
         print("BACKUP:",backup)
     except Exception:
-        print("STAGE2 ERROR: ROLLING BACK PYTHON FILES",file=sys.stderr)
+        if files_written:
+            print("STAGE2 ERROR: RESTORING PYTHON FILES", file=sys.stderr)
+        else:
+            print("STAGE2 ABORTED: NO PYTHON FILES CHANGED; "
+                  "SQL TRANSACTION ROLLED BACK ON ERROR", file=sys.stderr)
         for name in files_written:
             shutil.copy2(backup/name,ROUTERS/name)
         if files_written:
