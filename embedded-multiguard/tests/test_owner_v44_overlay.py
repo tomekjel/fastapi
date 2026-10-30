@@ -52,6 +52,12 @@ def prepared_old_license_fixture():
 
 
 class OverlayTest(unittest.TestCase):
+    def test_protected_baseline_accepts_only_unauthenticated_or_forbidden(self):
+        script = SCRIPT.read_text()
+        self.assertIn("if baseline not in (401, 403):", script)
+        self.assertIn("if now_status == previous_status:", script)
+        self.assertIn('["systemctl","is-active","--quiet","multiservis-api.service"]', script)
+
     def test_production_shape_insertion_compiles_without_router_collision(self):
         source = overlay.produce_license(prepared_old_license_fixture(),LICENSE)
         ast.parse(source)

@@ -320,8 +320,12 @@ def main():
         if before != after:
             raise RuntimeError("Protected V4.4 OWNER function changed: "+name)
     baseline=status_url()
-    if baseline != 401:
-        raise RuntimeError(f"Unexpected baseline HTTP status {baseline}; refusing to install")
+    # OWNER panel is protected: depending on the authentication layer an
+    # anonymous request returns either 401 (unauthenticated) or 403 (forbidden).
+    # Do not accept 200, redirects or 5xx: the protected baseline must remain.
+    if baseline not in (401, 403):
+        raise RuntimeError(f"Unexpected protected-panel HTTP status {baseline}; refusing to install")
+    print(f"PROTECTED PANEL HTTP BASELINE: {baseline} (must match after restart)")
     print("STAGE2 PREFLIGHT: PASS")
     print("BACKEND PATCH: COMPILES; CSS/THEME NOT MODIFIED")
     if not args.apply:
