@@ -21,6 +21,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 ROOT = Path("/opt/multiservis")
+sys.path.insert(0, str(ROOT))
 ROUTERS = ROOT / "app/routers"
 SRC = {
     "multiguard_license.py": "d201458f3313f1001f9c212138c60c66c85d161b121137c1ea54943ffc602708",
