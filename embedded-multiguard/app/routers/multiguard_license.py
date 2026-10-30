@@ -4910,7 +4910,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         expected = _panel_escape(_iso(until)) if until else ""
         controls = (
             f'<form class="grid-plan-form" method="post" action="{action}" '
-            f'onsubmit="return confirm(\\\'Zapisać zmianę edycji tej licencji?\\\')">'
+            f'onsubmit="return confirm(&#39;Zapisać zmianę edycji tej licencji?&#39;)">'
             f'<input type="hidden" name="csrf_token" value="{csrf}">'
             f'<input type="hidden" name="operation_id" value="{operation}">'
             f'<input type="hidden" name="expected_end" value="{expected}">'
