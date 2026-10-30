@@ -35,7 +35,7 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 def git_blob(data: bytes) -> str:
-    return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\\0" + data).hexdigest()
+    return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
 
 def functions(source: str):
     return {node.name: node for node in ast.parse(source).body
@@ -53,7 +53,7 @@ def replace_function(source: str, name: str, replacement: str) -> str:
     if node is None:
         raise RuntimeError("Production function missing: " + name)
     rows = source.splitlines(keepends=True)
-    return "".join(rows[:node.lineno - 1]) + replacement.rstrip() + "\\n" + "".join(rows[node.end_lineno:])
+    return "".join(rows[:node.lineno - 1]) + replacement.rstrip() + "\n" + "".join(rows[node.end_lineno:])
 
 def inject_before_route(source: str, name: str, text_to_add: str) -> str:
     node = functions(source).get(name)
@@ -61,7 +61,7 @@ def inject_before_route(source: str, name: str, text_to_add: str) -> str:
         raise RuntimeError("Production function missing: " + name)
     first = min([node.lineno] + [deco.lineno for deco in node.decorator_list])
     rows = source.splitlines(keepends=True)
-    return "".join(rows[:first-1]) + text_to_add.rstrip() + "\\n\\n" + "".join(rows[first-1:])
+    return "".join(rows[:first-1]) + text_to_add.rstrip() + "\n\n" + "".join(rows[first-1:])
 
 def once(source: str, old: str, new: str, name: str) -> str:
     if source.count(old) != 1:
@@ -181,29 +181,29 @@ def patched(source: str) -> str:
     if "def _owner_v44_grid_term_selection(" in source or "term_choice: str = Form" in fn:
         raise RuntimeError("V4.4 term bridge already present; refuse duplicate")
     fn = once(fn,
-        '    csrf_token: str = Form(...),\\n    _: None = Depends(_panel_auth),',
-        '    csrf_token: str = Form(...),\\n'
-        '    term_choice: str = Form("KEEP"),\\n'
-        '    term_date: str = Form(""),\\n'
-        '    payment_confirmed: str = Form(""),\\n'
+        '    csrf_token: str = Form(...),\n    _: None = Depends(_panel_auth),',
+        '    csrf_token: str = Form(...),\n'
+        '    term_choice: str = Form("KEEP"),\n'
+        '    term_date: str = Form(""),\n'
+        '    payment_confirmed: str = Form(""),\n'
         '    _: None = Depends(_panel_auth),',
         "optional independent term fields")
     fn = once(fn,
-        '    if confirmed != "yes":\\n        raise HTTPException(400,"Potwierdź zapis zmian.")',
-        '    if confirmed != "yes":\\n        raise HTTPException(400,"Potwierdź zapis zmian.")\\n'
-        '    if (term_choice.strip().upper() != "KEEP" or term_date.strip()\\n'
-        '            or target_edition.strip().upper() == "SERVICE"):\\n'
-        '        return _owner_v44_grid_term_selection(\\n'
-        '            link_id, operation_id, friendly_name, target_edition,\\n'
-        '            release_channel, expected_plan, expected_end,\\n'
-        '            expected_channel, expected_name, term_choice, term_date,\\n'
-        '            payment_confirmed,\\n'
-        '        )\\n',
+        '    if confirmed != "yes":\n        raise HTTPException(400,"Potwierdź zapis zmian.")',
+        '    if confirmed != "yes":\n        raise HTTPException(400,"Potwierdź zapis zmian.")\n'
+        '    if (term_choice.strip().upper() != "KEEP" or term_date.strip()\n'
+        '            or target_edition.strip().upper() == "SERVICE"):\n'
+        '        return _owner_v44_grid_term_selection(\n'
+        '            link_id, operation_id, friendly_name, target_edition,\n'
+        '            release_channel, expected_plan, expected_end,\n'
+        '            expected_channel, expected_name, term_choice, term_date,\n'
+        '            payment_confirmed,\n'
+        '        )\n',
         "route new term choices outside existing Save")
     fn = once(fn,
-        '        row,old_name=check_state(con)\\n        iid=row["installation_id"]',
-        '        row,old_name=check_state(con)\\n        iid=row["installation_id"]\\n'
-        '        if iid and _owner_effective_entitlement_mode(con, iid) != "CLIENT":\\n'
+        '        row,old_name=check_state(con)\n        iid=row["installation_id"]',
+        '        row,old_name=check_state(con)\n        iid=row["installation_id"]\n'
+        '        if iid and _owner_effective_entitlement_mode(con, iid) != "CLIENT":\n'
         '            raise HTTPException(409, "Najpierw przywróć tryb licencji klienta.")',
         "paid Save must not overwrite selected service mode")
     result = replace_function(source, "panel_grid_save_row", fn)
