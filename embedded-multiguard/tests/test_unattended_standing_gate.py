@@ -83,6 +83,10 @@ class StandingAuthorizationGateTests(unittest.TestCase):
         self.assertIn('scope = standing["device_scope"]', body)
         self.assertNotIn('scope = "CLIENT_DIAGNOSTIC"', body)
         self.assertIn('renewed["device_scope"] != scope', body)
+        self.assertIn("standing_authorization_record(db, iid, lock=True)", body)
+        standing = source_for(
+            WORKSHOP_TREE, WORKSHOP, "standing_authorization_record")
+        self.assertIn('" FOR SHARE" if lock else ""', standing)
         self.assertLess(body.index("standing_authorization_record_valid("),
                         body.index("meshcentral.create_standing_service_share("))
         self.assertIn("meshcentral.revoke_share(node,share.public_id)", body)
