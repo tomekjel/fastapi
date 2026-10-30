@@ -5468,7 +5468,10 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         action = f"/multiguard/panel/license/manage/{lid}/change-plan"
         csrf = _panel_escape(_workshop_csrf())
         operation = str(uuid.uuid4())
-        expected = _panel_escape(_iso(until)) if until else ""
+        # Stale-write token always belongs to the stored paid KeyGate link,
+        # never to the independent service grant displayed in the picker.
+        paid_end = row["valid_until"]
+        expected = _panel_escape(_iso(paid_end)) if paid_end else ""
         form_id = "row-" + str(row["id"])
         # Two compact controls: independent edition and term. Keep the existing
         # displayed expiration and the "+" extension until OWNER migration is
