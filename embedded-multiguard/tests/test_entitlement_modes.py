@@ -580,6 +580,22 @@ class CompactGridPickerTests(unittest.TestCase):
         self.assertIn("explicit_paid_perpetual_supported=False", save)
         self.assertIn('action == "PAID_PERPETUAL"', save)
 
+    def test_service_mode_grid_uses_independent_end_date(self):
+        grid = self.function_source("panel_licenses_grid")
+        self.assertIn("owner_entitlement_selections", grid)
+        self.assertIn("grant.valid_until AS service_valid_until", grid)
+        self.assertIn('selected_mode == "SERVICE"', grid)
+        self.assertIn('effective_edition = "SERVICE"', grid)
+        self.assertIn('paid_end = row["valid_until"]', grid)
+        self.assertIn("Bezterminowa", grid)
+        self.assertIn('name="original_edition" value="{effective_edition}"', grid)
+
+    def test_service_mode_does_not_offer_paid_plus_extension(self):
+        grid = self.function_source("panel_licenses_grid")
+        self.assertIn('and selected_mode == "CLIENT"', grid)
+        self.assertIn('name="payment_confirmed"', grid)
+
+
 
 class WorkshopRemoteSourceTests(unittest.TestCase):
     @classmethod
