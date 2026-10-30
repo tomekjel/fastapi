@@ -11,11 +11,69 @@ from app.routers.multiguard_entitlement_modes import (  # noqa: E402
     paid_pro_authorized,
     service_grant_authorized,
     unattended_service_authorized,
+    validate_license_variant,
+    license_within_period,
 )
 
 NOW = datetime(2026, 10, 30, 16, 0, tzinfo=timezone.utc)
 LATER = NOW + timedelta(days=31)
 EARLIER = NOW - timedelta(seconds=1)
+
+
+class SixLicenseVariantsTests(unittest.TestCase):
+    """Edition and duration must be independently selectable in OWNER UI."""
+
+    def test_all_three_editions_allow_timed_and_perpetual(self):
+        for edition in ("STANDARD", "PRO", "SERVICE"):
+            with self.subTest(edition=edition, period="TIMED"):
+                self.assertEqual(
+                    validate_license_variant(edition, "TIMED", 3),
+                    (edition, "TIMED", 3),
+                )
+                self.assertEqual(
+                    validate_license_variant(edition, "TIMED", 6),
+                    (edition, "TIMED", 6),
+                )
+                self.assertEqual(
+                    validate_license_variant(edition, "TIMED", 12),
+                    (edition, "TIMED", 12),
+                )
+            with self.subTest(edition=edition, period="PERPETUAL"):
+                self.assertEqual(
+                    validate_license_variant(edition, "PERPETUAL", None),
+                    (edition, "PERPETUAL", None),
+                )
+
+    def test_timed_service_expires_while_offline(self):
+        self.assertTrue(license_within_period("TIMED", LATER, NOW))
+        self.assertFalse(license_within_period("TIMED", NOW, NOW))
+        self.assertFalse(license_within_period("TIMED", EARLIER, NOW))
+
+    def test_perpetual_service_not_bound_to_end_date(self):
+        self.assertTrue(license_within_period("PERPETUAL", None, NOW))
+        self.assertFalse(license_within_period("PERPETUAL", LATER, NOW))
+
+    def test_missing_expiry_does_not_make_paid_pro_perpetual(self):
+        self.assertFalse(license_within_period("TIMED", None, NOW))
+
+    def test_invalid_time_and_edition_fail_closed(self):
+        for edition, period, months in (
+            ("SERVICE", "TIMED", None),
+            ("SERVICE", "TIMED", 1),
+            ("PRO", "PERPETUAL", 12),
+            ("STANDARD", "PERPETUAL", 3),
+            ("SERVICE", "INFINITE", None),
+            ("UNKNOWN", "TIMED", 3),
+        ):
+            with self.subTest(edition=edition, period=period, months=months):
+                with self.assertRaises(ValueError):
+                    validate_license_variant(edition, period, months)
+
+    def test_no_silent_conversion_on_invalid_date(self):
+        self.assertFalse(
+            license_within_period("TIMED", datetime(2026, 11, 1), NOW)
+        )
+        self.assertFalse(license_within_period("OTHER", None, NOW))
 
 
 class EntitlementModeTests(unittest.TestCase):
