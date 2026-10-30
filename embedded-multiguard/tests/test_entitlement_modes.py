@@ -1,5 +1,5 @@
 """No credentials, database or KeyGate needed: OWNER mode-selection regression tests."""
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import sys
 import unittest
 from pathlib import Path
@@ -13,6 +13,8 @@ from app.routers.multiguard_entitlement_modes import (  # noqa: E402
     unattended_service_authorized,
     validate_license_variant,
     license_within_period,
+    license_term_selection,
+    calendar_valid_until,
 )
 
 NOW = datetime(2026, 10, 30, 16, 0, tzinfo=timezone.utc)
@@ -43,6 +45,58 @@ class SixLicenseVariantsTests(unittest.TestCase):
                     validate_license_variant(edition, "PERPETUAL", None),
                     (edition, "PERPETUAL", None),
                 )
+
+    def test_calendar_is_a_fourth_choice_for_every_edition(self):
+        for edition in ("STANDARD", "PRO", "SERVICE"):
+            self.assertEqual(
+                license_term_selection(
+                    edition, "TIMED", calendar_date=date(2026, 11, 15)
+                ),
+                (edition, "TIMED", None, date(2026, 11, 15)),
+            )
+
+    def test_calendar_one_week_and_two_weeks(self):
+        now = datetime(2026, 10, 30, 16, 0, tzinfo=timezone.utc)
+        for chosen_day in (date(2026, 11, 6), date(2026, 11, 13)):
+            end = calendar_valid_until(chosen_day, now=now)
+            self.assertEqual(
+                end.astimezone(__import__("zoneinfo").ZoneInfo("Europe/Warsaw")).date(),
+                chosen_day + timedelta(days=1),
+            )
+
+    def test_until_november_15_includes_whole_fifteenth(self):
+        expires = calendar_valid_until(
+            date(2026, 11, 15), now=NOW,
+        )
+        self.assertEqual(
+            expires.astimezone(__import__("zoneinfo").ZoneInfo("Europe/Warsaw")).strftime("%Y-%m-%d %H:%M"),
+            "2026-11-16 00:00",
+        )
+
+    def test_calendar_dst_transition_is_local_midnight(self):
+        now = datetime(2026, 3, 27, 12, tzinfo=timezone.utc)
+        expires = calendar_valid_until(date(2026, 3, 29), now=now)
+        self.assertEqual(
+            expires.astimezone(__import__("zoneinfo").ZoneInfo("Europe/Warsaw")).strftime("%Y-%m-%d %H:%M"),
+            "2026-03-30 00:00",
+        )
+
+    def test_perpetual_never_keeps_hidden_calendar_date(self):
+        with self.assertRaises(ValueError):
+            license_term_selection(
+                "SERVICE", "PERPETUAL", calendar_date=date(2026, 11, 15)
+            )
+
+    def test_two_period_sources_cannot_override_each_other(self):
+        with self.assertRaises(ValueError):
+            license_term_selection(
+                "SERVICE", "TIMED", preset_months=3,
+                calendar_date=date(2026, 11, 15),
+            )
+
+    def test_custom_date_cannot_be_in_the_past(self):
+        with self.assertRaises(ValueError):
+            calendar_valid_until(date(2026, 10, 29), now=NOW)
 
     def test_timed_service_expires_while_offline(self):
         self.assertTrue(license_within_period("TIMED", LATER, NOW))
