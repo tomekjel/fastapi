@@ -703,6 +703,29 @@ CREATE TABLE IF NOT EXISTS guard.owner_entitlement_selections (
     selected_mode TEXT NOT NULL CHECK (selected_mode IN ('CLIENT','SERVICE')),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS guard.owner_license_mode_transitions (
+    id UUID PRIMARY KEY,
+    installation_id UUID NOT NULL,
+    license_link_id UUID REFERENCES guard.license_links(id),
+    source_mode TEXT NOT NULL
+        CHECK (source_mode IN ('STANDARD','PRO','SERVICE','NONE')),
+    target_mode TEXT NOT NULL
+        CHECK (target_mode IN ('STANDARD','PRO','SERVICE','NONE')),
+    target_valid_until TIMESTAMPTZ,
+    state TEXT NOT NULL
+        CHECK (state IN ('PREPARED','KEYGATE_REVOKED','LOCAL_APPLIED',
+                         'COMPLETED','REQUIRES_RECONCILIATION','CANCELLED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_error TEXT
+);
+ALTER TABLE guard.owner_license_mode_transitions
+    ADD COLUMN IF NOT EXISTS reason TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS owner_license_mode_transitions_one_open
+  ON guard.owner_license_mode_transitions (installation_id)
+  WHERE state IN ('PREPARED','KEYGATE_REVOKED','LOCAL_APPLIED',
+                  'REQUIRES_RECONCILIATION');
+
 CREATE TABLE IF NOT EXISTS guard.workshop_grant_audit (
     id BIGSERIAL PRIMARY KEY,
     installation_id UUID NOT NULL,
