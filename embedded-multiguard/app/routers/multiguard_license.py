@@ -4864,6 +4864,85 @@ def panel_change_license_plan(link_id: uuid.UUID,
     )
 
 
+@router.post("/multiguard/panel/licenses-grid/{link_id}/save")
+def panel_grid_save(
+    link_id: uuid.UUID,
+    operation_id: uuid.UUID = Form(...),
+    expected_end: str = Form(...),
+    target_edition: str = Form(...),
+    original_edition: str = Form(...),
+    original_name: str = Form(...),
+    friendly_name: str = Form(...),
+    csrf_token: str = Form(...),
+    confirmed: str = Form(""),
+    _: None = Depends(_panel_auth),
+):
+    """Save one grid row. Verify all local inputs before any KeyGate mutation."""
+    from app.routers.multiguard_panel_settings import _token_valid
+    from app.routers.multiguard_panel_devices import _schema as _owner_labels_schema
+    from fastapi.responses import RedirectResponse
+    if not _token_valid(csrf_token) or confirmed != "yes":
+        raise HTTPException(403, "Nie potwierdzono zapisu.")
+    name = " ".join(friendly_name.strip().split())
+    if len(name) > 420 or any(ord(ch) < 32 for ch in name):
+        raise HTTPException(400, "Nieprawidłowa nazwa komputera.")
+    edition = target_edition.strip().upper()
+    initial = original_edition.strip().upper()
+    if edition not in {"STANDARD", "PRO"} or initial not in {"STANDARD", "PRO"}:
+        raise HTTPException(400, "Nieprawidłowa edycja.")
+    _ensure_schema()
+    _owner_labels_schema()
+    with engine.connect() as con:
+        link = con.execute(text("""
+            SELECT installation_id, plan_code, valid_until, lifecycle
+            FROM guard.license_links WHERE id=:id
+        """), {"id":link_id}).mappings().one_or_none()
+        if not link or not link["installation_id"]:
+            raise HTTPException(404, "Nie znaleziono komputera.")
+        iid = link["installation_id"]
+        current_edition = "PRO" if link["plan_code"] == "multi_guard_pro" else "STANDARD"
+        if current_edition != initial:
+            raise HTTPException(409, "Edycja zmieniła się. Odśwież tabelę.")
+        detected = con.execute(text("""
+            SELECT hostname, manufacturer, model FROM guard.pending_installations
+            WHERE installation_id=:iid
+        """), {"iid":iid}).mappings().one_or_none()
+        stored_name = con.execute(text("""
+            SELECT friendly_name FROM guard.owner_installation_labels
+            WHERE installation_external_id=:iid
+        """), {"iid":iid}).scalar_one_or_none()
+    from app.routers.multiguard_panel_devices import owner_detected_name
+    current_name = str(stored_name or owner_detected_name(detected or {}))
+    if current_name != original_name:
+        raise HTTPException(409, "Nazwa zmieniła się. Odśwież tabelę.")
+    change_name = name != current_name
+    change_plan = edition != initial
+    if not change_name and not change_plan:
+        return RedirectResponse("/multiguard/panel/licenses-grid", status_code=303)
+    if change_plan:
+        _owner_change_plan(link_id, operation_id, _license_operation_date(expected_end),
+                           edition, "Zmiana edycji w tabeli OWNER")
+    if change_name:
+        # Revalidate the row before committing the local label. Existing service
+        # order and hardware-identification fields are never overwritten.
+        with engine.begin() as con:
+            current = con.execute(text("""
+                SELECT friendly_name FROM guard.owner_installation_labels
+                WHERE installation_external_id=:iid FOR UPDATE
+            """), {"iid":iid}).scalar_one_or_none()
+            if current != stored_name:
+                raise HTTPException(409, "Nazwa została zmieniona równolegle.")
+            con.execute(text("""
+                INSERT INTO guard.owner_installation_labels
+                    (installation_external_id, friendly_name)
+                VALUES (:iid,:name)
+                ON CONFLICT (installation_external_id) DO UPDATE
+                   SET friendly_name=EXCLUDED.friendly_name, updated_at=now()
+            """), {"iid":iid, "name":name})
+    return RedirectResponse("/multiguard/panel/licenses-grid", status_code=303,
+                            headers={"Cache-Control":"private, no-store"})
+
+
 # OWNER licensing grid v1: separate preview route while transactional mutations
 # continue through the existing audited endpoints.
 @router.get("/multiguard/panel/licenses-grid", response_class=HTMLResponse)
@@ -4915,25 +4994,13 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         csrf = _panel_escape(_workshop_csrf())
         operation = str(uuid.uuid4())
         expected = _panel_escape(_iso(until)) if until else ""
+        form_id = "row-" + str(row["id"])
         controls = (
-            f'<form class="grid-plan-form" method="post" action="{action}" '
-            f'onsubmit="return confirm(&#39;Zapisać zmianę edycji tej licencji?&#39;)">'
-            f'<input type="hidden" name="csrf_token" value="{csrf}">'
-            f'<input type="hidden" name="operation_id" value="{operation}">'
-            f'<input type="hidden" name="expected_end" value="{expected}">'
-            f'<input type="hidden" name="reason" value="Zmiana edycji przez OWNER">'
-            '<input type="hidden" name="return_to_grid" value="yes">'
-            f'<input type="hidden" name="confirmed" value="yes">'
-            f'<select name="target_edition" aria-label="Edycja licencji" '
-            f'data-original="{"PRO" if plan=="Pro" else "STANDARD"}" '
-            'onchange="this.form.querySelector(&quot;button[type=submit]&quot;).disabled=this.value===this.dataset.original">'
+            f'<select name="target_edition" form="{form_id}" aria-label="Edycja licencji" '
+            f'data-original="{"PRO" if plan=="Pro" else "STANDARD"}">'
             f'<option value="STANDARD" {"selected" if plan=="Standard" else ""}>Standard</option>'
             f'<option value="PRO" {"selected" if plan=="Pro" else ""}>Pro</option>'
             '</select>'
-            '<button type="submit" disabled>Zapisz</button>'
-            '</form>'
-            if state == "ACTIVE" and until and until > _utcnow()
-            else f'<span>{plan}</span>'
         )
         extend = (
             f"""<details class="grid-extend-menu"><summary aria-label="Przedłuż licencję">+</summary>
@@ -4953,17 +5020,26 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
             if row["sale_kind"] == "DIRECT" and state == "ACTIVE"
             else ""
         )
-        computer_cell = (
-            f'<form class="grid-name-form" method="post" '
-            f'action="/multiguard/panel/installation/{iid}/name" '
-            'onsubmit="return confirm(&#39;Zapisać nazwę tego komputera?&#39;)">'
+        row_form = (
+            f'<form class="grid-row-form" id="{form_id}" method="post" '
+            f'action="/multiguard/panel/licenses-grid/{lid}/save" '
+            'onsubmit="return confirm(&#39;Zapisać zmiany tego komputera?&#39;)">'
             f'<input type="hidden" name="csrf_token" value="{csrf}">'
-            '<input type="hidden" name="return_to" value="licenses-grid">'
-            f'<input name="friendly_name" maxlength="420" value="{name}" '
-            f'aria-label="Nazwa komputera" data-original="{name}">'
-            '<button type="submit" disabled>Zapisz</button>'
+            f'<input type="hidden" name="operation_id" value="{operation}">'
+            f'<input type="hidden" name="expected_end" value="{expected}">'
+            f'<input type="hidden" name="original_edition" value="{"PRO" if plan=="Pro" else "STANDARD"}">'
+            f'<input type="hidden" name="original_name" value="{name}">'
+            '<input type="hidden" name="confirmed" value="yes">'
             '</form>'
+        )
+        computer_cell = (
+            f'<input class="grid-computer-input" form="{form_id}" name="friendly_name" '
+            f'maxlength="420" value="{name}" aria-label="Nazwa komputera">'
             if device and iid else name
+        )
+        save = (
+            f'<button class="grid-save" form="{form_id}" type="submit" disabled>Zapisz</button>'
+            if device and iid else ""
         )
         trs.append(f"""<tr class="{css}" data-search="{search}" data-state="{state}"
             data-expiry="{expiry}" data-online="{'true' if online else 'false'}">
@@ -4975,7 +5051,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
           <td>{kind}</td>
           <td>{expiry} {extend}<small>{channel}</small></td>
           <td>{seen}<small>{version} · {'Online' if online else 'Offline'}</small></td>
-          <td><a href="{details}">Szczegóły</a></td>
+          <td>{row_form}{save} <a href="{details}">Szczegóły</a></td>
         </tr>""")
     page = """<section class="card">
       <h1>Licencje</h1>
@@ -5022,6 +5098,9 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
     .grid-licenses td{padding-top:8px;padding-bottom:8px}
     .grid-licenses a{color:#6fcaff;text-decoration:underline}
     .grid-copy{font-size:10px;padding:1px 4px;border:0;background:transparent;color:#86ceff;text-decoration:underline;cursor:pointer}
+    .grid-computer-input{width:100%;min-width:90px;font-size:12px}
+    .grid-save{font-size:11px;padding:6px 7px}
+    .grid-save:disabled{opacity:.35;cursor:default}
     .grid-name-form{display:flex;gap:4px;align-items:center}
     .grid-name-form input{min-width:80px;width:100%;max-width:190px;font-size:12px}
     .grid-name-form button{padding:5px;font-size:11px;white-space:nowrap}
@@ -5072,16 +5151,15 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         try{await navigator.clipboard.writeText(value);button.textContent='Skopiowano'}
         catch(_){window.prompt('Skopiuj identyfikator:',value)}
       });
-      document.querySelectorAll('.grid-name-form input[name=friendly_name]').forEach(field=>{
-        field.addEventListener('input',()=>{
-          field.form.querySelector('button[type=submit]').disabled=field.value===field.dataset.original;
-        });
+      document.querySelectorAll('.grid-row-form').forEach(form=>{
+        const name=table.querySelector('[name=friendly_name][form="'+form.id+'"]');
+        const edition=table.querySelector('[name=target_edition][form="'+form.id+'"]');
+        const save=table.querySelector('.grid-save[form="'+form.id+'"]');
+        if(!name||!edition||!save)return;
+        const initialName=name.value,initialEdition=edition.value;
+        const update=()=>{save.disabled=name.value===initialName&&edition.value===initialEdition};
+        name.addEventListener('input',update);edition.addEventListener('change',update);
       });
-      period.addEventListener('change',apply);
-      document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{
-        filter=button.dataset.filter;wrap.hidden=filter!=='soon';
-        document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('selected',b===button));apply();
-      }));
       // Persist per-column widths for OWNER browser without affecting data.
       [...table.tHead.rows[0].cells].forEach((th,i)=>{
         const key='ms-grid-column-'+i;
