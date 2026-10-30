@@ -70,8 +70,9 @@ class PaidRemoteOverlayTests(unittest.TestCase):
             self.assertIn("_owner_verified_paid_remote("+conn+", ",body)
             self.assertNotIn("_has_active_remote_pro(",body)
         self.assertIn("FOR SHARE",source)
+        # Five connection call sites plus one helper definition.
         self.assertEqual(
-            source.count("_owner_verified_paid_remote(connection, "),5
+            source.count("_owner_verified_paid_remote(connection, "),6
         )
         self.assertEqual(source.count("_owner_verified_paid_remote(db, "),1)
 
