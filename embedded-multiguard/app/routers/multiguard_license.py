@@ -5397,11 +5397,18 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
     _ensure_schema()
     with engine.connect() as conn:
         links = conn.execute(text("""
-            SELECT id, installation_id, reception_number, plan_code,
-                   lifecycle, sale_kind, valid_until, release_channel,
-                   keygate_license_id
-            FROM guard.license_links
-            ORDER BY valid_until NULLS LAST, id
+            SELECT l.id, l.installation_id, l.reception_number, l.plan_code,
+                   l.lifecycle, l.sale_kind, l.valid_until, l.release_channel,
+                   l.keygate_license_id,
+                   COALESCE(sel.selected_mode, 'CLIENT') AS owner_mode,
+                   grant.enabled AS service_enabled,
+                   grant.valid_until AS service_valid_until
+            FROM guard.license_links l
+            LEFT JOIN guard.owner_entitlement_selections sel
+              ON sel.installation_id=l.installation_id
+            LEFT JOIN guard.workshop_grants grant
+              ON grant.installation_id=l.installation_id
+            ORDER BY l.valid_until NULLS LAST, l.id
             LIMIT 500
         """)).mappings().all()
     from app.routers.multiguard_panel_devices import owner_friendly_name, owner_detected_name
@@ -5417,18 +5424,31 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         iid = _panel_escape(str(row["installation_id"] or ""))
         license_id = _panel_escape(str(row["keygate_license_id"] or ""))
         reception = _panel_escape(str(row["reception_number"] or ""))
-        plan = "Pro" if row["plan_code"] == "multi_guard_pro" else "Standard"
-        kind = ("Brak" if row["lifecycle"] != "ACTIVE"
-                else "Serwisowa" if row["sale_kind"] == "SERVICE"
+        selected_mode = row["owner_mode"]
+        paid_edition = "PRO" if row["plan_code"] == "multi_guard_pro" else "STANDARD"
+        effective_edition = "SERVICE" if selected_mode == "SERVICE" else paid_edition
+        plan = ("Serwisowa" if effective_edition == "SERVICE"
+                else "Pro" if paid_edition == "PRO" else "Standard")
+        until = (row["service_valid_until"] if selected_mode == "SERVICE"
+                 else row["valid_until"])
+        service_active = (
+            selected_mode == "SERVICE" and bool(row["service_enabled"])
+            and (until is None or until > _utcnow())
+        )
+        effective_active = (service_active if selected_mode == "SERVICE"
+                            else row["lifecycle"] == "ACTIVE"
+                            and row["valid_until"] is not None
+                            and row["valid_until"] > _utcnow())
+        kind = ("Brak" if not effective_active
+                else "Serwisowa" if selected_mode == "SERVICE"
                 else "Czasowa")
-        until = row["valid_until"]
         from zoneinfo import ZoneInfo
-        expiry = _panel_escape(until.astimezone(ZoneInfo("Europe/Warsaw")).strftime("%Y-%m-%d") if until else "—")
-        state = _panel_escape(str(row["lifecycle"]))
+        expiry = _panel_escape(until.astimezone(ZoneInfo("Europe/Warsaw")).strftime("%Y-%m-%d") if until else "Bezterminowa" if service_active else "—")
+        state = "ACTIVE" if effective_active else "INACTIVE"
         channel = _panel_escape(str(row["release_channel"] or "—"))
         css = "grid-on" if row["lifecycle"] == "ACTIVE" else "grid-off"
-        status_label = ("Aktywna" if row["lifecycle"] == "ACTIVE"
-                        else "Wygasła" if row["lifecycle"] == "EXPIRED"
+        status_label = ("Aktywna" if effective_active
+                        else "Wygasła" if until is not None and until <= _utcnow()
                         else "Nieaktywna")
         details = f"/multiguard/panel/license/manage/{lid}"
         device = device_map.get(iid, {})
@@ -5456,10 +5476,10 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         controls = (
             f'<select class="mg-grid-edition" name="target_edition" form="{form_id}" '
             f'aria-label="Edycja licencji" '
-            f'data-original="{"PRO" if plan=="Pro" else "STANDARD"}">'
-            f'<option value="STANDARD" {"selected" if plan=="Standard" else ""}>Standard</option>'
-            f'<option value="PRO" {"selected" if plan=="Pro" else ""}>Pro</option>'
-            f'<option value="SERVICE">Serwisowa</option>'
+            f'data-original="{effective_edition}">'
+            f'<option value="STANDARD" {"selected" if effective_edition=="STANDARD" else ""}>Standard</option>'
+            f'<option value="PRO" {"selected" if effective_edition=="PRO" else ""}>Pro</option>'
+            f'<option value="SERVICE" {"selected" if effective_edition=="SERVICE" else ""}>Serwisowa</option>'
             '</select>'
         )
         term_picker = (
@@ -5498,6 +5518,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
               </form>
             </details>"""
             if row["sale_kind"] == "DIRECT" and state == "ACTIVE"
+            and selected_mode == "CLIENT"
             else ""
         )
         row_form = (
@@ -5507,7 +5528,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
             f'<input type="hidden" name="csrf_token" value="{csrf}">'
             f'<input type="hidden" name="operation_id" value="{operation}">'
             f'<input type="hidden" name="expected_end" value="{expected}">'
-            f'<input type="hidden" name="original_edition" value="{"PRO" if plan=="Pro" else "STANDARD"}">'
+            f'<input type="hidden" name="original_edition" value="{effective_edition}">'
             f'<input type="hidden" name="original_name" value="{name}">'
             '<input type="hidden" name="term_edit_preview" value="1">'
             '<input type="hidden" name="confirmed" value="yes">'
