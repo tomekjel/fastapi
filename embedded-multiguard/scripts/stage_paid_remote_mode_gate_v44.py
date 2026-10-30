@@ -132,16 +132,36 @@ def paid_remote_overlay(original: str)->tuple[str,tuple[str,...]]:
         if not legacy:
             continue
         body="".join(original.splitlines(keepends=True)[fn.lineno-1:fn.end_lineno])
-        if "connection" not in body:
+        if name == "agent_session_mesh_enroll":
+            if "def validate(db" not in body or "with engine.begin() as db" not in body:
+                raise RuntimeError("Nested Mesh validate(db) unavailable")
+        elif "connection" not in body:
             raise RuntimeError("No transaction connection available in "+name)
         if not (name.startswith("panel_") or name in (
+                "agent_session_mesh_enroll",
                 "agent_remote_poll","agent_remote_decision","agent_remote_end",
                 "create_remote_session","remote_session_detail",
                 "remote_session_connect","remote_session_end")):
             raise RuntimeError("Unexpected paid authorization call site "+name)
         calls.append(name)
-    if not calls:
-        raise RuntimeError("No legacy remote callsites to protect")
+    expected = {
+        "agent_session_mesh_enroll": 1,
+        "agent_remote_poll": 1,
+        "agent_remote_decision": 1,
+        "create_remote_session": 1,
+        "remote_session_connect": 2,
+    }
+    if set(calls) != set(expected):
+        raise RuntimeError("Unexpected paid remote callsites: "+str(calls))
+    for name, count in expected.items():
+        node = entries[name]
+        count_actual = sum(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id == "_has_active_remote_pro"
+            for n in ast.walk(node)
+        )
+        if count_actual != count:
+            raise RuntimeError("Unexpected paid remote calls in "+name)
     if "from sqlalchemy import text" not in original:
         raise RuntimeError("SQLAlchemy text import missing")
     # Replace ONLY whole call names in the audited functions. Every replacement
@@ -153,9 +173,10 @@ def paid_remote_overlay(original: str)->tuple[str,tuple[str,...]]:
         func="".join(lines[start-1:end])
         if "_has_active_remote_pro(" not in func:
             raise RuntimeError("Expected legacy gate missing: "+name)
+        conn = "db" if name == "agent_session_mesh_enroll" else "connection"
         func=func.replace(
             "_has_active_remote_pro(",
-            "_owner_verified_paid_remote(connection, "
+            "_owner_verified_paid_remote(" + conn + ", "
         )
         changed=rewrite(changed,name,func)
     start,_=extract(changed,"_has_active_remote_pro")
@@ -228,7 +249,7 @@ def verify_production_shape():
             raise RuntimeError("Expected OWNER stage2 guard not installed: "+marker)
     if digest(PROD)!=PROD_SHA256:
         raise RuntimeError("Paid remote production changed unexpectedly: abort")
-    if not POLICY.is_file() or git_blob_sha(POLICY.read_bytes())!=EXPECTED_OLD_POLICY_BLOB:
+    if not POLICY.is_file() or git_blob_sha(POLICY.read_bytes())!=EXPECTED_NEW_POLICY_BLOB:
         raise RuntimeError("Existing 6-variant policy unexpected: abort")
 
 def main():
@@ -238,14 +259,13 @@ def main():
     args=p.parse_args()
     verify_production_shape()
     prepared,calls=paid_remote_overlay(PROD.read_text())
-    upgraded_policy=policy_bytes()
     before=check_status()
     if before not in (401,403):
         raise RuntimeError("Protected panel does not return 401/403: abort")
     print("REMOTE MODE-GATE PREFLIGHT: PASS")
     print("PROTECTED ROUTES:", ", ".join(calls))
     print("PAID REMOTE: CLIENT MODE ONLY; SERVICE BYPASS BLOCKED")
-    print("SIX TERM VARIANTS: STANDARD / PRO / SERWISOWA x TIMED / PERPETUAL")
+    print("SIX TERM VARIANTS: ALREADY INSTALLED; NOT MODIFIED")
     print("DURATION ENGINE: 3/6/12 MONTHS, CALENDAR, PRESERVED EXTENSIONS")
     if not args.apply:
         print("DRY RUN: NO CHANGES")
@@ -268,16 +288,6 @@ def main():
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
-        # Both replacements are protected by verified backups and restoration.
-        fd,p=tempfile.mkstemp(prefix=".mg-license-policy-",dir=ROUTERS)
-        try:
-            with os.fdopen(fd,"wb") as stream:
-                stream.write(upgraded_policy)
-            os.chmod(p,0o644)
-            os.replace(p,POLICY)
-        finally:
-            if os.path.exists(p):
-                os.unlink(p)
         subprocess.run(["systemctl","restart","multiservis-api.service"],check=True,timeout=40)
         for _ in range(12):
             if check_status()==before and subprocess.run(
