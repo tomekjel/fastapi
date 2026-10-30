@@ -189,6 +189,118 @@ def service_valid_until(
     return owner_valid_until("SERVICE", choice, calendar_day, now=now)
 
 
+
+def plan_grid_license_change(
+    *,
+    current_mode: str,
+    current_edition: str,
+    target_edition: str,
+    term_choice: str,
+    term_date: str,
+    now: datetime,
+    paid_valid_until: datetime | None,
+    service_valid_until_current: datetime | None = None,
+    explicit_paid_perpetual_supported: bool = False,
+) -> dict[str, object]:
+    """Plan OWNER grid Save without writes to KeyGate, SQL or MeshCentral.
+
+    Keeps customer KeyGate terms and OWNER service permissions separate.
+    The known KeyGate adapter supports 3/6/12 month extension and a fixed
+    expiration date; it does NOT prove support for perpetual paid contracts.
+    Such a selection must fail closed instead of storing a NULL paid expiry.
+    Caller must validate authenticated OWNER, CSRF, stale version, live Mesh
+    sessions and explicit payment before executing any returned action.
+
+    A service grant's expiry is independent of the customer's paid expiry.
+    A return to CLIENT must retain the original paid term and key.
+    """
+    selected_mode = current_mode.strip().upper()
+    old = current_edition.strip().upper()
+    new = target_edition.strip().upper()
+    choice = term_choice.strip().upper()
+    if selected_mode not in ("CLIENT", "SERVICE"):
+        raise ValueError("Missing or invalid OWNER selected mode")
+    if old not in ("STANDARD", "PRO", "SERVICE"):
+        raise ValueError("Invalid existing license edition")
+    if new not in _ALLOWED_EDITIONS:
+        raise ValueError("Invalid target license edition")
+    if old == "SERVICE" and selected_mode != "SERVICE":
+        raise ValueError("Service edition and selected mode conflict")
+    if old != "SERVICE" and selected_mode != "CLIENT":
+        raise ValueError("Paid edition and selected mode conflict")
+
+    if new == "SERVICE":
+        if choice == "KEEP":
+            if selected_mode != "SERVICE":
+                raise ValueError("Service entry requires an explicit term")
+            if term_date.strip():
+                raise ValueError("KEEP cannot contain a calendar date")
+            return {
+                "action": "NONE",
+                "mode": "SERVICE",
+                "edition": "SERVICE",
+                "valid_until": service_valid_until_current,
+            }
+        expires = owner_valid_until("SERVICE", choice, term_date, now=now)
+        return {
+            "action": "SERVICE_TERM" if selected_mode == "SERVICE" else "ENTER_SERVICE",
+            "mode": "SERVICE",
+            "edition": "SERVICE",
+            "valid_until": expires,
+        }
+
+    # Select CLIENT from SERVICE. The prior KeyGate license remains untouched
+    # and must be checked for ACTIVE status independently during execution.
+    if selected_mode == "SERVICE":
+        if choice != "KEEP" or term_date.strip():
+            raise ValueError("Return to paid mode requires KEEP; modify paid term separately")
+        return {
+            "action": "RESTORE_PAID",
+            "mode": "CLIENT",
+            "edition": new,
+            "valid_until": paid_valid_until,
+        }
+
+    if choice == "KEEP":
+        if term_date.strip():
+            raise ValueError("KEEP cannot contain an unsubmitted calendar date")
+        return {
+            "action": "PAID_EDITION" if old != new else "NONE",
+            "mode": "CLIENT",
+            "edition": new,
+            "valid_until": paid_valid_until,
+        }
+
+    # Deliberately separate plan/term mutations, otherwise a partial KeyGate
+    # request can apply one modification while silently losing the other.
+    if old != new:
+        raise ValueError("Save the paid edition and its term in separate operations")
+    if choice == "PERPETUAL" and not explicit_paid_perpetual_supported:
+        raise ValueError("Paid perpetual terms are unsupported by the current KeyGate adapter")
+
+    expires = owner_valid_until(
+        new, choice, term_date, now=now,
+        existing_end=paid_valid_until, extend=choice in ("3", "6", "12"),
+    )
+    if choice in ("3", "6", "12"):
+        if paid_valid_until is None or paid_valid_until <= now:
+            raise ValueError("Paid extension requires an unexpired paid term")
+        action = "PAID_EXTEND"
+    elif choice == "CALENDAR":
+        if paid_valid_until is None:
+            raise ValueError("Paid calendar changes require an existing expiry")
+        action = "PAID_CALENDAR"
+    else:
+        action = "PAID_PERPETUAL"
+
+    return {
+        "action": action,
+        "mode": "CLIENT",
+        "edition": new,
+        "valid_until": expires,
+    }
+
+
 Mode = Literal["CLIENT", "SERVICE", "NONE"]
 _ALLOWED_MODES = frozenset(("CLIENT", "SERVICE", "NONE"))
 _PENDING_ALLOWED = frozenset(("WAITING", "ASSIGNED", "PROVISIONED"))
