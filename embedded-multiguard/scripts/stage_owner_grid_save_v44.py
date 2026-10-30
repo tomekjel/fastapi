@@ -143,7 +143,13 @@ def main():
     old=fetch(OLD_SOURCE_COMMIT,"multiguard_license.py",OLD_SOURCE_BLOB)
     new=fetch(NEW_SOURCE_COMMIT,"multiguard_license.py",NEW_SOURCE_BLOB)
     policy_source=fetch(POLICY_COMMIT,"multiguard_entitlement_modes.py",NEW_POLICY_BLOB)
-    if gitblob(POLICY.read_bytes())!=OLD_POLICY_BLOB:
+    current_policy=gitblob(POLICY.read_bytes())
+    if (current_policy==NEW_POLICY_BLOB
+            and canon(current,"panel_grid_save_row")==canon(new,"panel_grid_save")
+            and canon(current,"_extend_active_license")==canon(new,"_extend_active_license")):
+        print("OWNER GRID SAVE BACKEND: ALREADY APPLIED (NO CHANGES)")
+        return
+    if current_policy!=OLD_POLICY_BLOB:
         raise RuntimeError("Live term policy version unexpected; abort")
     changed=prepare(current,old,new)
     compile(policy_source,str(POLICY),"exec")
