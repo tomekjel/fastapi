@@ -270,11 +270,22 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
-    if digest(LICENSE.read_bytes()) != EXPECTED_LIVE_SHA256:
-        raise RuntimeError("V4.4 production source hash changed; no writes")
     if digest(THEME.read_bytes()) != EXPECTED_THEME_SHA256:
         raise RuntimeError("V4.4 theme hash changed; no writes")
-    if git_blob(POLICY.read_bytes()) != OLD_POLICY_BLOB:
+    live = LICENSE.read_bytes()
+    actual = digest(live)
+    policy_hash = git_blob(POLICY.read_bytes())
+    if actual != EXPECTED_LIVE_SHA256:
+        # Re-running an already completed deployment should be harmless.
+        # A partial or unrelated change must still fail closed.
+        if (policy_hash == NEW_POLICY_BLOB
+                and live.count(b"def _owner_v44_grid_term_selection(") == 1
+                and b'STAGE2 HARD STOP: DO NOT ALLOW OWNER RIGHTS TRANSITIONS YET.' in live
+                and b"def panel_grid_save_row(" in live):
+            print("V4.4 SURGICAL OWNER BACKEND: ALREADY APPLIED (NO CHANGES)")
+            return
+        raise RuntimeError("V4.4 production source hash changed; no writes")
+    if policy_hash != OLD_POLICY_BLOB:
         raise RuntimeError("Existing six-variant policy changed; no writes")
     url = ("https://raw.githubusercontent.com/tomekjel/fastapi/" +
            POLICY_COMMIT + "/embedded-multiguard/app/routers/multiguard_entitlement_modes.py")
@@ -295,6 +306,12 @@ def main():
     if not args.apply:
         print("V4.4 SURGICAL PREFLIGHT: PASS (DRY RUN)")
         return
+    # Never deploy a new mutation path with either switch already enabled.
+    for flag in ("MULTIGUARD_OWNER_GRID_PAID_TERM_ENABLED",
+                 "MULTIGUARD_OWNER_GRID_SERVICE_ENABLED",
+                 "MULTIGUARD_MODE_SWITCH_ENABLED"):
+        if os.environ.get(flag, "false").strip().lower() in ("true", "1", "yes"):
+            raise RuntimeError("Unsafe feature flag active: " + flag)
     # Changing the module restarts FastAPI. Refuse active client connections.
     no_open_sessions()
     backup = ROOT / ("backup-mg-owner-v44-surgical-" +
