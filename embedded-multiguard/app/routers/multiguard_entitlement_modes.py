@@ -200,6 +200,7 @@ def plan_grid_license_change(
     now: datetime,
     paid_valid_until: datetime | None,
     service_valid_until_current: datetime | None = None,
+    paid_edition: str | None = None,
     explicit_paid_perpetual_supported: bool = False,
 ) -> dict[str, object]:
     """Plan OWNER grid Save without writes to KeyGate, SQL or MeshCentral.
@@ -254,6 +255,8 @@ def plan_grid_license_change(
     if selected_mode == "SERVICE":
         if choice != "KEEP" or term_date.strip():
             raise ValueError("Return to paid mode requires KEEP; modify paid term separately")
+        if paid_edition is None or paid_edition.strip().upper() != new:
+            raise ValueError("Restored edition must match the original paid license")
         return {
             "action": "RESTORE_PAID",
             "mode": "CLIENT",
