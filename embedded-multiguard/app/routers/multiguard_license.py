@@ -5195,6 +5195,9 @@ def panel_grid_save(
     friendly_name: str = Form(...),
     csrf_token: str = Form(...),
     confirmed: str = Form(""),
+    term_choice: str = Form("KEEP"),
+    term_date: str = Form(""),
+    term_edit_preview: str = Form("0"),
     _: None = Depends(_panel_auth),
 ):
     """Save one grid row. Verify all local inputs before any KeyGate mutation."""
@@ -5203,6 +5206,16 @@ def panel_grid_save(
     from fastapi.responses import RedirectResponse
     if not _token_valid(csrf_token) or confirmed != "yes":
         raise HTTPException(403, "Nie potwierdzono zapisu.")
+    # Until the six real licence variants are integrated with KeyGate,
+    # a preview choice must never be silently ignored by an old save handler.
+    choice = term_choice.strip().upper()
+    if choice not in {"KEEP", "3", "6", "12", "CALENDAR", "PERPETUAL"}:
+        raise HTTPException(400, "Nieprawidłowy wybór okresu.")
+    if term_edit_preview == "1" and (choice != "KEEP" or
+                                     target_edition.strip().upper() == "SERVICE"):
+        raise HTTPException(409,
+            "Nowy rodzaj licencji i kalendarz nie są jeszcze aktywne w backendzie. "
+            "Obecna licencja pozostała bez zmian.")
     name = " ".join(friendly_name.strip().split())
     if len(name) > 420 or any(ord(ch) < 32 for ch in name):
         raise HTTPException(400, "Nieprawidłowa nazwa komputera.")
@@ -5400,7 +5413,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
           <td>{actual_order or 'Bez zlecenia'}</td>
           <td>{controls}<small>{status_label}</small></td>
           <td><span class="grid-kind {'grid-kind-live' if state=='ACTIVE' else 'grid-kind-none'}">{kind}</span></td>
-          <td>{term_picker} {extend}<small>{channel}</small></td>
+          <td class="mg-term-cell">{term_picker} {extend}<small>{channel}</small></td>
           <td>{seen}<small><span class="grid-presence {'grid-presence-on' if online else ''}">{'● Online' if online else '○ Offline'}</span> · {version}</small></td>
           <td>{row_form}{save} <a href="{details}">Szczegóły</a></td>
         </tr>""")
@@ -5457,6 +5470,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
     .grid-save{font-size:11px;padding:6px 7px}
     .grid-save:disabled{opacity:.35;cursor:default}
     .mg-grid-edition{min-width:92px;max-width:110px;padding:4px;font-size:11px}
+    .grid-licenses td.mg-term-cell{overflow:visible;position:relative}
     .mg-grid-term-picker{position:relative;display:inline-block;vertical-align:middle}
     .mg-grid-term-picker>summary{list-style:none;cursor:pointer;white-space:nowrap;
       font-size:11px;border:1px solid #3f759a;border-radius:5px;padding:4px 6px;min-width:83px}
