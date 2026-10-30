@@ -4185,6 +4185,7 @@ def panel_direct_extension_post(
     months: int = Form(...),
     csrf_token: str = Form(...),
     payment_confirmed: str = Form(""),
+    return_to_grid: str = Form(""),
     _: None = Depends(_panel_auth),
 ):
     from app.routers.multiguard_panel_settings import _token_valid
@@ -4202,6 +4203,10 @@ def panel_direct_extension_post(
         installation_id, months, operation_id, source="WEB",
         payment_confirmed=(payment_confirmed=="yes"),by_installation=True,
     )
+    if return_to_grid == "yes":
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse("/multiguard/panel/licenses-grid", status_code=303,
+                                headers={"Cache-Control": "private, no-store"})
     new_date = _panel_escape(result["newValidUntil"][:10])
     return HTMLResponse(_panel_html(f"""
       <section class="card">
@@ -4929,7 +4934,20 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
             else f'<span>{plan}</span>'
         )
         extend = (
-            f'<a class="grid-extend" href="/multiguard/panel/license/installation/{iid}/extend">+</a>'
+            f"""<details class="grid-extend-menu"><summary aria-label="Przedłuż licencję">+</summary>
+              <form method="post" action="/multiguard/panel/license/installation/{iid}/extend"
+                onsubmit="return confirm('Potwierdzić płatność i przedłużenie licencji?')">
+                <input type="hidden" name="csrf_token" value="{csrf}">
+                <input type="hidden" name="operation_id" value="{uuid.uuid4()}">
+                <input type="hidden" name="payment_confirmed" value="yes">
+                <input type="hidden" name="return_to_grid" value="yes">
+                <select name="months" aria-label="Dodaj miesięcy">
+                  <option value="3">+3 mies.</option>
+                  <option value="6">+6 mies.</option>
+                  <option value="12">+12 mies.</option>
+                </select><button type="submit">Zapisz</button>
+              </form>
+            </details>"""
             if row["sale_kind"] == "DIRECT" and state == "ACTIVE"
             else ""
         )
@@ -4992,7 +5010,10 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
     .grid-plan-form{display:flex;gap:5px;align-items:center}
     .grid-plan-form select{max-width:95px;padding:6px 2px;font-size:12px}
     .grid-plan-form button,.grid-extend{font-size:11px;padding:6px 8px;white-space:nowrap}
-    .grid-extend{display:inline-block;border:1px solid #3f759a;border-radius:5px;margin-left:3px}
+    .grid-extend-menu{display:inline-block;vertical-align:middle;margin-left:4px}
+    .grid-extend-menu summary{cursor:pointer;border:1px solid #3f759a;border-radius:5px;padding:3px 8px;color:#76cbff}
+    .grid-extend-menu form{display:flex;gap:4px;align-items:center;margin:5px 0;padding:5px;background:#0a2034;border:1px solid #416d89;border-radius:6px}
+    .grid-extend-menu select{max-width:100px;font-size:11px}
     </style>
     <script>
     (function(){
