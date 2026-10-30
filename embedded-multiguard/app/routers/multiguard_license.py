@@ -4971,13 +4971,18 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         license_id = _panel_escape(str(row["keygate_license_id"] or ""))
         reception = _panel_escape(str(row["reception_number"] or ""))
         plan = "Pro" if row["plan_code"] == "multi_guard_pro" else "Standard"
-        kind = "Serwisowa" if row["sale_kind"] == "SERVICE" else "Czasowa"
+        kind = ("Brak" if row["lifecycle"] != "ACTIVE"
+                else "Serwisowa" if row["sale_kind"] == "SERVICE"
+                else "Czasowa")
         until = row["valid_until"]
         from zoneinfo import ZoneInfo
         expiry = _panel_escape(until.astimezone(ZoneInfo("Europe/Warsaw")).strftime("%Y-%m-%d") if until else "—")
         state = _panel_escape(str(row["lifecycle"]))
         channel = _panel_escape(str(row["release_channel"] or "—"))
         css = "grid-on" if row["lifecycle"] == "ACTIVE" else "grid-off"
+        status_label = ("Aktywna" if row["lifecycle"] == "ACTIVE"
+                        else "Wygasła" if row["lifecycle"] == "EXPIRED"
+                        else "Nieaktywna")
         details = f"/multiguard/panel/license/manage/{lid}"
         device = device_map.get(iid, {})
         online = bool(device.get("last_seen_at") and
@@ -5050,10 +5055,10 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
           <td title="{license_id}"><span class="ellipsis">{license_id[:8]}…</span><small><button type="button" class="grid-copy" data-copy="{license_id}" aria-label="Kopiuj pełne ID licencji">Kopiuj ID</button></small></td>
           <td>—<small>Brak danych klienta w powiązaniu</small></td>
           <td>{actual_order or 'Bez zlecenia'}</td>
-          <td>{controls}<small>{state}</small></td>
-          <td>{kind}</td>
+          <td>{controls}<small>{status_label}</small></td>
+          <td><span class="grid-kind {'grid-kind-live' if state=='ACTIVE' else 'grid-kind-none'}">{kind}</span></td>
           <td>{expiry} {extend}<small>{channel}</small></td>
-          <td>{seen}<small>{version} · {'Online' if online else 'Offline'}</small></td>
+          <td>{seen}<small><span class="grid-presence {'grid-presence-on' if online else ''}">{'● Online' if online else '○ Offline'}</span> · {version}</small></td>
           <td>{row_form}{save} <a href="{details}">Szczegóły</a></td>
         </tr>""")
     page = """<section class="card">
@@ -5094,7 +5099,11 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
     .grid-licenses td small{display:block;font-size:10px;opacity:.7}
     .grid-licenses .ellipsis{display:block;overflow:hidden;text-overflow:ellipsis}
     .grid-licenses .grid-on{border-left:3px solid #2d9d70}
-    .grid-licenses .grid-off{border-left:3px solid #b68a55}
+    .grid-licenses .grid-off{border-left:3px solid #c25c5c}
+    .grid-kind{font-size:11px;padding:3px 6px;border-radius:5px}
+    .grid-kind-live{color:#84e0aa;background:rgba(36,149,95,.14)}
+    .grid-kind-none{color:#f2aaa4;background:rgba(174,64,64,.12)}
+    .grid-presence-on{color:#78dca6}
     .grid-licenses tbody tr:nth-child(even){background:rgba(66,122,167,.065)}
     .grid-licenses tbody tr:hover{background:rgba(63,152,217,.16)}
     .grid-licenses tbody tr[hidden]{display:none}
