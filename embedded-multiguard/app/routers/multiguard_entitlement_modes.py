@@ -1,7 +1,8 @@
 """Pure fail-closed entitlement selection policy for Multi-Guard OWNER.
 
-Customer Standard/Pro KeyGate licences are *not* revoked when OWNER selects
-a separate, perpetual service grant.  Only the selected mode may be used
+Standard, Pro and Service are three independent editions. Every edition may
+have a fixed term or be perpetual. Switching effective rights never revokes an
+independent stored KeyGate licence.  Only the selected mode may be used
 by discovery, signed refresh, paid remote and workshop remote entrypoints.
 
 This module intentionally does not write SQL or call KeyGate/MeshCentral.
@@ -11,6 +12,52 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Literal
+
+LicenseEdition = Literal["STANDARD", "PRO", "SERVICE"]
+LicensePeriod = Literal["TIMED", "PERPETUAL"]
+_ALLOWED_EDITIONS = frozenset(("STANDARD", "PRO", "SERVICE"))
+_ALLOWED_PERIODS = frozenset(("TIMED", "PERPETUAL"))
+_ALLOWED_MONTHS = frozenset((3, 6, 12))
+
+
+def validate_license_variant(
+    edition: str,
+    period: str,
+    months: int | None,
+) -> tuple[LicenseEdition, LicensePeriod, int | None]:
+    """Validate all six combinations. Time period is NOT implied by edition.
+
+    A timed licence must declare its term. A perpetual one cannot silently
+    inherit a previous customer's expiration or a service lease.
+    """
+    normalized_edition = edition.strip().upper()
+    normalized_period = period.strip().upper()
+    if normalized_edition not in _ALLOWED_EDITIONS:
+        raise ValueError("Unknown license edition")
+    if normalized_period not in _ALLOWED_PERIODS:
+        raise ValueError("Unknown license period")
+    if normalized_period == "TIMED":
+        if type(months) is not int or months not in _ALLOWED_MONTHS:
+            raise ValueError("Timed licence requires 3, 6 or 12 months")
+    elif months is not None:
+        raise ValueError("Perpetual licence cannot have a duration in months")
+    return normalized_edition, normalized_period, months  # type: ignore[return-value]
+
+
+def license_within_period(
+    period: str, valid_until: datetime | None, now: datetime,
+) -> bool:
+    """Do not infer perpetual rights from a missing legacy paid end date."""
+    current = _utc_aware(now)
+    if current is None:
+        return False
+    if period == "PERPETUAL":
+        return valid_until is None
+    if period == "TIMED":
+        end = _utc_aware(valid_until)
+        return end is not None and current < end
+    return False
+
 
 Mode = Literal["CLIENT", "SERVICE", "NONE"]
 _ALLOWED_MODES = frozenset(("CLIENT", "SERVICE", "NONE"))
