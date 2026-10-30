@@ -4953,9 +4953,21 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
             if row["sale_kind"] == "DIRECT" and state == "ACTIVE"
             else ""
         )
+        computer_cell = (
+            f'<form class="grid-name-form" method="post" '
+            f'action="/multiguard/panel/installation/{iid}/name" '
+            'onsubmit="return confirm(&#39;Zapisać nazwę tego komputera?&#39;)">'
+            f'<input type="hidden" name="csrf_token" value="{csrf}">'
+            '<input type="hidden" name="return_to" value="licenses-grid">'
+            f'<input name="friendly_name" maxlength="420" value="{name}" '
+            f'aria-label="Nazwa komputera" data-original="{name}">'
+            '<button type="submit" disabled>Zapisz</button>'
+            '</form>'
+            if device and iid else name
+        )
         trs.append(f"""<tr class="{css}" data-search="{search}" data-state="{state}"
             data-expiry="{expiry}" data-online="{'true' if online else 'false'}">
-          <td title="{iid}"><span class="ellipsis">{name}</span><small>{iid}</small></td>
+          <td title="{iid}">{computer_cell}<small>{iid}</small></td>
           <td title="{license_id}"><span class="ellipsis">{license_id}</span><small>ID licencji</small></td>
           <td>—<small>Brak danych klienta w powiązaniu</small></td>
           <td>{actual_order or 'Bez zlecenia'}</td>
@@ -5009,6 +5021,10 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
     .grid-licenses tbody tr[hidden]{display:none}
     .grid-licenses td{padding-top:8px;padding-bottom:8px}
     .grid-licenses a{color:#6fcaff;text-decoration:underline}
+    .grid-name-form{display:flex;gap:4px;align-items:center}
+    .grid-name-form input{min-width:80px;width:100%;max-width:190px;font-size:12px}
+    .grid-name-form button{padding:5px;font-size:11px;white-space:nowrap}
+    .grid-name-form button:disabled{opacity:.35;cursor:default}
     .grid-plan-form{display:flex;gap:5px;align-items:center}
     .grid-plan-form select{max-width:95px;padding:6px 2px;font-size:12px}
     .grid-plan-form button,.grid-extend{font-size:11px;padding:6px 8px;white-space:nowrap}
@@ -5048,6 +5064,11 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         }).length;
       }
       input.addEventListener('input',apply);
+      document.querySelectorAll('.grid-name-form input[name=friendly_name]').forEach(field=>{
+        field.addEventListener('input',()=>{
+          field.form.querySelector('button[type=submit]').disabled=field.value===field.dataset.original;
+        });
+      });
       period.addEventListener('change',apply);
       document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{
         filter=button.dataset.filter;wrap.hidden=filter!=='soon';
