@@ -39,7 +39,15 @@ def prepared_old_license_fixture():
             raise HTTPException(409, "Właściciel wybrał tryb serwisowy.")
 """
     assert old_refresh.count(service_guard) == 1
-    source = overlay.replace_function(source,"refresh",old_refresh.replace(service_guard,""))
+    # Rebuild the historical source *before* the new transactional lock
+    # checks. This overlay test validates migration from that older shape;
+    # production refresh/acceptance retain stronger OWNER rechecks.
+    old_refresh = old_refresh.replace(service_guard, "")
+    begin = old_refresh.index(
+        "        # The OWNER mode changer locks pending_installations FIRST")
+    end = old_refresh.index("        row = connection.execute(", begin)
+    old_refresh = old_refresh[:begin] + old_refresh[end:]
+    source = overlay.replace_function(source,"refresh",old_refresh)
     discovery = overlay.get_function(source,"discovery_assignment")
     first = discovery.index("    # Explicit OWNER service mode takes precedence")
     last = discovery.index('    reception_id = pending.get("assigned_reception_id")',first)
