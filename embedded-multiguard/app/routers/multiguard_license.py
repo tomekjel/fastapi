@@ -2033,34 +2033,45 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
     pending = dict(pending)
     pending["status"] = current_status
 
-    # Explicit OWNER service mode takes precedence without deleting or
-    # changing the independent paid KeyGate licence. A freshly signed lease
-    # supersedes an older cached client payload after discovery sync.
-    with engine.connect() as owner_con:
+    # OWNER mode changes lock pending_installations before any grant changes.
+    # Hold a compatible shared lock for the ENTIRE signed SERVICE snapshot.
+    # Otherwise an already-read SERVICE selector could sign WORKSHOP after
+    # OWNER switched to CLIENT and invalidated previous standing consent.
+    with engine.begin() as owner_con:
+        current_installation = owner_con.execute(text("""
+            SELECT installation_id FROM guard.pending_installations
+            WHERE installation_id=:iid FOR SHARE
+        """), {"iid": pending["installation_id"]}).scalar_one_or_none()
+        if current_installation is None:
+            raise HTTPException(409, "Instalacja została usunięta.")
         selected_mode = _owner_effective_entitlement_mode(
             owner_con, pending["installation_id"]
         )
-    if selected_mode == "SERVICE":
-        grant = _workshop_grant(pending["installation_id"])
-        if not grant:
-            raise HTTPException(409, "Wybrano tryb serwisowy bez uprawnienia.")
-        return {
-            "assigned": False,
-            "status": "WORKSHOP" if (
-                grant["enabled"]
-                and (grant.get("valid_until") is None or grant["valid_until"] > _utcnow())
-            ) else "WAITING",
-            "releaseChannel": grant["release_channel"] if grant["enabled"] else None,
-            "workshopLease": _signed_workshop_grant(pending, grant),
-            "workshopMonitoring": {
-                "enabled": bool(grant["enabled"]
-                                and (grant.get("valid_until") is None or
-                                     grant["valid_until"] > _utcnow())
-                                and grant.get("monitoring_profile", "OFF") != "OFF"),
-                "profile": grant.get("monitoring_profile", "OFF") if grant["enabled"] else "OFF",
-            },
-            "serverTime": _iso(_utcnow()),
-        }
+        if selected_mode == "SERVICE":
+            grant = owner_con.execute(text("""
+                SELECT * FROM guard.workshop_grants
+                WHERE installation_id=:iid FOR SHARE
+            """), {"iid": pending["installation_id"]}).mappings().first()
+            if not grant:
+                raise HTTPException(409, "Wybrano tryb serwisowy bez uprawnienia.")
+            grant = dict(grant)
+            return {
+                "assigned": False,
+                "status": "WORKSHOP" if (
+                    grant["enabled"]
+                    and (grant.get("valid_until") is None or grant["valid_until"] > _utcnow())
+                ) else "WAITING",
+                "releaseChannel": grant["release_channel"] if grant["enabled"] else None,
+                "workshopLease": _signed_workshop_grant(pending, grant),
+                "workshopMonitoring": {
+                    "enabled": bool(grant["enabled"]
+                                    and (grant.get("valid_until") is None or
+                                         grant["valid_until"] > _utcnow())
+                                    and grant.get("monitoring_profile", "OFF") != "OFF"),
+                    "profile": grant.get("monitoring_profile", "OFF") if grant["enabled"] else "OFF",
+                },
+                "serverTime": _iso(_utcnow()),
+            }
 
     reception_id = pending.get("assigned_reception_id")
     # Direct client licences have no reception_id. Use the stored KeyGate
