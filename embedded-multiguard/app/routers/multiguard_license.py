@@ -2412,6 +2412,19 @@ def refresh(req: RefreshRequest):
         lifecycle = "EXPIRED"
 
     with engine.begin() as connection:
+        # The OWNER mode changer locks pending_installations FIRST and then
+        # license_links. Use the same order, so a mode switch cannot occur
+        # between the initial preflight and a newly signed paid refresh.
+        pending = connection.execute(text("""
+            SELECT installation_id FROM guard.pending_installations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": link["installation_id"]}).scalar_one_or_none()
+        if pending is None:
+            raise HTTPException(409, "Instalacja została usunięta.")
+        if _owner_effective_entitlement_mode(connection, link["installation_id"]) != "CLIENT":
+            raise HTTPException(409, "Tryb OWNER zmienił się przed odświeżeniem.")
+        if _owner_pending_plan_change(connection, link["id"]):
+            raise HTTPException(409, "Zmiana edycji w toku. Ponów synchronizację.")
         row = connection.execute(
             text(
                 """
@@ -2477,6 +2490,18 @@ def acceptance(req: AcceptanceRequest):
 
     accepted_documents = [item.model_dump() for item in req.documents]
     with engine.begin() as connection:
+        # Match OWNER transition lock order (pending then paid link), ensuring
+        # a concurrent SERVICE choice cannot race KeyGate activation.
+        pending = connection.execute(text("""
+            SELECT installation_id FROM guard.pending_installations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": link["installation_id"]}).scalar_one_or_none()
+        if pending is None:
+            raise HTTPException(409, "Instalacja została usunięta.")
+        if _owner_effective_entitlement_mode(connection, link["installation_id"]) != "CLIENT":
+            raise HTTPException(409, "Tryb OWNER zmienił się przed akceptacją.")
+        if _owner_pending_plan_change(connection, link["id"]):
+            raise HTTPException(409, "Zmiana edycji w toku. Ponów synchronizację.")
         # Serialise client acceptance and verify the state again under lock.
         # Otherwise concurrent requests can both call KeyGate and restart time.
         current = connection.execute(text("""
