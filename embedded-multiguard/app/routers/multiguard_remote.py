@@ -179,9 +179,11 @@ def _has_active_remote_pro(installation, now: datetime) -> bool:
 
 
 def _has_verified_remote_pro(connection, installation, now: datetime) -> bool:
-    """Authorize from server-owned paid links or OWNER workshop grants.
+    """Customer Pro remote sessions are allowed only in CLIENT mode.
 
-    Agent heartbeats cannot create an entitlement by claiming PRO/ACTIVE.
+    Service Pro uses a distinct workshop route, bound to standing OWNER
+    authorization and local opt-in. Never re-use a paid remote session to
+    bypass the per-connection customer consent prompt.
     """
     if not _has_active_remote_pro(installation, now):
         return False
@@ -189,61 +191,37 @@ def _has_verified_remote_pro(connection, installation, now: datetime) -> bool:
     if internal_id is None:
         return False
     paid = connection.execute(text("""
-        SELECT l.plan_code,l.lifecycle,l.valid_until
+        SELECT l.plan_code,l.lifecycle,l.valid_until,l.installation_id
         FROM guard.license_links l
         JOIN guard.installations gi
           ON gi.installation_external_id=l.installation_id
         WHERE gi.id=:id
         ORDER BY (l.lifecycle='ACTIVE') DESC, l.valid_until DESC NULLS LAST
         LIMIT 1
-    """), {"id":internal_id}).mappings().first()
-    if paid:
-        # Any existing customer link takes precedence over service access.
-        # Deny closed on revoked/expired rights; never fall through to grants.
-        return (paid["plan_code"]=="multi_guard_pro"
-                and paid["lifecycle"]=="ACTIVE"
-                and paid["valid_until"] is not None
-                and paid["valid_until"]>now)
-    grant = connection.execute(text("""
-        SELECT w.enabled,w.edition,p.status
-        FROM guard.workshop_grants w
-        JOIN guard.pending_installations p
-          ON p.installation_id=w.installation_id
-        JOIN guard.installations gi
-          ON gi.installation_external_id=p.installation_id
-        WHERE gi.id=:id
-          AND NOT EXISTS (
-              SELECT 1 FROM guard.license_links l
-              WHERE l.installation_id=w.installation_id
-          )
-        LIMIT 1
-    """), {"id":internal_id}).mappings().first()
-    return bool(grant and grant["enabled"]
-                and grant["edition"]=="PRO"
-                and grant["status"] == "WAITING")
+    """), {"id": internal_id}).mappings().first()
+    if not paid:
+        return False
+
+    from app.routers import multiguard_license as owner_license
+    if owner_license._owner_effective_entitlement_mode(
+        connection, paid["installation_id"]
+    ) != "CLIENT":
+        return False
+    return bool(
+        paid["plan_code"] == "multi_guard_pro"
+        and paid["lifecycle"] == "ACTIVE"
+        and paid["valid_until"] is not None
+        and paid["valid_until"] > now
+    )
 
 
 def _has_verified_service_remote_pro(connection, installation, now: datetime) -> bool:
-    """Only a current OWNER service grant with no paid link may bypass consent."""
-    if not _has_active_remote_pro(installation, now):
-        return False
-    internal_id = installation.get("installation_id") or installation.get("id")
-    if internal_id is None:
-        return False
-    return bool(connection.execute(text("""
-        SELECT 1 FROM guard.workshop_grants w
-        JOIN guard.pending_installations p
-          ON p.installation_id=w.installation_id
-        JOIN guard.installations gi
-          ON gi.installation_external_id=p.installation_id
-        WHERE gi.id=:id AND w.enabled=TRUE AND w.edition='PRO'
-          AND p.status='WAITING'
-          AND NOT EXISTS (
-              SELECT 1 FROM guard.license_links l
-              WHERE l.installation_id=w.installation_id
-          )
-        LIMIT 1
-    """), {"id":internal_id}).first())
+    """Legacy paid session route must NEVER grant unattended OWNER access.
+
+    Independent workshop remote subsystem performs its own standing
+    authorization and user-attestation checks, separate from KeyGate.
+    """
+    return False
 
 
 def _owner_label(user: CurrentUser) -> tuple[Optional[uuid.UUID], str]:
