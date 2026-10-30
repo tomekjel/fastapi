@@ -5319,7 +5319,10 @@ def panel_grid_save(
         if str(_setting("MULTIGUARD_OWNER_GRID_PAID_TERM_ENABLED", "false")).lower() not in ("true","1","yes"):
             raise HTTPException(409, "Zapis okresu klienta nie jest jeszcze włączony.")
     if action in ("ENTER_SERVICE", "SERVICE_TERM", "RESTORE_PAID"):
-        if str(_setting("MULTIGUARD_OWNER_GRID_SERVICE_ENABLED", "false")).lower() not in ("true","1","yes"):
+        # Both independent switches are required: the grid toggle alone
+        # never bypasses the OWNER mode transition safety interlock.
+        if (str(_setting("MULTIGUARD_MODE_SWITCH_ENABLED", "false")).lower() not in ("true","1","yes")
+                or str(_setting("MULTIGUARD_OWNER_GRID_SERVICE_ENABLED", "false")).lower() not in ("true","1","yes")):
             raise HTTPException(409, "Przełączenie trybu serwisowego nie jest jeszcze włączone.")
 
     if action == "PAID_EXTEND":
@@ -5474,6 +5477,9 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
             f'<input type="date" class="mg-grid-term-date" name="term_date" '
             f'form="{form_id}" aria-label="Wybierz dzień końcowy" '
             f'min="{_utcnow().date().isoformat()}" hidden>'
+            f'<label class="mg-grid-payment-confirm" hidden>'
+            f'<input type="checkbox" form="{form_id}" name="payment_confirmed" '
+            f'value="yes"> Potwierdzam otrzymanie płatności</label>'
             '</div></details>'
         )
         extend = (
@@ -5648,6 +5654,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         const edition=table.querySelector('[name=target_edition][form="'+form.id+'"]');
         const term=table.querySelector('[name=term_choice][form="'+form.id+'"]');
         const chosenDate=table.querySelector('[name=term_date][form="'+form.id+'"]');
+        const payment=table.querySelector('[name=payment_confirmed][form="'+form.id+'"]');
         const save=table.querySelector('.grid-save[form="'+form.id+'"]');
         if(!name||!edition||!term||!chosenDate||!save)return;
         const initialName=name.value,initialEdition=edition.value;
@@ -5656,6 +5663,12 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
           chosenDate.hidden=!calendar;
           chosenDate.required=calendar;
           if(!calendar)chosenDate.value='';
+          if(payment){
+            const needed=edition.value!=='SERVICE'&&['3','6','12'].includes(term.value);
+            payment.closest('.mg-grid-payment-confirm').hidden=!needed;
+            payment.required=needed;
+            if(!needed)payment.checked=false;
+          }
           save.disabled=name.value===initialName&&edition.value===initialEdition&&term.value==='KEEP';
         };
         name.addEventListener('input',update);
