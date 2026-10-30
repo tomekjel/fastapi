@@ -4116,6 +4116,7 @@ def _extend_active_license(
     source: str,
     payment_confirmed: bool,
     by_installation: bool = False,
+    expected_end: datetime | None = None,
 ) -> dict[str, Any]:
     """Append time to existing expiry, never to purchase date.
 
@@ -4167,6 +4168,8 @@ def _extend_active_license(
         if link["lifecycle"] != "ACTIVE":
             raise HTTPException(409, "Przedłużyć można wyłącznie aktywną licencję klienta.")
         end = link.get("valid_until")
+        if expected_end is not None and end != expected_end:
+            raise HTTPException(409, "Termin zmienił się. Odśwież tabelę licencji.")
         if end is None or end <= _utcnow():
             raise HTTPException(409, "Licencja wygasła — wymagane osobne odnowienie.")
         new_end = _add_months(end, months)
