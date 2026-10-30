@@ -173,5 +173,59 @@ class IntegrationSourceSafetyTests(unittest.TestCase):
         self.assertIn('return False', self.remote_source)
 
 
+class WorkshopRemoteSourceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import ast
+        root = Path(__file__).resolve().parents[1]
+        cls.source = (root / "app/routers/multiguard_workshop_remote.py").read_text()
+        cls.tree = ast.parse(cls.source)
+        f = next(x for x in cls.tree.body
+                 if isinstance(x, ast.FunctionDef)
+                 and x.name == "remote_entitlement_mode")
+        namespace = {}
+        exec(compile(ast.Module(body=[f], type_ignores=[]),
+                     "<workshop-mode-policy>", "exec"), namespace)
+        cls.evaluate = staticmethod(namespace["remote_entitlement_mode"])
+
+    def grant(self, **overrides):
+        value = dict(
+            status="PROVISIONED", enabled=True, edition="PRO",
+            owner_mode="SERVICE",
+        )
+        value.update(overrides)
+        return value
+
+    def test_owner_explicit_service_can_coexist_with_paid_status(self):
+        self.assertEqual(self.evaluate(self.grant()), "SERVICE_PRO")
+
+    def test_customer_mode_never_uses_unattended_service(self):
+        self.assertEqual(self.evaluate(self.grant(owner_mode="CLIENT")),
+                         "CUSTOMER_LICENSE")
+
+    def test_disabled_service_is_never_authorized(self):
+        self.assertEqual(self.evaluate(self.grant(enabled=False)),
+                         "SERVICE_DISABLED")
+
+    def test_uninstalled_or_archived_installation_is_denied(self):
+        self.assertEqual(self.evaluate(self.grant(status="ARCHIVED")),
+                         "INACTIVE_INSTALLATION")
+        self.assertEqual(self.evaluate(self.grant(status="UNINSTALLED")),
+                         "INACTIVE_INSTALLATION")
+
+    def test_standard_service_cannot_use_pro_remote(self):
+        self.assertEqual(self.evaluate(self.grant(edition="STANDARD")),
+                         "SERVICE_STANDARD")
+
+    def test_grant_sql_checks_expiry_and_owner_mode(self):
+        f = next(x for x in self.tree.body
+                 if isinstance(x, __import__("ast").FunctionDef)
+                 and x.name == "_grant")
+        fragment = __import__("ast").get_source_segment(self.source, f)
+        self.assertIn("g.valid_until > now()", fragment)
+        self.assertIn("owner_entitlement_selections", fragment)
+        self.assertIn("'CLIENT' ELSE 'SERVICE'", fragment)
+
+
 if __name__ == "__main__":
     unittest.main()
