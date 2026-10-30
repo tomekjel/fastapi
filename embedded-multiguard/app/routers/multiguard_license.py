@@ -4991,16 +4991,23 @@ def _owner_select_effective_mode(
 
     _ensure_schema()
     with engine.begin() as con:
-        link = con.execute(text("""
-            SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE
-        """), {"id": link_id}).mappings().one_or_none()
-        if not link or not link["installation_id"]:
+        # Same row order as provisioning (pending first, paid link second).
+        # The initial identity read is only a locator; verify it after locks.
+        loc = con.execute(text("""
+            SELECT installation_id FROM guard.license_links WHERE id=:id
+        """), {"id": link_id}).scalar_one_or_none()
+        if not loc:
             raise HTTPException(404, "Nie znaleziono licencji tego komputera.")
-        iid = link["installation_id"]
+        iid = loc
         pending = con.execute(text("""
             SELECT status,assigned_license_id FROM guard.pending_installations
             WHERE installation_id=:iid FOR UPDATE
         """), {"iid": iid}).mappings().one_or_none()
+        link = con.execute(text("""
+            SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE
+        """), {"id": link_id}).mappings().one_or_none()
+        if not link or link["installation_id"] != iid:
+            raise HTTPException(409, "Licencja została przeniesiona. Odśwież tabelę.")
         if (not pending or pending["status"] in
                 {"ARCHIVED", "UNINSTALLED", "IGNORED"}):
             raise HTTPException(409, "Komputer nie ma aktywnej rejestracji.")
@@ -5026,7 +5033,14 @@ def _owner_select_effective_mode(
                     or previous["target_mode"] != target_record):
                 raise HTTPException(409, "Identyfikator operacji został już wykorzystany.")
             if previous["state"] == "COMPLETED":
-                return
+                applied = con.execute(text("""
+                    SELECT selected_mode FROM guard.owner_entitlement_selections
+                    WHERE installation_id=:iid
+                """), {"iid": iid}).scalar_one_or_none()
+                if applied == target_mode:
+                    return
+                raise HTTPException(409,
+                    "Identyfikator odnosi się do poprzedniego trybu.")
             raise HTTPException(409, "Wcześniejsza operacja wymaga uzgodnienia.")
 
         selected = con.execute(text("""
