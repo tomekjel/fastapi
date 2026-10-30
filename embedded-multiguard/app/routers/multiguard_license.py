@@ -1448,7 +1448,7 @@ def _panel_html(body: str) -> str:
     <nav aria-label="Sekcje panelu">
       <a href="/multiguard/panel/dashboard"><span class="nav-icon" aria-hidden="true">⌂</span>Pulpit</a>
       <a href="/multiguard/panel/computers"><span class="nav-icon" aria-hidden="true">▤</span>Komputery</a>
-      <a href="/multiguard/panel/licenses"><span class="nav-icon" aria-hidden="true">▣</span>Licencje</a>
+      <a href="/multiguard/panel/licenses-grid"><span class="nav-icon" aria-hidden="true">▣</span>Licencje</a>
       <a href="/multiguard/panel/service-mode"><span class="nav-icon" aria-hidden="true">⌁</span>Tryb serwisowy</a>
       <a href="/multiguard/panel/remote"><span class="nav-icon" aria-hidden="true">▥</span>Zdalna pomoc</a>
       <a href="/multiguard/panel/service"><span class="nav-icon" aria-hidden="true">◇</span>Zlecenia</a>
