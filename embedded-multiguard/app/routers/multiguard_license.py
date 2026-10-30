@@ -4898,16 +4898,17 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
           <td><a href="{details}">Zarządzaj</a></td>
         </tr>""")
     page = """<section class="card">
-      <h1>Licencje — widok tabelaryczny</h1>
-      <p class="muted">Pierwszy etap nowej tabeli OWNER. Podgląd danych rzeczywistych;
-      zmiany licencji pozostają w sprawdzonych formularzach do czasu wdrożenia
-      bezpiecznego zapisywania wierszy.</p>
+      <h1>Licencje</h1>
+      <p class="muted">Komputery i licencje MultiGuard</p>
       <div class="grid-filters">
-        <label>Szukaj<input id="grid-find" type="search" placeholder="ID licencji, komputera, zlecenie..."></label>
-        <button type="button" data-filter="all">Wszystkie</button>
-        <button type="button" data-filter="ACTIVE">Aktywne</button>
-        <button type="button" data-filter="soon">Kończące się</button>
-        <label id="grid-period-wrap" hidden>W ciągu <select id="grid-period"><option value="30">30 dni</option><option value="14">14 dni</option><option value="7">7 dni</option></select></label>
+        <label class="grid-search"><span>Szukaj</span><input id="grid-find" type="search" placeholder="Nazwa, licencja, ID, klient, telefon, zlecenie"></label>
+        <button type="button" data-filter="all"><small>Komputery</small><strong id="grid-total">0</strong></button>
+        <button type="button" data-filter="ACTIVE"><small>Aktywne licencje</small><strong id="grid-active">0</strong></button>
+        <button type="button" data-filter="online"><small>Online</small><strong id="grid-online">—</strong></button>
+        <button type="button" data-filter="soon"><small>Kończące się</small><strong id="grid-soon">0</strong></button>
+      </div>
+      <div id="grid-period-wrap" hidden>Kończące się w ciągu:
+        <select id="grid-period"><option value="30">30 dni</option><option value="14">14 dni</option><option value="7">7 dni</option></select>
       </div>
       <div class="table-wrap"><table class="grid-licenses" id="grid-licenses">
       <thead><tr><th>ID komputera</th><th>ID licencji</th><th>Klient</th>
@@ -4917,10 +4918,16 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
       <p class="muted" id="grid-count"></p>
     </section>
     <style>
-    .grid-filters{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:12px 0}
-    .grid-filters label{display:grid;gap:4px}
-    .grid-filters input{width:290px;max-width:90vw}
-    .grid-filters button{padding:8px 12px}
+    .grid-filters{display:grid;grid-template-columns:1.6fr repeat(4,1fr);gap:8px;margin:12px 0;align-items:stretch}
+    .grid-filters .grid-search{display:grid;gap:5px;min-width:0;background:rgba(48,109,160,.09);padding:9px;border-radius:9px;border:1px solid rgba(100,164,217,.2)}
+    .grid-filters .grid-search span,.grid-filters button small{color:#a3bdd2;font-size:11px}
+    .grid-filters input{width:100%;min-width:0;font-size:12px}
+    .grid-filters button{display:flex;flex-direction:column;gap:4px;align-items:flex-start;padding:10px;border:1px solid #2d4860;border-radius:9px;background:rgba(48,109,160,.09);cursor:pointer}
+    .grid-filters button strong{font-size:21px}
+    .grid-filters button.selected{border-color:#49acd7;background:rgba(32,130,188,.22)}
+    #grid-period-wrap{margin:6px 0 12px;font-size:12px;color:#b0c8d9}
+    #grid-period-wrap[hidden]{display:none}
+    @media(max-width:850px){.grid-filters{grid-template-columns:repeat(3,1fr)}.grid-filters .grid-search{grid-column:span 3}}
     .grid-licenses{table-layout:fixed;min-width:1100px;width:100%;border-collapse:collapse}
     .grid-licenses th{position:relative;user-select:none}
     .grid-licenses th:after{content:"";position:absolute;top:0;right:0;height:100%;width:6px;cursor:col-resize}
@@ -4929,6 +4936,11 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
     .grid-licenses .ellipsis{display:block;overflow:hidden;text-overflow:ellipsis}
     .grid-licenses .grid-on{border-left:3px solid #2d9d70}
     .grid-licenses .grid-off{border-left:3px solid #b68a55}
+    .grid-licenses tbody tr:nth-child(even){background:rgba(66,122,167,.065)}
+    .grid-licenses tbody tr:hover{background:rgba(63,152,217,.16)}
+    .grid-licenses tbody tr[hidden]{display:none}
+    .grid-licenses td{padding-top:8px;padding-bottom:8px}
+    .grid-licenses a{color:#6fcaff;text-decoration:underline}
     </style>
     <script>
     (function(){
@@ -4938,6 +4950,9 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
       const period=document.getElementById('grid-period');
       const wrap=document.getElementById('grid-period-wrap');
       const count=document.getElementById('grid-count');
+      document.getElementById('grid-total').textContent=rows.length;
+      document.getElementById('grid-active').textContent=rows.filter(r=>r.dataset.state==='ACTIVE').length;
+      document.getElementById('grid-online').textContent='—';
       let filter='all';
       function apply(){
         const text=input.value.trim().toLowerCase();
@@ -4946,17 +4961,22 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         for(const r of rows){
           const expiry=r.dataset.expiry;
           const left=expiry==='—'?Infinity:(new Date(expiry+'T23:59:59')-today)/dayMs;
-          const passes=filter==='all'||(filter==='ACTIVE'&&r.dataset.state==='ACTIVE')||
+          const passes=filter==='all'||filter==='online'&&r.dataset.online==='true'||(filter==='ACTIVE'&&r.dataset.state==='ACTIVE')||
             (filter==='soon'&&r.dataset.state==='ACTIVE'&&left>=0&&left<=Number(period.value));
           r.hidden=!(passes&&r.dataset.search.toLowerCase().includes(text));
           if(!r.hidden)visible++;
         }
         count.textContent='Wyświetlono: '+visible+' z '+rows.length;
+        document.getElementById('grid-soon').textContent=rows.filter(r=>{
+          const e=r.dataset.expiry;const l=e==='—'?Infinity:(new Date(e+'T23:59:59')-today)/dayMs;
+          return r.dataset.state==='ACTIVE'&&l>=0&&l<=Number(period.value)
+        }).length;
       }
       input.addEventListener('input',apply);
       period.addEventListener('change',apply);
       document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{
-        filter=button.dataset.filter;wrap.hidden=filter!=='soon';apply();
+        filter=button.dataset.filter;wrap.hidden=filter!=='soon';
+        document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('selected',b===button));apply();
       }));
       // Persist per-column widths for OWNER browser without affecting data.
       [...table.tHead.rows[0].cells].forEach((th,i)=>{
