@@ -5323,12 +5323,34 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         operation = str(uuid.uuid4())
         expected = _panel_escape(_iso(until)) if until else ""
         form_id = "row-" + str(row["id"])
+        # Two compact controls: independent edition and term. Keep the existing
+        # displayed expiration and the "+" extension until OWNER migration is
+        # explicitly enabled; never silently apply a new license duration.
         controls = (
-            f'<select name="target_edition" form="{form_id}" aria-label="Edycja licencji" '
+            f'<select class="mg-grid-edition" name="target_edition" form="{form_id}" '
+            f'aria-label="Edycja licencji" '
             f'data-original="{"PRO" if plan=="Pro" else "STANDARD"}">'
             f'<option value="STANDARD" {"selected" if plan=="Standard" else ""}>Standard</option>'
             f'<option value="PRO" {"selected" if plan=="Pro" else ""}>Pro</option>'
+            f'<option value="SERVICE">Serwisowa</option>'
             '</select>'
+        )
+        term_picker = (
+            f'<details class="mg-grid-term-picker" aria-label="Ustaw ważność licencji">'
+            f'<summary title="Zmień ważność">{expiry} ▾</summary>'
+            f'<div class="mg-grid-term-menu">'
+            f'<select name="term_choice" form="{form_id}" aria-label="Ważność licencji">'
+            '<option value="KEEP" selected>Bez zmian</option>'
+            '<option value="3">3 miesiące</option>'
+            '<option value="6">6 miesięcy</option>'
+            '<option value="12">12 miesięcy</option>'
+            '<option value="CALENDAR">Wybierz datę…</option>'
+            '<option value="PERPETUAL">Bezterminowa</option>'
+            '</select>'
+            f'<input type="date" class="mg-grid-term-date" name="term_date" '
+            f'form="{form_id}" aria-label="Wybierz dzień końcowy" '
+            f'min="{_utcnow().date().isoformat()}" hidden>'
+            '</div></details>'
         )
         extend = (
             f"""<details class="grid-extend-menu"><summary aria-label="Przedłuż licencję">+</summary>
@@ -5357,6 +5379,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
             f'<input type="hidden" name="expected_end" value="{expected}">'
             f'<input type="hidden" name="original_edition" value="{"PRO" if plan=="Pro" else "STANDARD"}">'
             f'<input type="hidden" name="original_name" value="{name}">'
+            '<input type="hidden" name="term_edit_preview" value="1">'
             '<input type="hidden" name="confirmed" value="yes">'
             '</form>'
         )
@@ -5377,7 +5400,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
           <td>{actual_order or 'Bez zlecenia'}</td>
           <td>{controls}<small>{status_label}</small></td>
           <td><span class="grid-kind {'grid-kind-live' if state=='ACTIVE' else 'grid-kind-none'}">{kind}</span></td>
-          <td>{expiry} {extend}<small>{channel}</small></td>
+          <td>{term_picker} {extend}<small>{channel}</small></td>
           <td>{seen}<small><span class="grid-presence {'grid-presence-on' if online else ''}">{'● Online' if online else '○ Offline'}</span> · {version}</small></td>
           <td>{row_form}{save} <a href="{details}">Szczegóły</a></td>
         </tr>""")
@@ -5433,6 +5456,18 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
     .grid-computer-input{width:100%;min-width:90px;font-size:12px}
     .grid-save{font-size:11px;padding:6px 7px}
     .grid-save:disabled{opacity:.35;cursor:default}
+    .mg-grid-edition{min-width:92px;max-width:110px;padding:4px;font-size:11px}
+    .mg-grid-term-picker{position:relative;display:inline-block;vertical-align:middle}
+    .mg-grid-term-picker>summary{list-style:none;cursor:pointer;white-space:nowrap;
+      font-size:11px;border:1px solid #3f759a;border-radius:5px;padding:4px 6px;min-width:83px}
+    .mg-grid-term-picker>summary::-webkit-details-marker{display:none}
+    .mg-grid-term-picker[open] .mg-grid-term-menu{position:absolute;z-index:12;
+      top:100%;left:0;min-width:145px;padding:6px;background:#0a2034;
+      border:1px solid #416d89;border-radius:6px;box-shadow:0 8px 20px #0009}
+    .mg-grid-term-menu select{display:block;width:100%;font-size:11px;padding:4px}
+    .mg-grid-term-menu input[type=date]:not([hidden]){display:block;width:100%;margin-top:5px;
+      font-size:11px;padding:4px}
+    .mg-grid-term-menu input[hidden]{display:none}
     .grid-name-form{display:flex;gap:4px;align-items:center}
     .grid-name-form input{min-width:80px;width:100%;max-width:190px;font-size:12px}
     .grid-name-form button{padding:5px;font-size:11px;white-space:nowrap}
@@ -5486,11 +5521,23 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
       document.querySelectorAll('.grid-row-form').forEach(form=>{
         const name=table.querySelector('[name=friendly_name][form="'+form.id+'"]');
         const edition=table.querySelector('[name=target_edition][form="'+form.id+'"]');
+        const term=table.querySelector('[name=term_choice][form="'+form.id+'"]');
+        const chosenDate=table.querySelector('[name=term_date][form="'+form.id+'"]');
         const save=table.querySelector('.grid-save[form="'+form.id+'"]');
-        if(!name||!edition||!save)return;
+        if(!name||!edition||!term||!chosenDate||!save)return;
         const initialName=name.value,initialEdition=edition.value;
-        const update=()=>{save.disabled=name.value===initialName&&edition.value===initialEdition};
-        name.addEventListener('input',update);edition.addEventListener('change',update);
+        const update=()=>{
+          const calendar=term.value==='CALENDAR';
+          chosenDate.hidden=!calendar;
+          chosenDate.required=calendar;
+          if(!calendar)chosenDate.value='';
+          save.disabled=name.value===initialName&&edition.value===initialEdition&&term.value==='KEEP';
+        };
+        name.addEventListener('input',update);
+        edition.addEventListener('change',update);
+        term.addEventListener('change',update);
+        chosenDate.addEventListener('change',update);
+        update();
       });
       period.addEventListener('change',apply);
       document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{
