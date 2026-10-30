@@ -243,6 +243,8 @@ def save_owner_installation_name(
         target = f"/multiguard/panel/pending/{installation_id}#owner-name"
     elif return_to == "computers":
         target = "/multiguard/panel/computers#devices"
+    elif return_to == "licenses-grid":
+        target = "/multiguard/panel/licenses-grid"
     elif return_to == "device":
         with engine.connect() as con:
             internal = con.execute(text("""
