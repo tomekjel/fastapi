@@ -84,6 +84,24 @@ class ClientModeDiscoveryTests(unittest.TestCase):
         self.assertNotIn('"WORKSHOP" if grant["enabled"]',tail)
         self.assertIn('"status": "WAITING"',tail)
 
+    def test_signed_service_snapshot_serialized_with_owner_switch(self):
+        text=body("discovery_assignment")
+        start=text.index("with engine.begin() as owner_con:")
+        end=text.index('    reception_id = pending.get("assigned_reception_id")',start)
+        snapshot=text[start:end]
+        self.assertIn("FROM guard.pending_installations",snapshot)
+        self.assertIn("FROM guard.workshop_grants",snapshot)
+        self.assertEqual(snapshot.count("FOR SHARE"),2)
+        self.assertIn("selected_mode = _owner_effective_entitlement_mode(",snapshot)
+        self.assertIn('if selected_mode == "SERVICE":',snapshot)
+        self.assertIn("_signed_workshop_grant(pending, grant)",snapshot)
+        self.assertLess(snapshot.index("FROM guard.pending_installations"),
+                        snapshot.index("selected_mode = _owner_effective_entitlement_mode("))
+        self.assertLess(snapshot.index("selected_mode = _owner_effective_entitlement_mode("),
+                        snapshot.index("FROM guard.workshop_grants"))
+        self.assertLess(snapshot.index("FROM guard.workshop_grants"),
+                        snapshot.index("_signed_workshop_grant(pending, grant)"))
+
     def test_direct_expired_assignment_also_clears_old_workshop(self):
         text=body("discovery_assignment")
         direct=text[text.index("if (not reception_id and pending"):text.index('if not reception_id or pending["status"]')]
