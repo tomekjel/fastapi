@@ -71,8 +71,11 @@ class OverlayTest(unittest.TestCase):
         )
 
     def test_unknown_missing_ledger_fields_are_rejected(self):
+        valid = {"id", "installation_id", "license_link_id", "source_mode",
+                 "target_mode", "target_valid_until", "state", "reason",
+                 "created_at", "updated_at", "last_error"}
         with self.assertRaisesRegex(RuntimeError, "missing required columns: state"):
-            overlay.safe_missing_transition_columns({"id", "installation_id"})
+            overlay.safe_missing_transition_columns(valid - {"state"})
 
     def test_sql_migration_is_bounded_and_non_destructive(self):
         source = SCRIPT.read_text()
