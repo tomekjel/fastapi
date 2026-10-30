@@ -47,8 +47,8 @@ def _mg_v44_grid_transform(doc: str) -> str:
     if 'data-mg-v44-term-version="1"' in doc:
         return doc
     form_action = re.compile(
-        r'<form\b[^>]*action=["\\'][^"\\']*/multiguard/panel/licenses-grid/'
-        r'[^"\\']+/save["\\'][^>]*>',re.I|re.S)
+        r"""<form\b[^>]*action=["'][^"']*/multiguard/panel/licenses-grid/"""
+        r"""[^"']+/save["'][^>]*>"""
     # Grid headers, not an incidental action link or another detail table.
     header = re.search(r'<thead\b[^>]*>(.*?)</thead\s*>',doc,re.I|re.S)
     if not header:
@@ -62,14 +62,14 @@ def _mg_v44_grid_transform(doc: str) -> str:
         raise RuntimeError("Nie rozpoznano kolumny Ważna do V4.4")
 
     selection = re.compile(
-        r'(?P<open><select\b(?=[^>]*\bname=["\\']target_edition["\\'])[^>]*>)'
+        r"""(?P<open><select\b(?=[^>]*\bname=["']target_edition["'])[^>]*>)"""
         r'(?P<items>.*?)</select\s*>',re.I|re.S)
     term_select = re.compile(
-        r'(?P<open><select\b(?=[^>]*\bname=["\\']term_choice["\\'])[^>]*>)'
+        r"""(?P<open><select\b(?=[^>]*\bname=["']term_choice["'])[^>]*>)"""
         r'(?P<items>.*?)</select\s*>',re.I|re.S)
 
     def attr(tag,attribute):
-        hit = re.search(r'\b'+re.escape(attribute)+r'\s*=\s*(["\\'])(.*?)\1',
+        hit = re.search(r'\b'+re.escape(attribute)+r"""\s*=\s*(["'])(.*?)\1""",
                         tag,re.I|re.S)
         return hit.group(2) if hit else None
 
@@ -135,13 +135,13 @@ def _mg_v44_grid_transform(doc: str) -> str:
                 +'</div></details></td>',1)
 
         # Ensure a real native HTML date picker is bound to the same Save.
-        if not re.search(r'<input\b(?=[^>]*\bname=["\\']term_date["\\'])',expiry_cell,re.I|re.S):
+        if not re.search(r"""<input\b(?=[^>]*\bname=["']term_date["'])""",expiry_cell,re.I|re.S):
             form_ref=esc(form_id,quote=True)
             expiry_cell=expiry_cell.replace("</td>",
                 '<input type="date" name="term_date" form="'+form_ref+'" '
                 'aria-label="Data ważności licencji" hidden>'
                 '</td>',1)
-        if not re.search(r'<input\b(?=[^>]*\bname=["\\']payment_confirmed["\\'])',expiry_cell,re.I|re.S):
+        if not re.search(r"""<input\b(?=[^>]*\bname=["']payment_confirmed["'])""",expiry_cell,re.I|re.S):
             expiry_cell=expiry_cell.replace("</td>",
                 '<label class="mg-v44-paid-confirm" hidden>'
                 '<input type="checkbox" name="payment_confirmed" form="'+esc(form_id,quote=True)+'" value="yes">'
