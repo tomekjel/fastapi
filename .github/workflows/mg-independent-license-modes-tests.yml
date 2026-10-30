@@ -11,6 +11,7 @@ on:
       - 'embedded-multiguard/tests/test_entitlement_modes.py'
       - 'embedded-multiguard/tests/test_unattended_standing_gate.py'
       - 'embedded-multiguard/tests/test_paid_refresh_owner_mode_serialization.py'
+      - 'embedded-multiguard/tests/test_client_mode_discovery_revocation.py'
       - 'embedded-multiguard/scripts/stage_owner_mode_consent_invalidation_v44.py'
       - 'embedded-multiguard/tests/test_owner_mode_consent_invalidation_v44.py'
       - 'embedded-multiguard/scripts/stage_workshop_standing_gate_v44.py'
@@ -49,6 +50,7 @@ jobs:
           python -m py_compile embedded-multiguard/tests/test_entitlement_modes.py
           python -m py_compile embedded-multiguard/tests/test_unattended_standing_gate.py
           python -m py_compile embedded-multiguard/tests/test_paid_refresh_owner_mode_serialization.py
+          python -m py_compile embedded-multiguard/tests/test_client_mode_discovery_revocation.py
           python -m py_compile embedded-multiguard/scripts/stage_owner_mode_consent_invalidation_v44.py
           python -m py_compile embedded-multiguard/tests/test_owner_mode_consent_invalidation_v44.py
           python -m py_compile embedded-multiguard/scripts/stage_workshop_standing_gate_v44.py
@@ -67,6 +69,8 @@ jobs:
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_unattended_standing_gate.py' -v
       - name: OWNER selected mode synchronized with paid refresh and acceptance
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_paid_refresh_owner_mode_serialization.py' -v
+      - name: CLIENT discovery never resurrects retained service grant
+        run: python -m unittest discover -s embedded-multiguard/tests -p 'test_client_mode_discovery_revocation.py' -v
       - name: OWNER mode standing-consent invalidation V4.4 safety
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_owner_mode_consent_invalidation_v44.py' -v
       - name: Production workshop standing security overlay compatibility
