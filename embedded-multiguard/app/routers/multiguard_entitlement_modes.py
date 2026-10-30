@@ -10,8 +10,9 @@ It is shared by the future route wiring and can be tested in isolation.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 LicenseEdition = Literal["STANDARD", "PRO", "SERVICE"]
 LicensePeriod = Literal["TIMED", "PERPETUAL"]
@@ -42,6 +43,64 @@ def validate_license_variant(
     elif months is not None:
         raise ValueError("Perpetual licence cannot have a duration in months")
     return normalized_edition, normalized_period, months  # type: ignore[return-value]
+
+
+def license_term_selection(
+    edition: str,
+    period: str,
+    *,
+    preset_months: int | None = None,
+    calendar_date: date | None = None,
+) -> tuple[LicenseEdition, LicensePeriod, int | None, date | None]:
+    """The UI has three presets AND an arbitrary day picker, independent of edition.
+
+    Perpetual is an explicit selection, never inferred from a missing date.
+    A timed licence requires exactly one of the preset or calendar date.
+    """
+    edition = edition.strip().upper()
+    period = period.strip().upper()
+    if edition not in _ALLOWED_EDITIONS:
+        raise ValueError("Unknown license edition")
+    if period not in _ALLOWED_PERIODS:
+        raise ValueError("Unknown license period")
+    if period == "PERPETUAL":
+        if preset_months is not None or calendar_date is not None:
+            raise ValueError("Perpetual licence has no expiration selection")
+    else:
+        has_preset = preset_months is not None
+        has_calendar = calendar_date is not None
+        if has_preset == has_calendar:
+            raise ValueError("Choose 3/6/12 months OR an expiration date")
+        if has_preset and (type(preset_months) is not int or preset_months not in _ALLOWED_MONTHS):
+            raise ValueError("Only preset 3/6/12 months is supported")
+        if has_calendar and type(calendar_date) is not date:
+            raise ValueError("Calendar expiration must be a calendar date")
+    return edition, period, preset_months, calendar_date  # type: ignore[return-value]
+
+
+def calendar_valid_until(
+    chosen_day: date,
+    *,
+    now: datetime,
+    tz_name: str = "Europe/Warsaw",
+) -> datetime:
+    """Inclusive local calendar day -> exclusive start of the next local day (UTC).
+
+    Allows one or two weeks, or any chosen future day. Using local midnight
+    avoids DST errors and avoids expiring at the START of the chosen day.
+    """
+    if type(chosen_day) is not date:
+        raise ValueError("Incorrect calendar date")
+    if now.tzinfo is None:
+        raise ValueError("Current time must have a timezone")
+    tz = ZoneInfo(tz_name)
+    if chosen_day < now.astimezone(tz).date():
+        raise ValueError("The chosen day has already passed")
+    next_midnight_local = datetime.combine(chosen_day + timedelta(days=1), time.min, tzinfo=tz)
+    end_utc = next_midnight_local.astimezone(timezone.utc)
+    if end_utc <= now.astimezone(timezone.utc):
+        raise ValueError("The license end date must be in the future")
+    return end_utc
 
 
 def license_within_period(
