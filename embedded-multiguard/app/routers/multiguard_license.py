@@ -4967,6 +4967,209 @@ def panel_change_license_plan(link_id: uuid.UUID,
     )
 
 
+def _owner_select_effective_mode(
+    link_id: uuid.UUID, operation_id: uuid.UUID,
+    target_mode: str, expected_mode: str, reason: str,
+) -> None:
+    """Single SQL transaction: select between independent paid and service rights.
+
+    NEVER revoke, reissue, activate or extend the independent paid KeyGate key.
+    Require all remote sessions and Mesh shares to be closed *before* switching.
+    The service grant remains in the database when CLIENT is selected; every
+    entitlement, discovery and remote path must honor the selected mode.
+    """
+    from app.routers.multiguard_entitlement_modes import resolve_mode
+    target_mode = target_mode.strip().upper()
+    expected_mode = expected_mode.strip().upper()
+    reason = reason.strip()
+    if target_mode not in {"CLIENT", "SERVICE"}:
+        raise HTTPException(400, "Wybierz Klient albo Serwisowa.")
+    if expected_mode not in {"CLIENT", "SERVICE", "NONE"}:
+        raise HTTPException(400, "Nieprawidłowy poprzedni tryb.")
+    if not 3 <= len(reason) <= 1000:
+        raise HTTPException(400, "Podaj powód zmiany (3–1000 znaków).")
+
+    _ensure_schema()
+    with engine.begin() as con:
+        link = con.execute(text("""
+            SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE
+        """), {"id": link_id}).mappings().one_or_none()
+        if not link or not link["installation_id"]:
+            raise HTTPException(404, "Nie znaleziono licencji tego komputera.")
+        iid = link["installation_id"]
+        pending = con.execute(text("""
+            SELECT status,assigned_license_id FROM guard.pending_installations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": iid}).mappings().one_or_none()
+        if (not pending or pending["status"] in
+                {"ARCHIVED", "UNINSTALLED", "IGNORED"}):
+            raise HTTPException(409, "Komputer nie ma aktywnej rejestracji.")
+        if link["sale_kind"] == "DIRECT" and (
+            pending["assigned_license_id"] != link["keygate_license_id"]
+        ):
+            raise HTTPException(409, "Licencja płatna jest przypisana gdzie indziej.")
+        if _owner_pending_plan_change(con, link_id):
+            raise HTTPException(409, "Najpierw dokończ zmianę Standard / Pro.")
+
+        previous = con.execute(text("""
+            SELECT license_link_id,target_mode,state
+            FROM guard.owner_license_mode_transitions
+            WHERE id=:op FOR UPDATE
+        """), {"op": operation_id}).mappings().one_or_none()
+        target_record = (
+            "SERVICE" if target_mode == "SERVICE"
+            else "PRO" if link["plan_code"] == "multi_guard_pro"
+            else "STANDARD"
+        )
+        if previous:
+            if (previous["license_link_id"] != link_id
+                    or previous["target_mode"] != target_record):
+                raise HTTPException(409, "Identyfikator operacji został już wykorzystany.")
+            if previous["state"] == "COMPLETED":
+                return
+            raise HTTPException(409, "Wcześniejsza operacja wymaga uzgodnienia.")
+
+        selected = con.execute(text("""
+            SELECT selected_mode FROM guard.owner_entitlement_selections
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": iid}).scalar_one_or_none()
+        grant = con.execute(text("""
+            SELECT edition,release_channel,enabled,monitoring_profile,valid_until
+            FROM guard.workshop_grants WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": iid}).mappings().one_or_none()
+        current = resolve_mode(
+            selected,
+            has_customer_link=True,
+            has_service_grant=bool(grant and grant["enabled"]),
+        )
+        if current != expected_mode:
+            raise HTTPException(409, "Tryb został zmieniony. Odśwież tabelę.")
+        if current == target_mode:
+            return
+
+        if target_mode == "CLIENT":
+            end = link.get("valid_until")
+            if (link["lifecycle"] != "ACTIVE"
+                    or end is None or end <= _utcnow()):
+                raise HTTPException(409,
+                    "Powrót do klienta wymaga nadal aktywnej płatnej licencji.")
+        else:
+            if link["lifecycle"] not in {
+                "ACTIVE", "REVOKED", "EXPIRED", "PENDING_ACCEPTANCE"
+            }:
+                raise HTTPException(409, "Nie można przełączyć tej licencji.")
+
+        for table_name in ("guard.remote_sessions", "guard.workshop_remote_sessions"):
+            exists = con.execute(
+                text("SELECT to_regclass(:table_name)"),
+                {"table_name": table_name},
+            ).scalar_one_or_none()
+            if not exists:
+                continue
+            if table_name == "guard.remote_sessions":
+                active = con.execute(text("""
+                    SELECT count(*) FROM guard.remote_sessions rs
+                    JOIN guard.installations gi ON gi.id=rs.installation_id
+                    WHERE gi.installation_external_id=:iid
+                      AND (rs.status IN
+                           ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+                           OR rs.mesh_public_id IS NOT NULL)
+                """), {"iid": iid}).scalar_one()
+            else:
+                active = con.execute(text("""
+                    SELECT count(*) FROM guard.workshop_remote_sessions rs
+                    WHERE rs.installation_id=:iid
+                      AND (rs.status IN
+                           ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+                           OR rs.mesh_public_id IS NOT NULL)
+                """), {"iid": iid}).scalar_one()
+            if active:
+                raise HTTPException(409,
+                    "Zakończ i potwierdź wszystkie sesje MeshCentral przed zmianą trybu.")
+
+        if target_mode == "SERVICE":
+            before = dict(grant) if grant else None
+            con.execute(text("""
+                INSERT INTO guard.workshop_grants(
+                    installation_id,edition,release_channel,enabled,
+                    monitoring_profile,valid_until
+                ) VALUES (
+                    :iid,'PRO',:channel,TRUE,'OFF',NULL
+                )
+                ON CONFLICT (installation_id) DO UPDATE SET
+                    edition='PRO',enabled=TRUE,valid_until=NULL,
+                    monitoring_profile='OFF',updated_at=now()
+            """), {"iid": iid,
+                    "channel": link.get("release_channel") or "STABLE"})
+            con.execute(text("""
+                INSERT INTO guard.workshop_grant_audit(
+                    installation_id,before_state,after_state
+                ) VALUES (:iid,CAST(:old AS jsonb),CAST(:new AS jsonb))
+            """), {
+                "iid": iid,
+                "old": json.dumps(before, default=str),
+                "new": json.dumps({
+                    "edition": "PRO", "enabled": True,
+                    "valid_until": None,
+                    "monitoring_profile": "OFF",
+                    "operation_id": str(operation_id),
+                    "independent_paid_link_preserved": str(link_id),
+                }),
+            })
+
+        con.execute(text("""
+            INSERT INTO guard.owner_entitlement_selections(
+                installation_id,selected_mode
+            ) VALUES (:iid,:mode)
+            ON CONFLICT (installation_id) DO UPDATE SET
+                selected_mode=EXCLUDED.selected_mode,updated_at=now()
+        """), {"iid": iid, "mode": target_mode})
+
+        source_record = (
+            "SERVICE" if current == "SERVICE" else
+            "PRO" if current == "CLIENT" and link["plan_code"] == "multi_guard_pro"
+            else "STANDARD" if current == "CLIENT" else "NONE"
+        )
+        con.execute(text("""
+            INSERT INTO guard.owner_license_mode_transitions(
+                id,installation_id,license_link_id,source_mode,target_mode,
+                target_valid_until,state,reason
+            ) VALUES (
+                :op,:iid,:link,:source,:target,:expiry,'COMPLETED',:reason
+            )
+        """), {
+            "op": operation_id, "iid": iid, "link": link_id,
+            "source": source_record, "target": target_record,
+            "expiry": link.get("valid_until") if target_mode == "CLIENT" else None,
+            "reason": reason,
+        })
+
+
+@router.post("/multiguard/panel/licenses-grid/{link_id}/select-mode")
+def panel_owner_select_effective_mode(
+    link_id: uuid.UUID,
+    operation_id: uuid.UUID = Form(...),
+    target_mode: str = Form(...),
+    expected_mode: str = Form(...),
+    reason: str = Form(...),
+    confirmed: str = Form(""),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    """Deliberately gated until production discovery, Mesh and client paths pass."""
+    from app.routers.multiguard_panel_settings import _token_valid
+    from fastapi.responses import RedirectResponse
+    if str(_setting("MULTIGUARD_MODE_SWITCH_ENABLED", "false")).strip().lower() not in {"true", "1", "yes"}:
+        raise HTTPException(409, "Przełączanie trybu jest jeszcze w testach.")
+    if not _token_valid(csrf_token) or confirmed != "CHANGE_MODE":
+        raise HTTPException(403, "Potwierdź zmianę trybu właściciela.")
+    _owner_select_effective_mode(
+        link_id, operation_id, target_mode, expected_mode, reason,
+    )
+    return RedirectResponse("/multiguard/panel/licenses-grid", status_code=303,
+                            headers={"Cache-Control": "private, no-store"})
+
+
 @router.post("/multiguard/panel/licenses-grid/{link_id}/save")
 def panel_grid_save(
     link_id: uuid.UUID,
