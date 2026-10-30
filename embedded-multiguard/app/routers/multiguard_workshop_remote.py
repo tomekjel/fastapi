@@ -243,17 +243,19 @@ def _eligible(grant):
     return remote_entitlement_mode(grant) == "SERVICE_PRO"
 
 
-def standing_authorization_record(db, installation_id):
-    """Read-only: a SERVICE PRO grant alone never authorizes unattended access.
+def standing_authorization_record(db, installation_id, *, lock=False):
+    """Read-only validation; optional shared lock prevents revoke/share race.
 
-    Any later share must ALSO verify exact live node and pinned mesh group.
+    On final share publication, FOR SHARE guarantees OWNER revocation must
+    wait for the transaction to commit, then revoke the resulting share.
     """
     return db.execute(text("""
         SELECT approved_mesh_node_id, device_scope, owner_approved_at,
                local_opt_in_attested_at, prior_consent_sha256, revoked_at
         FROM guard.workshop_standing_remote_authorizations
         WHERE installation_id=:iid
-    """), {"iid": installation_id}).mappings().first()
+    """ + (" FOR SHARE" if lock else "")),
+    {"iid": installation_id}).mappings().first()
 
 
 def standing_authorization_record_valid(grant, record):
@@ -1105,7 +1107,7 @@ def connect_for_owner(sid):
             if scope is not None and current_kind != "STANDING_SERVICE":
                 raise HTTPException(403,"Tryb sesji serwisowej uległ zmianie.")
             if scope is not None:
-                renewed = standing_authorization_record(db, iid)
+                renewed = standing_authorization_record(db, iid, lock=True)
                 if (not standing_authorization_record_valid(grant, renewed)
                         or renewed["device_scope"] != scope):
                     raise HTTPException(403, "Zgoda serwisowa została cofnięta lub zmieniona.")
