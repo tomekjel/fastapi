@@ -977,6 +977,27 @@ def _signed_workshop_grant(pending: dict[str, Any],
     }
 
 
+def _client_mode_revocation_lease(pending: dict[str, Any], selected_mode: str) -> dict[str, Any]:
+    """Signed UNKNOWN for an old SERVICE cache, never grant rights in CLIENT.
+
+    OWNER intentionally retains the old service grant when selecting CLIENT.
+    If a paid assignment is no longer available, a silent WAITING response
+    would leave a permanent offline WORKSHOP lease active on Windows.
+    Do not mutate the old grant or KeyGate; sign an explicit disabled lease.
+    """
+    if selected_mode != "CLIENT":
+        raise HTTPException(409, "Nie można potwierdzić trybu licencji klienta.")
+    grant = _workshop_grant(pending["installation_id"])
+    if grant is None:
+        return {}
+    disabled = dict(grant)
+    disabled["enabled"] = False
+    return {
+        "workshopLease": _signed_workshop_grant(pending, disabled),
+        "workshopMonitoring": {"enabled": False, "profile": "OFF"},
+    }
+
+
 def _set_workshop_grant(
     installation_id: uuid.UUID,
     edition: str,
@@ -2071,6 +2092,7 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
                     "assigned": False,
                     "status": "WAITING",
                     "releaseChannel": None,
+                    **_client_mode_revocation_lease(pending, selected_mode),
                     "serverTime": _iso(_utcnow()),
                 }
             return {
@@ -2089,24 +2111,13 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
             }
         raise HTTPException(409, "Nie znaleziono powiązanej licencji klienta.")
     if not reception_id or pending["status"] == "WAITING":
-        grant = _workshop_grant(pending["installation_id"])
-        if grant is not None:
-            # Even revocation is a signed UNKNOWN envelope. The Windows app
-            # must never infer revocation from lost Internet or missing JSON.
-            return {
-                "assigned": False,
-                "status": "WORKSHOP" if grant["enabled"] else "WAITING",
-                "releaseChannel": grant["release_channel"] if grant["enabled"] else None,
-                "workshopLease": _signed_workshop_grant(pending, grant),
-                "workshopMonitoring": {
-                    "enabled": grant["enabled"] and grant.get("monitoring_profile","OFF") != "OFF",
-                    "profile": grant.get("monitoring_profile") if grant["enabled"] else "OFF",
-                },
-                "serverTime": _iso(_utcnow()),
-            }
+        # Only the selected SERVICE branch above can ever sign a WORKSHOP
+        # entitlement. A retained old grant in CLIENT mode must instead
+        # explicitly revoke a previously cached service lease on Windows.
         return {
             "assigned": False,
-            "status": pending["status"],
+            "status": "WAITING",
+            **_client_mode_revocation_lease(pending, selected_mode),
             "serverTime": _iso(_utcnow()),
         }
 
