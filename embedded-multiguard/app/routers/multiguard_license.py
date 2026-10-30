@@ -4842,6 +4842,7 @@ def panel_change_license_plan(link_id: uuid.UUID,
                               reason: str = Form(...),
                               confirmed: str = Form(""),
                               csrf_token: str = Form(...),
+                              return_to_grid: str = Form(""),
                               _: None = Depends(_panel_auth)):
     from fastapi.responses import RedirectResponse
     from app.routers.multiguard_panel_settings import _token_valid
@@ -4852,7 +4853,8 @@ def panel_change_license_plan(link_id: uuid.UUID,
     _owner_change_plan(link_id,operation_id,_license_operation_date(expected_end),
                        target_edition,reason)
     return RedirectResponse(
-        f"/multiguard/panel/license/manage/{link_id}",
+        "/multiguard/panel/licenses-grid" if return_to_grid == "yes"
+        else f"/multiguard/panel/license/manage/{link_id}",
         status_code=303,headers={"Cache-Control":"private, no-store"},
     )
 
@@ -4915,6 +4917,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
             f'<input type="hidden" name="operation_id" value="{operation}">'
             f'<input type="hidden" name="expected_end" value="{expected}">'
             f'<input type="hidden" name="reason" value="Zmiana edycji przez OWNER">'
+            '<input type="hidden" name="return_to_grid" value="yes">'
             f'<input type="hidden" name="confirmed" value="yes">'
             '<select name="target_edition" aria-label="Edycja licencji">'
             f'<option value="STANDARD" {"selected" if plan=="Standard" else ""}>Standard</option>'
