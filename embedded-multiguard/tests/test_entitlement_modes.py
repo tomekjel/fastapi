@@ -16,6 +16,7 @@ from app.routers.multiguard_entitlement_modes import (  # noqa: E402
     license_term_selection,
     calendar_valid_until,
     service_valid_until,
+    owner_valid_until,
 )
 
 NOW = datetime(2026, 10, 30, 16, 0, tzinfo=timezone.utc)
@@ -173,6 +174,59 @@ class SixLicenseVariantsTests(unittest.TestCase):
                                     ("CALENDAR", "2026-11-31")):
             with self.subTest(choice=choice, date_string=date_string), self.assertRaises(ValueError):
                 service_valid_until(choice, date_string, now=NOW)
+
+    def test_duration_policy_all_three_editions(self):
+        for edition in ("STANDARD", "PRO", "SERVICE"):
+            for choice in ("3", "6", "12"):
+                with self.subTest(edition=edition, choice=choice):
+                    self.assertGreater(
+                        owner_valid_until(edition, choice, "", now=NOW),
+                        NOW,
+                    )
+            self.assertIsNone(
+                owner_valid_until(edition, "PERPETUAL", "", now=NOW)
+            )
+            self.assertEqual(
+                owner_valid_until(
+                    edition, "CALENDAR", "2026-11-15", now=NOW
+                ),
+                calendar_valid_until(date(2026, 11, 15), now=NOW),
+            )
+
+    def test_paid_extension_keeps_existing_remaining_months(self):
+        remaining = datetime(2026, 12, 30, 16, tzinfo=timezone.utc)
+        target = owner_valid_until(
+            "PRO", "12", "", now=NOW, existing_end=remaining,
+            extend=True,
+        )
+        self.assertEqual(
+            target, datetime(2027, 12, 30, 16, tzinfo=timezone.utc)
+        )
+        assert target is not None
+        self.assertGreater(target, remaining)
+
+    def test_calendar_extension_cannot_shorten_paid_term(self):
+        remaining = datetime(2027, 3, 1, tzinfo=timezone.utc)
+        with self.assertRaises(ValueError):
+            owner_valid_until(
+                "STANDARD", "CALENDAR", "2026-11-15", now=NOW,
+                existing_end=remaining, extend=True,
+            )
+
+    def test_month_end_extension_clamps_february(self):
+        now = datetime(2027, 1, 31, 12, tzinfo=timezone.utc)
+        self.assertEqual(
+            owner_valid_until("SERVICE", "3", "", now=now),
+            datetime(2027, 4, 30, 12, tzinfo=timezone.utc),
+        )
+
+    def test_edition_or_naive_expiry_invalid_fail_closed(self):
+        with self.assertRaises(ValueError):
+            owner_valid_until("UNKNOWN", "3", "", now=NOW)
+        with self.assertRaises(ValueError):
+            owner_valid_until("PRO", "12", "", now=NOW,
+                              existing_end=datetime(2027, 2, 1),
+                              extend=True)
 
     def test_service_calendar_dst_keeps_exclusive_local_midnight(self):
         self.assertEqual(

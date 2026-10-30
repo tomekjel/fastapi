@@ -119,24 +119,40 @@ def license_within_period(
 
 
 
-def service_valid_until(
-    choice: str, calendar_day: str, *, now: datetime,
+def owner_valid_until(
+    edition: str,
+    choice: str,
+    calendar_day: str,
+    *,
+    now: datetime,
+    existing_end: datetime | None = None,
+    extend: bool = False,
 ) -> datetime | None:
-    """Explicit service term; None is permitted ONLY for selected PERPETUAL.
+    """Term policy for all three editions, with a single explicit expiry choice.
 
-    CALENDAR means through the end of the selected day in Europe/Warsaw.
-    Fixed month terms use the current UTC instant and clamp month-end days.
-    This pure policy never touches an existing paid KeyGate expiry.
+    3/6/12 add *calendar months*. An extension preserves unused paid time:
+    remaining 2 months plus 12 months ends 14 months from now. No existing
+    KeyGate fields, record or licence state are changed by this pure function.
+    A calendar end covers the entire chosen Warsaw day, inclusive.
+    'PERPETUAL' is a separate, intentional selection, not missing data.
     """
+    edition = edition.strip().upper()
+    if edition not in _ALLOWED_EDITIONS:
+        raise ValueError("Unknown license edition")
     current = _utc_aware(now)
     if current is None:
         raise ValueError("Current UTC time is required")
+    current_end = _utc_aware(existing_end)
+    if existing_end is not None and current_end is None:
+        raise ValueError("Existing expiry requires a timezone")
     selected = choice.strip().upper()
     raw_day = calendar_day.strip()
+
     if selected == "PERPETUAL":
         if raw_day:
             raise ValueError("Perpetual licence cannot retain a calendar date")
         return None
+
     if selected == "CALENDAR":
         if not raw_day:
             raise ValueError("A calendar day is required")
@@ -146,18 +162,31 @@ def service_valid_until(
             raise ValueError("Invalid calendar day") from exc
         if chosen.isoformat() != raw_day:
             raise ValueError("Calendar day must be ISO YYYY-MM-DD")
-        return calendar_valid_until(chosen, now=current)
+        target = calendar_valid_until(chosen, now=current)
+        if extend and current_end and target <= current_end:
+            raise ValueError("Extension cannot shorten the existing paid term")
+        return target
+
     if selected in ("3", "6", "12"):
         if raw_day:
             raise ValueError("Preset months cannot include a calendar day")
         import calendar
+        base = max(current, current_end) if extend and current_end else current
         months = int(selected)
-        month_index = current.month - 1 + months
-        year = current.year + month_index // 12
+        month_index = base.month - 1 + months
+        year = base.year + month_index // 12
         month = month_index % 12 + 1
-        day = min(current.day, calendar.monthrange(year, month)[1])
-        return current.replace(year=year, month=month, day=day)
-    raise ValueError("An explicit service term is required")
+        day = min(base.day, calendar.monthrange(year, month)[1])
+        return base.replace(year=year, month=month, day=day)
+
+    raise ValueError("An explicit licence term is required")
+
+
+def service_valid_until(
+    choice: str, calendar_day: str, *, now: datetime,
+) -> datetime | None:
+    """Service expiry; legacy caller compatibility, no implicit extension."""
+    return owner_valid_until("SERVICE", choice, calendar_day, now=now)
 
 
 Mode = Literal["CLIENT", "SERVICE", "NONE"]
