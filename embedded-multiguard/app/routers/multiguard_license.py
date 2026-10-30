@@ -4967,8 +4967,8 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         )
         trs.append(f"""<tr class="{css}" data-search="{search}" data-state="{state}"
             data-expiry="{expiry}" data-online="{'true' if online else 'false'}">
-          <td title="{iid}">{computer_cell}<small>{iid}</small></td>
-          <td title="{license_id}"><span class="ellipsis">{license_id}</span><small>ID licencji</small></td>
+          <td title="{iid}">{computer_cell}<small>{iid[:8]}… <button type="button" class="grid-copy" data-copy="{iid}" aria-label="Kopiuj pełne ID komputera">Kopiuj ID</button></small></td>
+          <td title="{license_id}"><span class="ellipsis">{license_id[:8]}…</span><small><button type="button" class="grid-copy" data-copy="{license_id}" aria-label="Kopiuj pełne ID licencji">Kopiuj ID</button></small></td>
           <td>—<small>Brak danych klienta w powiązaniu</small></td>
           <td>{actual_order or 'Bez zlecenia'}</td>
           <td>{controls}<small>{state}</small></td>
@@ -5021,6 +5021,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
     .grid-licenses tbody tr[hidden]{display:none}
     .grid-licenses td{padding-top:8px;padding-bottom:8px}
     .grid-licenses a{color:#6fcaff;text-decoration:underline}
+    .grid-copy{font-size:10px;padding:1px 4px;border:0;background:transparent;color:#86ceff;text-decoration:underline;cursor:pointer}
     .grid-name-form{display:flex;gap:4px;align-items:center}
     .grid-name-form input{min-width:80px;width:100%;max-width:190px;font-size:12px}
     .grid-name-form button{padding:5px;font-size:11px;white-space:nowrap}
@@ -5064,6 +5065,13 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         }).length;
       }
       input.addEventListener('input',apply);
+      table.addEventListener('click',async e=>{
+        const button=e.target.closest('[data-copy]');
+        if(!button)return;
+        const value=button.dataset.copy;
+        try{await navigator.clipboard.writeText(value);button.textContent='Skopiowano'}
+        catch(_){window.prompt('Skopiuj identyfikator:',value)}
+      });
       document.querySelectorAll('.grid-name-form input[name=friendly_name]').forEach(field=>{
         field.addEventListener('input',()=>{
           field.form.querySelector('button[type=submit]').disabled=field.value===field.dataset.original;
