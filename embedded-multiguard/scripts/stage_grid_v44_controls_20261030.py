@@ -48,7 +48,7 @@ def _mg_v44_grid_transform(doc: str) -> str:
         return doc
     form_action = re.compile(
         r"""<form\b[^>]*action=["'][^"']*/multiguard/panel/licenses-grid/"""
-        r"""[^"']+/save["'][^>]*>"""
+        r"""[^"']+/save["'][^>]*>""",re.I|re.S)
     # Grid headers, not an incidental action link or another detail table.
     header = re.search(r'<thead\b[^>]*>(.*?)</thead\s*>',doc,re.I|re.S)
     if not header:
