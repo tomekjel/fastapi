@@ -303,9 +303,16 @@ class GridSavePlanningTests(unittest.TestCase):
         result = self.plan(
             current_mode="SERVICE", current_edition="SERVICE",
             target_edition="PRO", term_choice="KEEP",
+            paid_edition="PRO",
         )
         self.assertEqual(result["action"], "RESTORE_PAID")
         self.assertEqual(result["valid_until"], LATER)
+        with self.assertRaisesRegex(ValueError, "original paid"):
+            self.plan(
+                current_mode="SERVICE", current_edition="SERVICE",
+                target_edition="STANDARD", term_choice="KEEP",
+                paid_edition="PRO",
+            )
 
     def test_paid_perpetual_requires_keygate_capability(self):
         with self.assertRaisesRegex(ValueError, "unsupported"):
