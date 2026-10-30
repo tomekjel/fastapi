@@ -300,6 +300,20 @@ def main():
     }
     for name,src in prepared.items():
         compile(src,str(ROUTERS/name),"exec")
+    # These production functions are frozen: preserve HTML V4.4, archive,
+    # revoke, existing paid extension and all table save operations exactly.
+    untouched = (
+        "panel_licenses_grid", "panel_grid_archive_license_safe",
+        "panel_revoke_license", "panel_grid_save_row",
+        "panel_grid_save_name", "panel_grid_save_channel",
+        "panel_grid_extend_license",
+    )
+    original_grid = (ROUTERS/"multiguard_license.py").read_text()
+    for name in untouched:
+        before = get_function(original_grid,name,decorators=True)
+        after = get_function(prepared["multiguard_license.py"],name,decorators=True)
+        if before != after:
+            raise RuntimeError("Protected V4.4 OWNER function changed: "+name)
     baseline=status_url()
     if baseline != 401:
         raise RuntimeError(f"Unexpected baseline HTTP status {baseline}; refusing to install")
