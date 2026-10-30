@@ -23,9 +23,9 @@ ROOT=Path("/opt/multiservis")
 APP=ROOT/"app/routers/multiguard_license.py"
 URL="https://api.multi-servis.pl/multiguard/panel/licenses-grid"
 UI_REF="bcdb6dc49b7704493cc8d3d0df2f3a254a7d590e"
-UI_BLOB="__TO_BE_FILLED__"
+UI_BLOB="ca4983cca1a37a668139a9dc1f5e1bf007baa583"
 OWNER_REF="6571e91ff0ae0f67e72ecebead24c65a01d4c704"
-OWNER_BLOB="__TO_BE_FILLED__"
+OWNER_BLOB="c71da4e0e98c8bd07ff4d6539d643edfa9d05678"
 
 def blob(data):
     return hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest()
