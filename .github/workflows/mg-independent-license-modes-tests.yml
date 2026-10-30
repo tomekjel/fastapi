@@ -5,6 +5,8 @@ on:
     branches: [feature/mg-independent-license-modes-20261030]
     paths:
       - 'embedded-multiguard/app/routers/multiguard_entitlement_modes.py'
+      - 'embedded-multiguard/app/routers/multiguard_license.py'
+      - 'embedded-multiguard/app/routers/multiguard_remote.py'
       - 'embedded-multiguard/tests/test_entitlement_modes.py'
       - '.github/workflows/mg-independent-license-modes-tests.yml'
 
@@ -26,6 +28,8 @@ jobs:
       - name: Compile pure policy and test modules
         run: |
           python -m py_compile embedded-multiguard/app/routers/multiguard_entitlement_modes.py
+          python -m py_compile embedded-multiguard/app/routers/multiguard_license.py
+          python -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
           python -m py_compile embedded-multiguard/tests/test_entitlement_modes.py
       - name: OWNER entitlement regression tests
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_entitlement_modes.py' -v
