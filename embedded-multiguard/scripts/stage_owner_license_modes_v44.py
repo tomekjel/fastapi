@@ -105,6 +105,8 @@ def produce_license(production: str, upstream: str) -> str:
     discovery = get_function(production, "discovery_assignment")
     upstream_discovery = get_function(upstream, "discovery_assignment")
     begin = upstream_discovery.find("    # Explicit OWNER service mode takes precedence")
+    if begin < 0:
+        begin = upstream_discovery.find("    # OWNER mode changes lock pending_installations")
     finish = upstream_discovery.find('    reception_id = pending.get("assigned_reception_id")',begin)
     if begin < 0 or finish < 0:
         raise RuntimeError("Missing approved upstream discovery service switch")

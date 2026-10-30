@@ -49,7 +49,9 @@ def prepared_old_license_fixture():
     old_refresh = old_refresh[:begin] + old_refresh[end:]
     source = overlay.replace_function(source,"refresh",old_refresh)
     discovery = overlay.get_function(source,"discovery_assignment")
-    first = discovery.index("    # Explicit OWNER service mode takes precedence")
+    first = discovery.find("    # Explicit OWNER service mode takes precedence")
+    if first < 0:
+        first = discovery.index("    # OWNER mode changes lock pending_installations")
     last = discovery.index('    reception_id = pending.get("assigned_reception_id")',first)
     discovery = discovery[:first] + discovery[last:]
     source = overlay.replace_function(source,"discovery_assignment",discovery)
