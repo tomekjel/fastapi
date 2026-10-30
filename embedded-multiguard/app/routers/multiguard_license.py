@@ -696,6 +696,13 @@ CREATE TABLE IF NOT EXISTS guard.workshop_grants (
 );
 ALTER TABLE guard.workshop_grants ADD COLUMN IF NOT EXISTS monitoring_profile TEXT NOT NULL DEFAULT 'OFF';
 ALTER TABLE guard.workshop_grants ADD COLUMN IF NOT EXISTS associated_reception_id UUID REFERENCES service.service_orders(id) ON DELETE SET NULL;
+ALTER TABLE guard.workshop_grants ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS guard.owner_entitlement_selections (
+    installation_id UUID PRIMARY KEY
+      REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+    selected_mode TEXT NOT NULL CHECK (selected_mode IN ('CLIENT','SERVICE')),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS guard.workshop_grant_audit (
     id BIGSERIAL PRIMARY KEY,
     installation_id UUID NOT NULL,
@@ -877,6 +884,32 @@ def _authenticate_pending(
     return pending
 
 
+def _owner_effective_entitlement_mode(connection, installation_id: uuid.UUID) -> str:
+    """Fail-closed single mode selector for independent customer and OWNER service rights.
+
+    Historical or revoked paid links still take precedence without an explicit
+    OWNER choice.  This read does not contact KeyGate or change paid validity.
+    """
+    from app.routers.multiguard_entitlement_modes import resolve_mode
+    row = connection.execute(text("""
+        SELECT
+          (SELECT selected_mode FROM guard.owner_entitlement_selections
+           WHERE installation_id=:iid) AS explicit_mode,
+          EXISTS (SELECT 1 FROM guard.license_links
+                  WHERE installation_id=:iid) AS paid_link,
+          EXISTS (SELECT 1 FROM guard.workshop_grants
+                  WHERE installation_id=:iid AND enabled=TRUE) AS service_grant
+    """), {"iid": installation_id}).mappings().one()
+    try:
+        return resolve_mode(
+            row["explicit_mode"],
+            has_customer_link=bool(row["paid_link"]),
+            has_service_grant=bool(row["service_grant"]),
+        )
+    except ValueError as exc:
+        raise HTTPException(409, "Niezgodny tryb licencji OWNER.") from exc
+
+
 def _workshop_grant(installation_id: uuid.UUID) -> dict[str, Any] | None:
     _ensure_schema()
     with engine.connect() as connection:
@@ -904,9 +937,12 @@ def _signed_workshop_grant(pending: dict[str, Any],
         "deviceId": str(pending["device_id"]),
         "planCode": plan,
         "releaseChannel": grant["release_channel"],
-        "lifecycle": "WORKSHOP" if grant["enabled"] else "UNKNOWN",
+        "lifecycle": "WORKSHOP" if (
+            grant["enabled"]
+            and (grant.get("valid_until") is None or grant["valid_until"] > _utcnow())
+        ) else "UNKNOWN",
         "validFrom": None,
-        "validUntil": None,
+        "validUntil": _iso(grant.get("valid_until")),
         "acceptedAt": None,
         "acceptedDocuments": [],
         "serverTime": _iso(_utcnow()),
@@ -1952,6 +1988,35 @@ def discovery_assignment(req: DiscoveryAssignmentRequest):
     pending = dict(pending)
     pending["status"] = current_status
 
+    # Explicit OWNER service mode takes precedence without deleting or
+    # changing the independent paid KeyGate licence. A freshly signed lease
+    # supersedes an older cached client payload after discovery sync.
+    with engine.connect() as owner_con:
+        selected_mode = _owner_effective_entitlement_mode(
+            owner_con, pending["installation_id"]
+        )
+    if selected_mode == "SERVICE":
+        grant = _workshop_grant(pending["installation_id"])
+        if not grant:
+            raise HTTPException(409, "Wybrano tryb serwisowy bez uprawnienia.")
+        return {
+            "assigned": False,
+            "status": "WORKSHOP" if (
+                grant["enabled"]
+                and (grant.get("valid_until") is None or grant["valid_until"] > _utcnow())
+            ) else "WAITING",
+            "releaseChannel": grant["release_channel"] if grant["enabled"] else None,
+            "workshopLease": _signed_workshop_grant(pending, grant),
+            "workshopMonitoring": {
+                "enabled": bool(grant["enabled"]
+                                and (grant.get("valid_until") is None or
+                                     grant["valid_until"] > _utcnow())
+                                and grant.get("monitoring_profile", "OFF") != "OFF"),
+                "profile": grant.get("monitoring_profile", "OFF") if grant["enabled"] else "OFF",
+            },
+            "serverTime": _iso(_utcnow()),
+        }
+
     reception_id = pending.get("assigned_reception_id")
     # Direct client licences have no reception_id. Use the stored KeyGate
     # licence identity, never a fabricated repair order.
@@ -2103,8 +2168,10 @@ def workshop_report(req: WorkshopReportRequest):
             SELECT enabled,monitoring_profile FROM guard.workshop_grants
             WHERE installation_id=:id FOR UPDATE
         """), {"id":pending["installation_id"]}).mappings().first()
-        if not grant or not grant["enabled"]:
-            raise HTTPException(403, "Tryb serwisowy nie jest aktywny.")
+        if (not grant or not grant["enabled"]
+                or _owner_effective_entitlement_mode(
+                    con, pending["installation_id"]) != "SERVICE"):
+            raise HTTPException(403, "Tryb serwisowy nie jest aktualnie wybrany.")
         profile = grant["monitoring_profile"] or "OFF"
         if samples and profile == "OFF":
             raise HTTPException(409, "Rozszerzone monitorowanie nie jest włączone.")
@@ -2153,6 +2220,12 @@ def provision(req: ProvisionRequest):
         installation_id = uuid.UUID(req.installation_id)
     except ValueError as exc:
         raise HTTPException(400, "Nieprawidłowy installationId.") from exc
+
+    # Owner-selected service mode must never trigger KeyGate activation.
+    _ensure_schema()
+    with engine.connect() as mode_con:
+        if _owner_effective_entitlement_mode(mode_con, installation_id) == "SERVICE":
+            raise HTTPException(409, "Właściciel wybrał tryb serwisowy.")
 
     # Never bind a previously prepared licence to an installation that
     # OWNER archived or whose removal the installer already confirmed.
@@ -2297,6 +2370,10 @@ def provision(req: ProvisionRequest):
 @router.post("/v1/multi-guard/refresh")
 def refresh(req: RefreshRequest):
     link = _authenticate_installation(req)
+    # Do not let an older paid refresh overwrite a signed OWNER workshop lease.
+    with engine.connect() as mode_con:
+        if _owner_effective_entitlement_mode(mode_con, link["installation_id"]) == "SERVICE":
+            raise HTTPException(409, "Właściciel wybrał tryb serwisowy.")
     with engine.connect() as plan_con:
         if _owner_pending_plan_change(plan_con, link["id"]):
             raise HTTPException(409, "Zmiana edycji w toku. Ponów synchronizację później.")
@@ -2353,6 +2430,9 @@ def refresh(req: RefreshRequest):
 @router.post("/v1/multi-guard/acceptance")
 def acceptance(req: AcceptanceRequest):
     link = _authenticate_installation(req)
+    with engine.connect() as mode_con:
+        if _owner_effective_entitlement_mode(mode_con, link["installation_id"]) == "SERVICE":
+            raise HTTPException(409, "Tryb serwisowy jest aktualnie wybrany.")
     if link["lifecycle"] != "PENDING_ACCEPTANCE":
         raise HTTPException(409, "Licencja nie oczekuje na akceptację klienta.")
 
