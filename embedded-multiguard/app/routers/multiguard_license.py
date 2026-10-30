@@ -985,11 +985,12 @@ def _client_mode_revocation_lease(pending: dict[str, Any], selected_mode: str) -
     would leave a permanent offline WORKSHOP lease active on Windows.
     Do not mutate the old grant or KeyGate; sign an explicit disabled lease.
     """
-    if selected_mode != "CLIENT":
-        raise HTTPException(409, "Nie można potwierdzić trybu licencji klienta.")
     grant = _workshop_grant(pending["installation_id"])
     if grant is None:
+        # Unlicensed new installations normally have OWNER mode NONE.
         return {}
+    if selected_mode != "CLIENT":
+        raise HTTPException(409, "Stary wpis serwisowy nie odpowiada trybowi OWNER.")
     disabled = dict(grant)
     disabled["enabled"] = False
     return {
