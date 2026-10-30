@@ -285,6 +285,43 @@ class IntegrationSourceSafetyTests(unittest.TestCase):
         self.assertIn('return False', self.remote_source)
 
 
+class CompactGridPickerTests(unittest.TestCase):
+    """Compact OWNER dropdown must expose independent options without silent mutation."""
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+        root = Path(__file__).resolve().parents[1]
+        cls.source = (root / "app/routers/multiguard_license.py").read_text()
+        cls.tree = ast.parse(cls.source)
+
+    def function_source(self, name):
+        import ast
+        fn = next(node for node in self.tree.body
+                  if isinstance(node, ast.FunctionDef) and node.name == name)
+        return ast.get_source_segment(self.source, fn)
+
+    def test_three_editions_in_small_dropdown(self):
+        body = self.function_source("panel_licenses_grid")
+        for value in ("STANDARD", "PRO", "SERVICE"):
+            self.assertIn(f'<option value="{value}"', body)
+        self.assertIn("mg-grid-edition", body)
+
+    def test_duration_menu_includes_months_calendar_and_perpetual(self):
+        body = self.function_source("panel_licenses_grid")
+        for value in ("3", "6", "12", "CALENDAR", "PERPETUAL"):
+            self.assertIn(f'<option value="{value}"', body)
+        self.assertIn('type="date"', body)
+        self.assertIn("class=\"mg-grid-term-picker\"", body)
+        self.assertIn("chosenDate.hidden=!calendar", body)
+
+    def test_unwired_period_cannot_be_silently_saved(self):
+        body = self.function_source("panel_grid_save")
+        self.assertIn('term_edit_preview == "1"', body)
+        self.assertIn('choice != "KEEP"', body)
+        self.assertIn('raise HTTPException(409', body)
+
+
 class WorkshopRemoteSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
