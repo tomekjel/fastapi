@@ -4983,6 +4983,7 @@ def _owner_select_effective_mode(
     entitlement, discovery and remote path must honor the selected mode.
     """
     from app.routers.multiguard_entitlement_modes import resolve_mode, service_valid_until
+    from app.routers import multiguard_workshop_remote as workshop_remote
     target_mode = target_mode.strip().upper()
     expected_mode = expected_mode.strip().upper()
     reason = reason.strip()
@@ -5006,6 +5007,9 @@ def _owner_select_effective_mode(
         raise HTTPException(400, "Okres serwisowy dotyczy tylko trybu Serwisowa.")
 
     _ensure_schema()
+    # The standing-consent registry must exist before opening the mode
+    # transition.  Grants alone never authorize unattended remote access.
+    workshop_remote._schema()
     with engine.begin() as con:
         # Same row order as provisioning (pending first, paid link second).
         # The initial identity read is only a locator; verify it after locks.
@@ -5130,6 +5134,13 @@ def _owner_select_effective_mode(
             if active:
                 raise HTTPException(409,
                     "Zakończ i potwierdź wszystkie sesje MeshCentral przed zmianą trybu.")
+
+        # Any ACTUAL OWNER rights change invalidates prior unattended consent
+        # within this same transaction. Switching back to SERVICE requires a
+        # fresh approval by OWNER and a separate local device opt-in.
+        workshop_remote.invalidate_standing_authorization(
+            con, iid, "SERVICE_RIGHTS_CHANGED",
+        )
 
         if target_mode == "SERVICE":
             before = dict(grant) if grant else None
