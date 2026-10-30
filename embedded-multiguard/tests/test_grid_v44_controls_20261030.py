@@ -62,6 +62,24 @@ class GridV44ControlsTests(unittest.TestCase):
         self.assertIn('var changed=edition.value!==original || choice!=="KEEP"',result)
         self.assertIn("Ważna do / kanał",result)
 
+    def test_live_preflight_mocks_only_local_csrf_generation(self):
+        # A shell-invoked preflight has no systemd panel secret. Production
+        # authentication is not modified; only this process uses a fake token
+        # to render and validate the actual table HTML.
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        module = SimpleNamespace()
+        def unavailable_auth_secret():
+            raise RuntimeError("Systemd-only authentication secret unavailable")
+        module._workshop_csrf = unavailable_auth_secret
+        def fake_panel_grid():
+            module._workshop_csrf()
+            return SimpleNamespace(status_code=200, body=DOCUMENT.encode("utf-8"))
+        module.panel_licenses_grid = fake_panel_grid
+        with patch("importlib.import_module", return_value=module):
+            overlay.verify_real_v44_rows()
+        self.assertIs(module._workshop_csrf, unavailable_auth_secret)
+
     def test_second_render_is_idempotent(self):
         rendered=transform(DOCUMENT)
         self.assertEqual(transform(rendered),rendered)
