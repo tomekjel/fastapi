@@ -4871,6 +4871,13 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
             ORDER BY valid_until NULLS LAST, id
             LIMIT 500
         """)).mappings().all()
+    from app.routers.multiguard_panel_devices import owner_friendly_name, owner_detected_name
+    with engine.connect() as conn:
+        pending_rows = conn.execute(text("""
+            SELECT installation_id, hostname, manufacturer, model, app_version,
+                   last_seen_at FROM guard.pending_installations
+        """)).mappings().all()
+    device_map = {str(p["installation_id"]): dict(p) for p in pending_rows}
     trs = []
     for row in links:
         lid = _panel_escape(str(row["id"]))
@@ -4885,16 +4892,26 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         channel = _panel_escape(str(row["release_channel"] or "—"))
         css = "grid-on" if row["lifecycle"] == "ACTIVE" else "grid-off"
         details = f"/multiguard/panel/license/manage/{lid}"
-        search = _panel_escape(" ".join([iid, license_id, reception, plan, kind, state]))
+        device = device_map.get(iid, {})
+        online = bool(device.get("last_seen_at") and
+                      (_utcnow() - device["last_seen_at"]).total_seconds() <= 300)
+        display_name = (owner_friendly_name(uuid.UUID(iid)) or
+                        owner_detected_name(device)) if device and iid else "Nieznany komputer"
+        name = _panel_escape(display_name)
+        version = _panel_escape(str(device.get("app_version") or "—"))
+        seen = _panel_escape(device["last_seen_at"].strftime("%d.%m.%Y %H:%M")
+                             if device.get("last_seen_at") else "Brak kontaktu")
+        search = _panel_escape(" ".join([name, iid, license_id, reception, plan, kind, state]))
         trs.append(f"""<tr class="{css}" data-search="{search}" data-state="{state}"
-            data-expiry="{expiry}">
-          <td title="{iid}"><span class="ellipsis">{iid}</span><small>ID komputera</small></td>
+            data-expiry="{expiry}" data-online="{'true' if online else 'false'}">
+          <td title="{iid}"><span class="ellipsis">{name}</span><small>{iid}</small></td>
           <td title="{license_id}"><span class="ellipsis">{license_id}</span><small>ID licencji</small></td>
           <td>—<small>Brak danych klienta w powiązaniu</small></td>
           <td>{reception or 'Bez zlecenia'}</td>
           <td>{plan}<small>{state}</small></td>
           <td>{kind}</td>
           <td>{expiry}<small>{channel}</small></td>
+          <td>{seen}<small>{version} · {'Online' if online else 'Offline'}</small></td>
           <td><a href="{details}">Zarządzaj</a></td>
         </tr>""")
     page = """<section class="card">
@@ -4913,7 +4930,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
       <div class="table-wrap"><table class="grid-licenses" id="grid-licenses">
       <thead><tr><th>ID komputera</th><th>ID licencji</th><th>Klient</th>
       <th>Zlecenie</th><th>Edycja / stan</th><th>Licencja</th>
-      <th>Ważna do / kanał</th><th>Operacje</th></tr></thead>
+      <th>Ważna do / kanał</th><th>Kontakt / wersja</th><th>Operacje</th></tr></thead>
       <tbody>""" + "".join(trs) + """</tbody></table></div>
       <p class="muted" id="grid-count"></p>
     </section>
@@ -4928,7 +4945,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
     #grid-period-wrap{margin:6px 0 12px;font-size:12px;color:#b0c8d9}
     #grid-period-wrap[hidden]{display:none}
     @media(max-width:850px){.grid-filters{grid-template-columns:repeat(3,1fr)}.grid-filters .grid-search{grid-column:span 3}}
-    .grid-licenses{table-layout:fixed;min-width:1100px;width:100%;border-collapse:collapse}
+     .grid-licenses{table-layout:fixed;min-width:1250px;width:100%;border-collapse:collapse}
     .grid-licenses th{position:relative;user-select:none}
     .grid-licenses th:after{content:"";position:absolute;top:0;right:0;height:100%;width:6px;cursor:col-resize}
     .grid-licenses td{vertical-align:middle;overflow:hidden;white-space:nowrap}
@@ -4952,7 +4969,7 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
       const count=document.getElementById('grid-count');
       document.getElementById('grid-total').textContent=rows.length;
       document.getElementById('grid-active').textContent=rows.filter(r=>r.dataset.state==='ACTIVE').length;
-      document.getElementById('grid-online').textContent='—';
+      document.getElementById('grid-online').textContent=rows.filter(r=>r.dataset.online==='true').length;
       let filter='all';
       function apply(){
         const text=input.value.trim().toLowerCase();
