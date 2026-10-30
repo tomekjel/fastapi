@@ -11,6 +11,8 @@ on:
       - 'embedded-multiguard/tests/test_entitlement_modes.py'
       - 'embedded-multiguard/scripts/stage_owner_license_modes_v44.py'
       - 'embedded-multiguard/tests/test_owner_v44_overlay.py'
+      - 'embedded-multiguard/scripts/stage_owner_grid_save_v44.py'
+      - 'embedded-multiguard/tests/test_owner_save_overlay_v44.py'
       - 'embedded-multiguard/scripts/stage_paid_remote_mode_gate_v44.py'
       - 'embedded-multiguard/tests/test_paid_remote_v44_overlay.py'
       - '.github/workflows/mg-independent-license-modes-tests.yml'
@@ -39,11 +41,15 @@ jobs:
           python -m py_compile embedded-multiguard/tests/test_entitlement_modes.py
           python -m py_compile embedded-multiguard/scripts/stage_owner_license_modes_v44.py
           python -m py_compile embedded-multiguard/tests/test_owner_v44_overlay.py
+          python -m py_compile embedded-multiguard/scripts/stage_owner_grid_save_v44.py
+          python -m py_compile embedded-multiguard/tests/test_owner_save_overlay_v44.py
           python -m py_compile embedded-multiguard/scripts/stage_paid_remote_mode_gate_v44.py
           python -m py_compile embedded-multiguard/tests/test_paid_remote_v44_overlay.py
       - name: OWNER entitlement regression tests
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_entitlement_modes.py' -v
       - name: Production V4.4 source-overlay compatibility tests
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_owner_v44_overlay.py' -v
+      - name: Production OWNER Save V4.4 function-only compatibility
+        run: python -m unittest discover -s embedded-multiguard/tests -p 'test_owner_save_overlay_v44.py' -v
       - name: Paid Pro remote mode gate, no Mesh and no KeyGate
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_paid_remote_v44_overlay.py' -v
