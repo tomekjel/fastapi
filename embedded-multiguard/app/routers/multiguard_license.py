@@ -4902,17 +4902,45 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
         seen = _panel_escape(device["last_seen_at"].strftime("%d.%m.%Y %H:%M")
                              if device.get("last_seen_at") else "Brak kontaktu")
         search = _panel_escape(" ".join([name, iid, license_id, reception, plan, kind, state]))
+        actual_order = reception if reception and not reception.startswith("MG-DIRECT-") else ""
+        # Use the existing audited plan-change endpoint, never invent a new key.
+        action = f"/multiguard/panel/license/manage/{lid}/change-plan"
+        csrf = _panel_escape(_workshop_csrf())
+        operation = str(uuid.uuid4())
+        expected = _panel_escape(_iso(until)) if until else ""
+        controls = (
+            f'<form class="grid-plan-form" method="post" action="{action}" '
+            f'onsubmit="return confirm(\\\'Zapisać zmianę edycji tej licencji?\\\')">'
+            f'<input type="hidden" name="csrf_token" value="{csrf}">'
+            f'<input type="hidden" name="operation_id" value="{operation}">'
+            f'<input type="hidden" name="expected_end" value="{expected}">'
+            f'<input type="hidden" name="reason" value="Zmiana edycji przez OWNER">'
+            f'<input type="hidden" name="confirmed" value="yes">'
+            '<select name="target_edition" aria-label="Edycja licencji">'
+            f'<option value="STANDARD" {"selected" if plan=="Standard" else ""}>Standard</option>'
+            f'<option value="PRO" {"selected" if plan=="Pro" else ""}>Pro</option>'
+            '</select>'
+            '<button type="submit">Zapisz</button>'
+            '</form>'
+            if state == "ACTIVE" and until and until > _utcnow()
+            else f'<span>{plan}</span>'
+        )
+        extend = (
+            f'<a class="grid-extend" href="/multiguard/panel/license/installation/{iid}/extend">+</a>'
+            if row["sale_kind"] == "DIRECT" and state == "ACTIVE"
+            else ""
+        )
         trs.append(f"""<tr class="{css}" data-search="{search}" data-state="{state}"
             data-expiry="{expiry}" data-online="{'true' if online else 'false'}">
           <td title="{iid}"><span class="ellipsis">{name}</span><small>{iid}</small></td>
           <td title="{license_id}"><span class="ellipsis">{license_id}</span><small>ID licencji</small></td>
           <td>—<small>Brak danych klienta w powiązaniu</small></td>
-          <td>{reception or 'Bez zlecenia'}</td>
-          <td>{plan}<small>{state}</small></td>
+          <td>{actual_order or 'Bez zlecenia'}</td>
+          <td>{controls}<small>{state}</small></td>
           <td>{kind}</td>
-          <td>{expiry}<small>{channel}</small></td>
+          <td>{expiry} {extend}<small>{channel}</small></td>
           <td>{seen}<small>{version} · {'Online' if online else 'Offline'}</small></td>
-          <td><a href="{details}">Zarządzaj</a></td>
+          <td><a href="{details}">Szczegóły</a></td>
         </tr>""")
     page = """<section class="card">
       <h1>Licencje</h1>
@@ -4958,6 +4986,10 @@ def panel_licenses_grid(_: None = Depends(_panel_auth)):
     .grid-licenses tbody tr[hidden]{display:none}
     .grid-licenses td{padding-top:8px;padding-bottom:8px}
     .grid-licenses a{color:#6fcaff;text-decoration:underline}
+    .grid-plan-form{display:flex;gap:5px;align-items:center}
+    .grid-plan-form select{max-width:95px;padding:6px 2px;font-size:12px}
+    .grid-plan-form button,.grid-extend{font-size:11px;padding:6px 8px;white-space:nowrap}
+    .grid-extend{display:inline-block;border:1px solid #3f759a;border-radius:5px;margin-left:3px}
     </style>
     <script>
     (function(){
