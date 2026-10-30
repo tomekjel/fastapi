@@ -9,6 +9,7 @@ on:
       - 'embedded-multiguard/app/routers/multiguard_remote.py'
       - 'embedded-multiguard/app/routers/multiguard_workshop_remote.py'
       - 'embedded-multiguard/tests/test_entitlement_modes.py'
+      - 'embedded-multiguard/scripts/stage_owner_license_modes_v44.py'
       - '.github/workflows/mg-independent-license-modes-tests.yml'
 
 permissions:
@@ -33,5 +34,6 @@ jobs:
           python -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
           python -m py_compile embedded-multiguard/app/routers/multiguard_workshop_remote.py
           python -m py_compile embedded-multiguard/tests/test_entitlement_modes.py
+          python -m py_compile embedded-multiguard/scripts/stage_owner_license_modes_v44.py
       - name: OWNER entitlement regression tests
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_entitlement_modes.py' -v
