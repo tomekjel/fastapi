@@ -264,8 +264,12 @@ def apply(prepared: dict[str,str], previous_status: int):
             except Exception:
                 pass
             time.sleep(1)
-        if not healthy:
-            raise RuntimeError("Panel changed HTTP status after deployment")
+        service_active = subprocess.run(
+            ["systemctl","is-active","--quiet","multiservis-api.service"],
+            check=False,timeout=10,
+        ).returncode == 0
+        if not healthy or not service_active:
+            raise RuntimeError("Backend failed service-active or panel HTTP health check")
         print("STAGE2 CORE: APPLIED")
         print("MODE SWITCH ROUTE: HARD-DISABLED")
         print("PANEL V4.4: UNMODIFIED")
@@ -276,7 +280,8 @@ def apply(prepared: dict[str,str], previous_status: int):
         print("STAGE2 ERROR: ROLLING BACK PYTHON FILES",file=sys.stderr)
         for name in files_written:
             shutil.copy2(backup/name,ROUTERS/name)
-        subprocess.run(["systemctl","restart","multiservis-api.service"],check=False,timeout=40)
+        if files_written:
+            subprocess.run(["systemctl","restart","multiservis-api.service"],check=False,timeout=40)
         raise
 
 def main():
