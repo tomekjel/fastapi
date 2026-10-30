@@ -262,6 +262,17 @@ def protected_status():
     except urllib.error.HTTPError as err:
         return err.code
 
+def renewal_status():
+    req=urllib.request.Request(
+        "https://api.multi-servis.pl"+URL,
+        headers={"Cache-Control":"no-cache"},
+    )
+    try:
+        with urllib.request.urlopen(req,timeout=8) as response:
+            return response.status
+    except urllib.error.HTTPError as err:
+        return err.code
+
 def ensure_no_open_sessions():
     import sys
     sys.path.insert(0,str(ROOT))
@@ -319,7 +330,8 @@ def main():
         for _ in range(15):
             active=subprocess.run(["systemctl","is-active","--quiet","multiservis-api.service"],
                                    timeout=8).returncode==0
-            if active and protected_status()==baseline:
+            if (active and protected_status()==baseline
+                    and renewal_status() in (401,403)):
                 break
             time.sleep(1)
         else:
