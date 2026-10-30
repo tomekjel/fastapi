@@ -29,8 +29,8 @@ SRC = {
 }
 PINNED_GH_REF = "82192cb6fb7ecfe6a3dffc2afbb417510e2dc04b"
 GH_BLOB_SHA = {
-    "multiguard_license.py": "",  # replaced at build time
-    "multiguard_workshop_remote.py": "", # replaced at build time
+    "multiguard_license.py": "e1f191e52e763626b5f99565329a8eba9aa93ea3",
+    "multiguard_workshop_remote.py": "f6e490a60194025eaf5a94fa2a1994703d23002f",
 }
 PANEL_PATH = "/multiguard/panel/licenses-grid"
 
@@ -216,6 +216,13 @@ def sql_bootstrap():
             """),{"name":name}).all()}
             if not cols.issubset(found):
                 raise RuntimeError("Incompatible existing SQL schema: "+name)
+    with engine.connect() as c:
+        selected_service = c.execute(text("""
+            SELECT count(*) FROM guard.owner_entitlement_selections
+            WHERE selected_mode='SERVICE'
+        """)).scalar_one()
+        if selected_service:
+            raise RuntimeError("Existing explicit SERVICE selections: refuse to change runtime until reconciled")
     print("OWNER LICENCE MODE TABLES: READY (NO LICENCE ROWS CHANGED)")
 
 def status_url() -> int:
