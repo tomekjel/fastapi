@@ -635,16 +635,17 @@ def workshop_standing_attest(request: WorkshopStandingAttestation):
 
 
 def request_for_owner(iid: uuid.UUID):
-    """Open a service-PRO session only for a licensed, bound, online service node.
+    """Unattended SERVICE PRO requires BOTH prior OWNER consent and local opt-in.
 
-    No client opt-in or historical standing consent is needed. Eligibility and
-    dedicated server-controlled MeshCentral group are verified on every call.
+    A paid or workshop PRO licence alone never authorizes a standing session.
+    Both approvals must be live, node-bound and recorded in server storage.
     """
     _schema()
     with engine.connect() as db:
         grant = _grant(db, iid)
-    if not _eligible(grant) or not grant.get("mesh_node_id"):
-        raise HTTPException(403, "Brak aktywnej licencji Pro serwisowej lub węzła.")
+        standing = standing_authorization_record(db, iid)
+    if not standing_authorization_record_valid(grant, standing):
+        raise HTTPException(403, "Wymagana zapisana zgoda OWNER i lokalna zgoda urządzenia.")
     node = grant["mesh_node_id"]
     try:
         meshcentral.verify_service_pro_node(node)
@@ -659,8 +660,10 @@ def request_for_owner(iid: uuid.UUID):
             WHERE installation_id=:iid FOR UPDATE
         """),{"iid":iid}).first()
         grant = _grant(db, iid)
-        if not _eligible(grant) or grant.get("mesh_node_id") != node:
-            raise HTTPException(403, "Licencja lub przypisany węzeł uległy zmianie.")
+        standing = standing_authorization_record(db, iid)
+        if (not standing_authorization_record_valid(grant, standing)
+                or grant.get("mesh_node_id") != node):
+            raise HTTPException(403, "Licencja, węzeł lub zgoda serwisowa uległy zmianie.")
         if _open(db, iid):
             raise HTTPException(409,"Ten komputer ma już otwartą sesję.")
         if db.execute(text("""
@@ -1044,7 +1047,11 @@ def connect_for_owner(sid):
         if row.get("authorization_kind","SESSION_CONSENT") == "STANDING_SERVICE":
             if list(row["granted_capabilities"] or []) != ["desktop"]:
                 raise HTTPException(403,"Tryb serwisowy dopuszcza wyłącznie pulpit.")
-            scope = "CLIENT_DIAGNOSTIC"
+            standing = standing_authorization_record(db, row["installation_id"])
+            if not standing_authorization_record_valid(grant, standing):
+                raise HTTPException(403,
+                    "Brak ważnej zgody OWNER i lokalnego opt-in na ten węzeł.")
+            scope = standing["device_scope"]
             try:
                 meshcentral.verify_service_pro_node(grant["mesh_node_id"])
             except meshcentral.MeshCentralError as exc:
@@ -1097,6 +1104,11 @@ def connect_for_owner(sid):
             current_kind = row.get("authorization_kind","SESSION_CONSENT") if row else None
             if scope is not None and current_kind != "STANDING_SERVICE":
                 raise HTTPException(403,"Tryb sesji serwisowej uległ zmianie.")
+            if scope is not None:
+                renewed = standing_authorization_record(db, iid)
+                if (not standing_authorization_record_valid(grant, renewed)
+                        or renewed["device_scope"] != scope):
+                    raise HTTPException(403, "Zgoda serwisowa została cofnięta lub zmieniona.")
             if scope is None and current_kind != "SESSION_CONSENT":
                 raise HTTPException(403,"Tryb zgody zmienił się podczas tworzenia sesji.")
             if share_expires <= _now():
