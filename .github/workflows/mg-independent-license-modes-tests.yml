@@ -17,6 +17,7 @@ on:
       - 'embedded-multiguard/scripts/compact_v44_grid_renderer.py'
       - 'embedded-multiguard/scripts/compact_v44_owner_term.py'
       - 'embedded-multiguard/scripts/deploy_compact_v44_one_save.py'
+      - 'embedded-multiguard/scripts/deploy_v44_compact_popup_only.py'
       - 'embedded-multiguard/tests/test_v44_compact_one_save.py'
       - 'embedded-multiguard/tests/test_grid_v44_controls_20261030.py'
       - 'embedded-multiguard/tests/test_owner_paid_renewals_v44.py'
@@ -64,6 +65,7 @@ jobs:
           python -m py_compile embedded-multiguard/scripts/compact_v44_grid_renderer.py
           python -m py_compile embedded-multiguard/scripts/compact_v44_owner_term.py
           python -m py_compile embedded-multiguard/scripts/deploy_compact_v44_one_save.py
+          python -m py_compile embedded-multiguard/scripts/deploy_v44_compact_popup_only.py
           python -m py_compile embedded-multiguard/tests/test_v44_compact_one_save.py
           python -m py_compile embedded-multiguard/tests/test_grid_v44_controls_20261030.py
           python -m py_compile embedded-multiguard/tests/test_owner_paid_renewals_v44.py
