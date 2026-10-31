@@ -19,6 +19,7 @@ on:
       - 'embedded-multiguard/scripts/deploy_compact_v44_one_save.py'
       - 'embedded-multiguard/scripts/deploy_v44_compact_popup_only.py'
       - 'embedded-multiguard/tests/test_v44_compact_one_save.py'
+      - 'embedded-multiguard/tests/test_v44_owner_mode_and_term_contract.py'
       - 'embedded-multiguard/tests/test_grid_v44_controls_20261030.py'
       - 'embedded-multiguard/tests/test_owner_paid_renewals_v44.py'
       - 'embedded-multiguard/scripts/stage_owner_mode_consent_invalidation_v44.py'
@@ -67,6 +68,7 @@ jobs:
           python -m py_compile embedded-multiguard/scripts/deploy_compact_v44_one_save.py
           python -m py_compile embedded-multiguard/scripts/deploy_v44_compact_popup_only.py
           python -m py_compile embedded-multiguard/tests/test_v44_compact_one_save.py
+          python -m py_compile embedded-multiguard/tests/test_v44_owner_mode_and_term_contract.py
           python -m py_compile embedded-multiguard/tests/test_grid_v44_controls_20261030.py
           python -m py_compile embedded-multiguard/tests/test_owner_paid_renewals_v44.py
           python -m py_compile embedded-multiguard/scripts/stage_owner_mode_consent_invalidation_v44.py
@@ -95,6 +97,8 @@ jobs:
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_grid_v44_controls_20261030.py' -v
       - name: Restore one-row compact expiry, calendar, no payment prompts
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_v44_compact_one_save.py' -v
+      - name: Validate OWNER paid term and Service entitlement contract
+        run: python -m unittest discover -s embedded-multiguard/tests -p 'test_v44_owner_mode_and_term_contract.py' -v
       - name: OWNER mode standing-consent invalidation V4.4 safety
         run: python -m unittest discover -s embedded-multiguard/tests -p 'test_owner_mode_consent_invalidation_v44.py' -v
       - name: Production workshop standing security overlay compatibility
