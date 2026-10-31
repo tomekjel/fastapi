@@ -165,7 +165,7 @@ def main():
         print("V4.4 EXPIRY POPUP: PREFLIGHT PASS (NO CHANGES)")
         return
     sessions()
-    backup=(ROOT/"backup-mg-v44-popup-"+
+    backup=ROOT/("backup-mg-v44-popup-"+
             datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
     backup.mkdir(mode=0o700)
     shutil.copy2(TARGET,backup/TARGET.name)
