@@ -83,7 +83,7 @@ def _mg_v44_grid_transform(doc: str) -> str:
             '<button type="button" data-month="12">12 mies.</button>'
             '<button type="button" data-month="6">6 mies.</button>'
             '<button type="button" data-month="3">3 mies.</button>'
-            '<button type="button" data-perpetual disabled title="Dostępne w edycji Service">Na stałe</button>'
+            '<button type="button" data-perpetual disabled title="Licencja bez daty końcowej; okres można później zmienić">Bezterm.</button>'
             '</div>'
             '<label>Wybierz konkretną datę'
             '<input type="date" name="term_date" form="' + fid + '" aria-label="Kalendarz"></label>'
