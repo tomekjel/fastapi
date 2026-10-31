@@ -85,8 +85,7 @@ def _mg_v44_grid_transform(doc: str) -> str:
             '<button type="button" data-month="3">3 mies.</button>'
             '<button type="button" data-perpetual disabled title="Licencja bez daty końcowej; okres można później zmienić">Bezterm.</button>'
             '</div>'
-            '<label>Wybierz konkretną datę'
-            '<input type="date" name="term_date" form="' + fid + '" aria-label="Kalendarz"></label>'
+            '<input class="mg-compact-calendar" type="date" name="term_date" form="' + fid + '" aria-label="Wybierz datę ważności">'
             '</div></details>'
             '<select class="mg-compact-choice" name="term_choice" form="' + fid + '">'
             '<option value="KEEP" selected>Bez zmian</option>'
@@ -116,19 +115,30 @@ def _mg_v44_grid_transform(doc: str) -> str:
 .mg-compact-date>summary::-webkit-details-marker{display:none}
 .mg-compact-days{display:block;font-size:10px;opacity:.7;margin-top:2px}
 .mg-compact-choice{display:none!important}
-.mg-compact-popup{position:fixed;z-index:2147483000;width:288px;padding:8px;
- border:1px solid #507d9d;border-radius:5px;background:#14283c;color:#eaf4fa;
+.mg-compact-popup{position:fixed;z-index:2147483000;width:286px;padding:6px;
+ border:1px solid #507d9d;border-radius:0;background:#14283c;color:#eaf4fa;
  box-shadow:0 8px 20px #000a}
 .mg-compact-popup[hidden]{display:none!important}
-.mg-compact-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin-bottom:8px}
-.mg-compact-presets button{display:block;min-width:0;min-height:28px;
- font-size:10px;white-space:nowrap;padding:4px 2px;cursor:pointer}
-.mg-compact-presets button:disabled{opacity:.45;cursor:not-allowed}
-.mg-compact-presets button:not(:disabled):hover{background:#2b6288}
-.mg-compact-presets button[aria-pressed=true]{border:1px solid #68cbff;background:#255c83}
-.mg-compact-popup label{font-size:11px;display:block}
-.mg-compact-popup input[type=date]{display:block!important;width:100%;margin-top:4px;
- font-size:12px;padding:5px;background:#112b41;color:#fff}
+.mg-compact-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;margin:0 0 6px}
+.mg-compact-popup .mg-compact-presets button{display:block!important;box-sizing:border-box!important;
+ min-width:0!important;max-width:none!important;width:100%!important;
+ height:30px!important;min-height:30px!important;max-height:30px!important;
+ padding:3px 1px!important;margin:0!important;white-space:nowrap!important;
+ border:1px solid #567c9b!important;border-radius:0!important;box-shadow:none!important;
+ background:#203b54!important;color:#eff6fb!important;
+ font-size:10px!important;font-weight:500!important;line-height:20px!important;
+ text-align:center!important;text-transform:none!important;cursor:pointer}
+.mg-compact-popup .mg-compact-presets button:disabled{opacity:.45!important;cursor:not-allowed}
+.mg-compact-popup .mg-compact-presets button:not(:disabled):hover{background:#2c5877!important}
+.mg-compact-popup .mg-compact-presets button[aria-pressed=true]{background:#28628a!important;
+ border-color:#6cbbeb!important}
+.mg-compact-popup input.mg-compact-calendar[type=date]{display:block!important;
+ width:100%!important;min-width:0!important;box-sizing:border-box!important;
+ height:30px!important;min-height:30px!important;max-height:30px!important;
+ margin:0!important;padding:3px 6px!important;font-size:12px!important;
+ border:1px solid #547b98!important;border-radius:0!important;
+ background:#112b41!important;color:#fff!important}
+
 </style>
 <script>
 (function(){
@@ -148,8 +158,8 @@ document.querySelectorAll('tr[data-mg-compact=yes]').forEach(function(row){
  document.body.appendChild(popup);
  function position(){
   var rect=pick.querySelector('summary').getBoundingClientRect();
-  popup.style.left=Math.max(3,Math.min(rect.left,innerWidth-296))+'px';
-  popup.style.top=(rect.bottom+160<innerHeight?rect.bottom+4:Math.max(3,rect.top-160))+'px';
+  popup.style.left=Math.max(3,Math.min(rect.left,innerWidth-292))+'px';
+  popup.style.top=(rect.bottom+96<innerHeight?rect.bottom+3:Math.max(3,rect.top-96))+'px';
   popup.hidden=false;
  }
  function refresh(){
