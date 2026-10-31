@@ -52,6 +52,20 @@ class Contract(unittest.TestCase):
         self.assertIn('height:30px!important',result)
         self.assertEqual(result.count('name="term_date"'),1)
 
+    def test_popup_deploy_is_ui_only_and_fail_closed(self):
+        path=root/"deploy_v44_compact_popup_only.py"
+        script=path.read_text()
+        ast.parse(script)
+        self.assertIn('FUNC="_mg_v44_grid_transform"',script)
+        self.assertIn('if name==FUNC:',script)
+        self.assertIn('ast.dump(a[FUNC],include_attributes=False)',script)
+        self.assertIn('if not args.apply:',script)
+        self.assertIn('sessions()',script)
+        self.assertIn('shutil.copy2(TARGET,backup/TARGET.name)',script)
+        self.assertIn('shutil.copy2(backup/TARGET.name,TARGET)',script)
+        self.assertIn('backup=ROOT/(',script)
+        self.assertNotIn('_keygate_set_valid_until(',script)
+
     def test_unknown_table_is_rejected(self):
         with self.assertRaises(RuntimeError):
             render(sample.replace('Ważna do','Brak kolumny'))
