@@ -33,6 +33,25 @@ class Contract(unittest.TestCase):
         self.assertEqual(result.count('name="term_choice"'),1)
         self.assertEqual(result.count('class="grid-save"'),1)
 
+    def test_four_squared_tiles_and_only_date_field_below(self):
+        import re
+        result=render(sample)
+        popup=re.search(r'<div class="mg-compact-popup" hidden>(.*?)</div></details>',result,re.S)
+        self.assertIsNotNone(popup)
+        body=popup.group(1)
+        self.assertEqual(body.count('type="button"'),4)
+        self.assertEqual(
+            re.findall(r'<button[^>]*>(.*?)</button>',body,re.S),
+            ["12 mies.","6 mies.","3 mies.","Bezterm."],
+        )
+        self.assertIn('class="mg-compact-calendar" type="date"',body)
+        self.assertNotIn('Wybierz konkretną datę',body)
+        self.assertNotIn('<label>',body)
+        self.assertIn('grid-template-columns:repeat(4,minmax(0,1fr))',result)
+        self.assertIn('border-radius:0!important',result)
+        self.assertIn('height:30px!important',result)
+        self.assertEqual(result.count('name="term_date"'),1)
+
     def test_unknown_table_is_rejected(self):
         with self.assertRaises(RuntimeError):
             render(sample.replace('Ważna do','Brak kolumny'))
