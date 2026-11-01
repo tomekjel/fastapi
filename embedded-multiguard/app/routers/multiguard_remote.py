@@ -1384,6 +1384,11 @@ def panel_remote_entitlement_diagnostic(
     with engine.connect() as db:
         grant = workshop._grant(db, installation_id)
         mode = workshop.remote_entitlement_mode(grant)
+        record = workshop.standing_authorization_record(db, installation_id)
+        approved = bool(record and record["owner_approved_at"] is not None
+                        and record["revoked_at"] is None)
+        local_opt_in = bool(approved and record["local_opt_in_attested_at"] is not None)
+        standing_valid = workshop.standing_authorization_record_valid(grant, record)
     group_online = False
     if mode == "SERVICE_PRO" and grant.get("mesh_node_id"):
         try:
@@ -1397,10 +1402,14 @@ def panel_remote_entitlement_diagnostic(
         "mode": mode,
         "serviceRemoteEligible": mode == "SERVICE_PRO",
         "customerLicenceRoute": mode == "CUSTOMER_LICENSE",
-        "standingAuthorizationRecorded": False,
-        "unattendedReady": bool(mode == "SERVICE_PRO" and group_online),
+        "standingAuthorizationRecorded": approved,
+        "localOptInAttested": local_opt_in,
+        "unattendedReady": bool(standing_valid and group_online),
         "reasonCode": (
-            "SERVICE_PRO_ONLINE" if group_online and mode == "SERVICE_PRO"
+            "SERVICE_PRO_STANDING_AUTH_READY" if standing_valid and group_online
+            else "SERVICE_PRO_OWNER_APPROVAL_REQUIRED" if mode == "SERVICE_PRO" and not approved
+            else "SERVICE_PRO_LOCAL_CONFIRMATION_REQUIRED" if mode == "SERVICE_PRO" and not local_opt_in
+            else "SERVICE_PRO_AUTH_NODE_MISMATCH" if mode == "SERVICE_PRO" and not standing_valid
             else "SERVICE_PRO_SERVICE_GROUP_OFFLINE" if mode == "SERVICE_PRO"
             else "CUSTOMER_REQUIRES_SESSION_CONSENT" if mode == "CUSTOMER_LICENSE"
             else "REMOTE_NOT_ELIGIBLE"
