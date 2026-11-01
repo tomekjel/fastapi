@@ -119,5 +119,61 @@ class ProfileTransitionTests(unittest.TestCase):
         self.assertEqual(code, 403)
 
 
+class MeshGroupAuthorizationTests(unittest.TestCase):
+    def setUp(self):
+        self.grant = {
+            "status": "DISCOVERED", "edition": "PRO",
+            "enabled": True, "mesh_node_id": None,
+        }
+        self.record = {
+            "owner_approved_at": datetime.now(timezone.utc),
+            "local_opt_in_attested_at": datetime.now(timezone.utc),
+            "revoked_at": None, "device_scope": "OWNED_WORKSHOP",
+            "prior_consent_sha256": "a" * 64,
+            "approved_mesh_node_id": None,
+        }
+        self.group = "mesh//" + "A" * 64
+
+    def check(self, record=None, *, owner_group=None, diagnostic_group=None):
+        setting = {
+            "MESH_CENTRAL_OWNER_OWNED_MESH_ID": owner_group or "",
+            "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID": diagnostic_group or "",
+        }
+        with patch.object(api, "expected_remote_mesh_group", return_value=self.group), \
+             patch.dict(api.os.environ, setting):
+            return api.authorized_standing_mesh_group(self.grant, record or self.record)
+
+    def test_owner_device_accepts_only_owner_group(self):
+        self.assertEqual(self.check(owner_group=self.group), self.group)
+        with self.assertRaises(HTTPException) as error:
+            self.check(diagnostic_group=self.group)
+        self.assertEqual(error.exception.status_code, 503)
+
+    def test_client_diagnostic_requires_distinct_scope_selection(self):
+        self.record["device_scope"] = "CLIENT_DIAGNOSTIC"
+        self.assertEqual(self.check(diagnostic_group=self.group), self.group)
+        with self.assertRaises(HTTPException) as error:
+            self.check(owner_group=self.group)
+        self.assertEqual(error.exception.status_code, 503)
+
+    def test_revoked_or_unattested_is_denied(self):
+        self.record["revoked_at"] = datetime.now(timezone.utc)
+        with self.assertRaises(HTTPException) as error:
+            self.check(owner_group=self.group)
+        self.assertEqual(error.exception.status_code, 403)
+        self.record["revoked_at"] = None
+        self.record["local_opt_in_attested_at"] = None
+        with self.assertRaises(HTTPException) as error:
+            self.check(owner_group=self.group)
+        self.assertEqual(error.exception.status_code, 403)
+
+    def test_other_node_requires_reauthorization(self):
+        self.grant["mesh_node_id"] = "node//" + "B" * 64
+        self.record["approved_mesh_node_id"] = "node//" + "C" * 64
+        with self.assertRaises(HTTPException) as error:
+            self.check(owner_group=self.group)
+        self.assertEqual(error.exception.status_code, 403)
+
+
 if __name__ == "__main__":
     unittest.main()
