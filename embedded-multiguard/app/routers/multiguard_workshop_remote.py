@@ -956,6 +956,35 @@ def workshop_service_bootstrap_ticket(request: WorkshopAuth):
     }
 
 
+def authorized_standing_mesh_group(grant, approval):
+    """Exact group pinned by both the approved scope AND SERVICE_PRO license.
+
+    Registration cannot change an OWNER-approved scope or redirect a machine
+    into a different MeshCentral group just because its agent is online.
+    """
+    if not _eligible(grant) or not approval:
+        raise HTTPException(403, "Brak licencji lub upoważnienia SERVICE PRO.")
+    if (approval["owner_approved_at"] is None
+            or approval["local_opt_in_attested_at"] is None
+            or approval["revoked_at"] is not None
+            or approval["device_scope"] not in ("OWNED_WORKSHOP", "CLIENT_DIAGNOSTIC")
+            or not isinstance(approval["prior_consent_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", approval["prior_consent_sha256"])):
+        raise HTTPException(403, "Wymagane są dwie aktualne zgody na ten komputer.")
+    group = expected_remote_mesh_group(grant)
+    scope_key = {
+        "OWNED_WORKSHOP": "MESH_CENTRAL_OWNER_OWNED_MESH_ID",
+        "CLIENT_DIAGNOSTIC": "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID",
+    }[approval["device_scope"]]
+    scope_group = os.getenv(scope_key, "").strip()
+    if not group or not scope_group or group != scope_group:
+        raise HTTPException(503, "Grupa SERVICE PRO nie zgadza się z zakresem zgody.")
+    approved_node = approval["approved_mesh_node_id"]
+    if approved_node not in (None, grant.get("mesh_node_id")):
+        raise HTTPException(403, "OWNER zatwierdził inny węzeł SERVICE PRO.")
+    return group
+
+
 @router.post("/agent/workshop/mesh-enroll")
 def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
     """Identity-bound registration; OWNER never has to type MeshCentral node IDs."""
@@ -965,10 +994,9 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
     # flood the MeshCentral management CLI with arbitrary lookup requests.
     with engine.connect() as db:
         grant = _grant(db, request.installationId)
-        if not _eligible(grant):
-            raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
-        if expected_remote_mesh_group(grant) is None:
-            raise HTTPException(503, "Nie skonfigurowano grupy MeshCentral dla Pro serwisowego.")
+        approval = standing_authorization_record(db, request.installationId)
+        authorized_standing_mesh_group(grant, approval)
+        approved_scope = approval["device_scope"]
     local_id = request.meshNodeId
     if not re.fullmatch(r"[A-Za-z0-9@$]{64}", local_id):
         raise HTTPException(400, "Nieprawidłowy identyfikator MeshAgent.")
@@ -979,10 +1007,10 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
     # Server-side read-only verification defeats guessed IDs and hostname
     # collisions; never trust the client-provided node ID without MeshCtrl.
     try:
-        verified = meshcentral.verify_service_pro_node(node)
+        verified = meshcentral.verify_standing_service_node(node, approved_scope)
     except meshcentral.MeshCentralError as exc:
         raise HTTPException(
-            409, "MeshAgent Pro serwisowy musi być online w dedykowanej grupie serwisowej."
+            409, "MeshAgent musi być online w grupie zatwierdzonej dla zakresu upoważnienia."
         ) from exc
     if verified != node:
         raise HTTPException(409, "Nie potwierdzono przypisanego węzła serwisowego.")
@@ -997,8 +1025,14 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
         grant = _grant(db, request.installationId)
         if not _eligible(grant):
             raise HTTPException(403, "Instalacja nie ma aktywnego serwisowego Pro.")
-        if expected_remote_mesh_group(grant) is None:
-            raise HTTPException(503, "Brak grupy serwisowej w konfiguracji serwera.")
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        current_approval = standing_authorization_record(db, request.installationId)
+        authorized_standing_mesh_group(grant, current_approval)
+        if current_approval["device_scope"] != approved_scope:
+            raise HTTPException(409, "Zakres upoważnienia zmienił się podczas powiązania.")
         # Serialize the cross-mode association with commercial enrollment
         # using exactly the same advisory lock on the full MeshCentral node.
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:node))"), {"node":node})
