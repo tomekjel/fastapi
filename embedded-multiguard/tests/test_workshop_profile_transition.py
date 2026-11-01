@@ -240,7 +240,7 @@ class PaidInstallationMappingTests(unittest.TestCase):
         # Never compare them directly, even when a fake database returns empty.
         source = inspect.getsource(api)
         selects = re.findall(
-            r"SELECT 1 FROM guard[.]remote_sessions\\b(.*?)LIMIT 1",
+            r"SELECT 1 FROM guard[.]remote_sessions\b(.*?)LIMIT 1",
             source, re.DOTALL,
         )
         self.assertEqual(len(selects), 5)
