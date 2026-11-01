@@ -6,6 +6,7 @@ Run from repository root with the backend's normal Python dependencies:
 """
 import json
 import sys
+import types
 import unittest
 import uuid
 from contextlib import contextmanager
@@ -13,7 +14,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+# This suite deliberately imports the REAL workshop router with ONLY its
+# external infrastructure modules replaced by in-memory stubs. It runs in a
+# dedicated Python process, so no test can initialize live DB/API/MeshCentral.
+# The router's pure policy and transition functions are not mocked.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import app.routers  # namespace package, no service startup
+
+for name in (
+    "app.database",
+    "app.security",
+    "app.routers.multiguard_license",
+    "app.routers.multiguard_meshcentral",
+    "app.routers.multiguard_remote",
+):
+    sys.modules[name] = types.ModuleType(name)
+sys.modules["app.database"].engine = None
+sys.modules["app.security"].CurrentUser = type("CurrentUser", (), {})
+sys.modules["app.security"].require_owner = lambda: None
 
 from fastapi import HTTPException
 from app.routers import multiguard_workshop_remote as api
