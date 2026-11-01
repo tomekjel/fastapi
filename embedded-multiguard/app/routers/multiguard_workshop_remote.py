@@ -1322,15 +1322,36 @@ def owner_workshop_entitlement(
                         and record["revoked_at"] is None)
         confirmed = bool(prepared and record["local_opt_in_attested_at"] is not None)
         bound = standing_authorization_record_valid(grant, record)
-    # Node online/group policy is verified independently at session start.
-    # A status screen may NEVER set unattendedReady on this DB read alone.
-    return {
+        node = grant.get("mesh_node_id") if bound else None
+        scope = record["device_scope"] if bound else None
+    # A database authorization is never sufficient to label a SERVICE PRO
+    # computer as ready. Confirm the exact ONLINE node, dedicated group and
+    # effective desktop consent policy with MeshCentral; never create a share
+    # from this read-only endpoint. A future connect call rechecks all of it.
+    online = False
+    if node and scope:
+        try:
+            online = meshcentral.verify_standing_service_node(node, scope) == node
+        except meshcentral.MeshCentralError:
+            online = False
+    ready = bool(bound and online)
+    reason = (
+        "SERVICE_PRO_READY" if ready else
+        "SERVICE_PRO_ENTITLEMENT_REQUIRED" if mode != "SERVICE_PRO" else
+        "SERVICE_PRO_OWNER_APPROVAL_REQUIRED" if not prepared else
+        "SERVICE_PRO_LOCAL_OPT_IN_REQUIRED" if not confirmed else
+        "SERVICE_PRO_NODE_BINDING_REQUIRED" if not bound else
+        "SERVICE_PRO_MESH_OFFLINE_OR_POLICY_UNVERIFIED"
+    )
+    return JSONResponse({
         "mode": mode,
         "ownerPrepared": prepared,
         "localOptInAttested": confirmed,
         "exactNodeBound": bound,
-        "unattendedReady": False,
-    }
+        "meshNodeOnlineAndPolicyVerified": online,
+        "unattendedReady": ready,
+        "reasonCode": reason,
+    }, headers={"Cache-Control": "private, no-store"})
 
 
 @router.post("/remote/workshop/standing/{installation_id}/prepare")
