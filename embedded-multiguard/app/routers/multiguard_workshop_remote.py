@@ -846,6 +846,14 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
         """), {"node":node, "iid":request.installationId}).first()
         if commercial:
             raise HTTPException(409, "Węzeł należy do innego typu instalacji.")
+        # A valid SERVICE_PRO node may not be claimed by two workshop PCs.
+        # The advisory lock above serializes concurrent enrollment on this ID.
+        workshop_collision = db.execute(text("""
+            SELECT 1 FROM guard.workshop_mesh_nodes
+            WHERE mesh_node_id=:node AND installation_id<>:iid LIMIT 1
+        """), {"node":node,"iid":request.installationId}).first()
+        if workshop_collision:
+            raise HTTPException(409, "Węzeł SERVICE PRO jest już powiązany z inną instalacją.")
         # Avoid destroying an already active commercial viewer when an
         # installation switches to workshop mode with the same service.
         if db.execute(text("""
