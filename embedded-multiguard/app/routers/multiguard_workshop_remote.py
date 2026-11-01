@@ -23,9 +23,19 @@ from app.database import engine
 from app.security import CurrentUser, require_owner
 from app.routers import multiguard_license as license
 from app.routers import multiguard_meshcentral as meshcentral
-from app.routers import multiguard_remote as paid_remote
 
 router = APIRouter(tags=["multi-guard-workshop-remote"])
+
+
+def _paid_remote():
+    """Resolve the commercial router only at request time.
+
+    multiguard_remote mounts THIS router at module import. A top-level
+    reverse import here made offline tests (and other import orders) cyclic.
+    Both routes are retained; no sharing or authorization semantics change.
+    """
+    from app.routers import multiguard_remote
+    return multiguard_remote
 _lock = threading.Lock()
 _ready = False
 OPEN = ("REQUESTED", "CONSENTED", "CONNECT_READY", "ACTIVE")
@@ -105,7 +115,7 @@ def _schema():
     global _ready
     if _ready:
         return
-    paid_remote._ensure_schema()
+    _paid_remote()._ensure_schema()
     with _lock:
         if _ready:
             return
@@ -346,14 +356,14 @@ def _public(row):
         "subject": row["subject"],
         "requestedCapabilities": list(row["requested_capabilities"] or []),
         "grantedCapabilities": list(row["granted_capabilities"] or []),
-        "requestedAt": paid_remote._iso(row["requested_at"]),
-        "expiresAt": paid_remote._iso(row.get("mesh_share_expires_at")
+        "requestedAt": _paid_remote()._iso(row["requested_at"]),
+        "expiresAt": _paid_remote()._iso(row.get("mesh_share_expires_at")
                                       if row["status"] in {"CONNECT_READY", "ACTIVE"}
                                       else row["expires_at"]),
-        "consentedAt": paid_remote._iso(row["consented_at"]),
-        "connectedAt": paid_remote._iso(row["connected_at"]),
-        "endedAt": paid_remote._iso(row["ended_at"]),
-        "reconnectUntil": paid_remote._iso(row["reconnect_until"]),
+        "consentedAt": _paid_remote()._iso(row["consented_at"]),
+        "connectedAt": _paid_remote()._iso(row["connected_at"]),
+        "endedAt": _paid_remote()._iso(row["ended_at"]),
+        "reconnectUntil": _paid_remote()._iso(row["reconnect_until"]),
         "meshReady": bool(row["mesh_public_id"]),
         "lastError": row["last_error"],
     }
