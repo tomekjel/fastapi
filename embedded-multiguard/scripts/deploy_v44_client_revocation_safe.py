@@ -64,7 +64,7 @@ def build(before,ref):
     prefix=line[last_line][:last.col_offset]
     if not prefix.isspace():
         raise RuntimeError("BLOCK: ambiguous WAITING indentation")
-    line.insert(last_line, prefix+"**_client_mode_revocation_lease(pending, selected_mode),\\n")
+    line.insert(last_line, prefix+"**_client_mode_revocation_lease(pending, selected_mode),\n")
     changed="".join(line)
     if 'selected_mode == "SERVICE"' not in old:
         raise RuntimeError("BLOCK no independent SERVICE selection")
