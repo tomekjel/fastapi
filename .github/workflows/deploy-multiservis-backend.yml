@@ -33,6 +33,7 @@ jobs:
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_license.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_runtime.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_workshop_remote.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_meshcentral.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_updates.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_service_panel.py
