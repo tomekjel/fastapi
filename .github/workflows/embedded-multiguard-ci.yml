@@ -25,6 +25,7 @@ jobs:
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_license.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_runtime.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
+          python3 -m py_compile embedded-multiguard/app/routers/multiguard_workshop_remote.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_meshcentral.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_updates.py
           python3 -m py_compile embedded-multiguard/scripts/sync_multiguard_releases.py
@@ -54,6 +55,8 @@ jobs:
           grep -Fq '@router.post("/agent/remote/poll")' embedded-multiguard/app/routers/multiguard_remote.py
           grep -Fq '@router.post("/agent/remote/decision")' embedded-multiguard/app/routers/multiguard_remote.py
           grep -Fq '@router.post("/agent/remote/end")' embedded-multiguard/app/routers/multiguard_remote.py
+          grep -Fq '@router.post("/agent/workshop/standing/bootstrap-ticket")' embedded-multiguard/app/routers/multiguard_workshop_remote.py
+          grep -Fq '@router.post("/agent/workshop/profile-transition-check")' embedded-multiguard/app/routers/multiguard_workshop_remote.py
           grep -Fq 'CLIENT_LOG_BUNDLE' embedded-multiguard/app/routers/multiguard_runtime.py
           grep -Fq '@router.get("/releases/{target}/{arch}/{current_version}")' embedded-multiguard/app/routers/multiguard_updates.py
           grep -Fq '@router.get("/update-assets/{channel}/{version}/{filename}")' embedded-multiguard/app/routers/multiguard_updates.py
@@ -69,6 +72,7 @@ jobs:
           cp embedded-multiguard/app/routers/multiguard_license.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_license.py
           cp embedded-multiguard/app/routers/multiguard_runtime.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_runtime.py
           cp embedded-multiguard/app/routers/multiguard_remote.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_remote.py
+          cp embedded-multiguard/app/routers/multiguard_workshop_remote.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_workshop_remote.py
           cp embedded-multiguard/app/routers/multiguard_meshcentral.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_meshcentral.py
           cp embedded-multiguard/app/routers/multiguard_updates.py /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_updates.py
           python3 - <<'PY'
@@ -106,5 +110,6 @@ jobs:
             /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_license.py \
             /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_runtime.py \
             /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_remote.py \
+            /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_workshop_remote.py \
             /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_meshcentral.py \
             /tmp/msbackend/MultiServisServer_FINAL/app/routers/multiguard_updates.py
