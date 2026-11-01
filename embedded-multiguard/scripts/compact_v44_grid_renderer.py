@@ -155,6 +155,7 @@ document.querySelectorAll('tr[data-mg-compact=yes]').forEach(function(row){
  var form=document.getElementById(fid);
  var original=ed.dataset.originalEdition||ed.value;
  if(!form)return;
+ if(!save)save=form.querySelector('button[type=submit]');
  document.body.appendChild(popup);
  function position(){
   var rect=pick.querySelector('summary').getBoundingClientRect();
