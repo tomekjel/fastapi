@@ -143,7 +143,7 @@ def _schema():
                 """CREATE TABLE IF NOT EXISTS guard.workshop_standing_remote_authorizations (
                    installation_id UUID PRIMARY KEY
                      REFERENCES guard.workshop_grants(installation_id) ON DELETE CASCADE,
-                   approved_mesh_node_id TEXT NOT NULL,
+                   approved_mesh_node_id TEXT,
                    device_scope TEXT NOT NULL
                      CHECK (device_scope IN ('OWNED_WORKSHOP','CLIENT_DIAGNOSTIC')),
                    owner_approved_at TIMESTAMPTZ,
@@ -153,6 +153,11 @@ def _schema():
                    revoked_at TIMESTAMPTZ,
                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
+                # Existing deployments may still have a NOT NULL column. A
+                # preliminary OWNER/local consent must be possible BEFORE
+                # a first-time service agent can enroll its node.
+                """ALTER TABLE guard.workshop_standing_remote_authorizations
+                   ALTER COLUMN approved_mesh_node_id DROP NOT NULL""",
                 """CREATE TABLE IF NOT EXISTS guard.workshop_standing_remote_audit (
                    id BIGSERIAL PRIMARY KEY,
                    installation_id UUID NOT NULL
@@ -383,14 +388,18 @@ def prepare_standing_authorization_for_owner(iid,device_scope,receipt_sha256):
     _schema()
     with engine.connect() as db:
         grant=_grant(db,iid)
-    if not _eligible(grant) or not grant.get("mesh_node_id"):
-        raise HTTPException(403,"Wymagana aktywna instalacja serwisowa Pro powiązana z MeshAgent.")
+    if not _eligible(grant):
+        raise HTTPException(403,"Wymagana aktywna instalacja serwisowa Pro.")
     pinned_node=grant["mesh_node_id"]
-    try:
-        if not meshcentral.verify_registered_node(pinned_node):
-            raise HTTPException(409,"Nie potwierdzono węzła urządzenia w MeshCentral.")
-    except meshcentral.MeshCentralError as exc:
-        raise HTTPException(502,"Nie można potwierdzić urządzenia w MeshCentral.") from exc
+    # First deployment may not yet have a Mesh node. Record earlier consent
+    # against the authenticated installation; do NOT mark it unattended-ready.
+    # If a node already exists, independently verify it now.
+    if pinned_node:
+        try:
+            if not meshcentral.verify_registered_node(pinned_node):
+                raise HTTPException(409,"Nie potwierdzono węzła urządzenia w MeshCentral.")
+        except meshcentral.MeshCentralError as exc:
+            raise HTTPException(502,"Nie można potwierdzić urządzenia w MeshCentral.") from exc
     with engine.begin() as db:
         # Lock before writing and revalidate against a concurrent licence
         # conversion or MeshAgent node change.
@@ -586,8 +595,8 @@ def workshop_standing_attest(request: WorkshopStandingAttestation):
             FROM guard.workshop_grants WHERE installation_id=:iid FOR UPDATE
         """),{"iid":request.installationId}).first()
         grant = _grant(db, request.installationId)
-        if not _eligible(grant) or not grant.get("mesh_node_id"):
-            raise HTTPException(403,"Brak aktywnej licencji serwisowej Pro i węzła.")
+        if not _eligible(grant):
+            raise HTTPException(403,"Brak aktywnej licencji serwisowej Pro.")
         record = db.execute(text("""
             SELECT approved_mesh_node_id,device_scope,owner_approved_at,
                    local_opt_in_attested_at,prior_consent_sha256,revoked_at
@@ -867,6 +876,22 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
                     THEN owned.session_id ELSE NULL END,
                 updated_at=now()
         """), {"iid":request.installationId, "node":node})
+        # Complete first-enrollment binding ONLY after MeshCentral confirms
+        # the exact SERVICE_PRO node/group, under the same grant lock. A
+        # pre-existing approved node is never replaced by a different one.
+        db.execute(text("""
+            UPDATE guard.workshop_standing_remote_authorizations
+            SET approved_mesh_node_id=:node,updated_at=now()
+            WHERE installation_id=:iid AND approved_mesh_node_id IS NULL
+              AND revoked_at IS NULL
+              AND owner_approved_at IS NOT NULL
+              AND local_opt_in_attested_at IS NOT NULL
+        """), {"iid":request.installationId,"node":node})
+        current = standing_authorization_record(db, request.installationId)
+        if current and current["approved_mesh_node_id"] not in (None,node):
+            # The record belongs to a previous service node: OWNER must
+            # explicitly revoke and approve a new device after re-enrollment.
+            invalidate_standing_authorization(db,request.installationId,"SERVICE_RIGHTS_CHANGED")
     return {"requestId":request.requestId,"accepted":True,
             "meshReady":True,"serverTime":_now().isoformat()}
 
