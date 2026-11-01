@@ -52,6 +52,22 @@ class Contract(unittest.TestCase):
         self.assertIn('height:30px!important',result)
         self.assertEqual(result.count('name="term_date"'),1)
 
+    def test_calendar_script_parses_and_events_are_connected(self):
+        import re
+        import shutil
+        import subprocess
+        result=render(sample)
+        scripts=re.findall(r'<script[^>]*>(.*?)</script>',result,re.S)
+        self.assertTrue(scripts)
+        js=scripts[-1]
+        self.assertNotIn(r"\\n date.addEventListener",js)
+        self.assertIn("date.addEventListener('input',selectedDate)",js)
+        self.assertIn("date.addEventListener('change',selectedDate)",js)
+        self.assertIn("save.disabled=(choice.value==='KEEP'&&ed.value===original)",js)
+        if shutil.which("node"):
+            check=subprocess.run(["node","--check"],input=js,text=True,capture_output=True)
+            self.assertEqual(check.returncode,0,check.stderr)
+
     def test_popup_deploy_is_ui_only_and_fail_closed(self):
         path=root/"deploy_v44_compact_popup_only.py"
         script=path.read_text()
