@@ -573,6 +573,7 @@ def workshop_standing_status(request: WorkshopAuth):
         "deviceScope":record["device_scope"] if approved else None,
         "priorConsentSha256":record["prior_consent_sha256"] if approved else None,
         "localOptInAttested":bool(approved and record["local_opt_in_attested_at"] is not None),
+        "meshNodeBindingPending":bool(approved and not grant.get("mesh_node_id")),
         "unattendedReady":False,
     }
 
@@ -605,17 +606,19 @@ def workshop_standing_attest(request: WorkshopStandingAttestation):
         """),{"iid":request.installationId}).mappings().first()
         if (not record or record["revoked_at"] is not None
                 or record["owner_approved_at"] is None
-                or record["approved_mesh_node_id"] != grant["mesh_node_id"]
+                or record["approved_mesh_node_id"] not in (None,grant["mesh_node_id"])
                 or record["prior_consent_sha256"] != request.acknowledgedConsentSha256):
             raise HTTPException(403,"Brak bieżącego upoważnienia OWNER dla tego komputera.")
         if record["local_opt_in_attested_at"] is not None:
             raise HTTPException(409,"Zgoda lokalna została już zarejestrowana.")
         db.execute(text("""
             UPDATE guard.workshop_standing_remote_authorizations
-            SET local_opt_in_attested_at=:now,updated_at=:now
+            SET approved_mesh_node_id=COALESCE(approved_mesh_node_id,:node),
+                local_opt_in_attested_at=:now,updated_at=:now
             WHERE installation_id=:iid AND revoked_at IS NULL
               AND local_opt_in_attested_at IS NULL
-        """),{"iid":request.installationId,"now":_now()})
+        """),{"iid":request.installationId,"now":_now(),
+               "node":grant["mesh_node_id"]})
         db.execute(text("""
             INSERT INTO guard.workshop_standing_remote_audit
                 (installation_id,action,actor_type)
