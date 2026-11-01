@@ -45,6 +45,17 @@ jobs:
           python3 embedded-multiguard/tests/test_owner_panel_security.py
           python3 -m py_compile embedded-multiguard/scripts/sync_multiguard_releases.py
 
+      - name: Verify SERVICE PRO authorization guards before SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check \
+            "fastapi>=0.110,<1.0" \
+            "sqlalchemy>=2.0,<3.0"
+          python3 -m unittest discover -v \
+            -s embedded-multiguard/tests \
+            -p test_workshop_profile_transition.py
+
       - name: Configure SSH
         shell: bash
         env:
