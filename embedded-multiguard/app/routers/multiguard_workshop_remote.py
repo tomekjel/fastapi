@@ -56,6 +56,12 @@ class WorkshopProfileTransitionCheck(WorkshopAuth):
     targetMode: Literal["SERVICE_PRO", "CLIENT"]
 
 
+class WorkshopProfileTransitionFinish(WorkshopAuth):
+    reservationId: uuid.UUID
+    targetMode: Literal["SERVICE_PRO", "CLIENT"]
+    succeeded: bool
+
+
 class WorkshopStandingAttestation(WorkshopAuth):
     # Only an explicit, interactive GUI action may submit this command.
     # Discovery auth alone can never stand in for OWNER's separate approval.
@@ -190,6 +196,13 @@ def _schema():
                 # a first-time service agent can enroll its node.
                 """ALTER TABLE guard.workshop_standing_remote_authorizations
                    ALTER COLUMN approved_mesh_node_id DROP NOT NULL""",
+                """CREATE TABLE IF NOT EXISTS guard.workshop_profile_transition_locks (
+                   installation_id UUID PRIMARY KEY
+                     REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+                   reservation_id UUID NOT NULL,
+                   target_mode TEXT NOT NULL CHECK (target_mode IN (\'SERVICE_PRO\',\'CLIENT\')),
+                   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                   released_at TIMESTAMPTZ)""",
                 """CREATE TABLE IF NOT EXISTS guard.workshop_standing_remote_audit (
                    id BIGSERIAL PRIMARY KEY,
                    installation_id UUID NOT NULL
@@ -201,6 +214,20 @@ def _schema():
             ):
                 db.execute(text(query))
         _ready = True
+
+
+def _assert_no_profile_transition(db, iid):
+    """Called while locking workshop_grants for this installation.
+
+    A transition stays reserved until explicitly finished. Crashed Windows
+    clients fail closed rather than releasing a timed lease during an UAC
+    prompt. OWNER must recover interrupted operations intentionally.
+    """
+    if db.execute(text("""
+        SELECT 1 FROM guard.workshop_profile_transition_locks
+        WHERE installation_id=:iid AND released_at IS NULL LIMIT 1
+    """), {"iid": iid}).first():
+        raise HTTPException(409, "Trwa zmiana profilu Windows; nowe sesje są zablokowane.")
 
 
 def _grant(db, iid):
@@ -564,6 +591,9 @@ def request_consent_for_owner(iid: uuid.UUID):
     """
     _schema()
     with engine.begin() as db:
+        db.execute(text("""SELECT installation_id FROM guard.workshop_grants
+                           WHERE installation_id=:iid FOR UPDATE"""), {"iid": iid}).first()
+        _assert_no_profile_transition(db, iid)
         grant = _grant(db, iid)
         if not _eligible(grant):
             raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
@@ -685,6 +715,7 @@ def request_for_owner(iid: uuid.UUID):
             SELECT installation_id FROM guard.workshop_grants
             WHERE installation_id=:iid FOR UPDATE
         """),{"iid":iid}).first()
+        _assert_no_profile_transition(db, iid)
         grant = _grant(db, iid)
         if not _eligible(grant) or grant.get("mesh_node_id") != node:
             raise HTTPException(403, "Licencja lub przypisany węzeł uległy zmianie.")
