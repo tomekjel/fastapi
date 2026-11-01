@@ -860,58 +860,96 @@ def workshop_mesh_provisioning_plan(request: WorkshopAuth):
     }
 
 
+def _validate_transition_locked(db, request):
+    """Requires workshop grant lock; verifies both remote session tables."""
+    # Lock in the same order as grant revocation / OWNER authorization.    db.execute(text("""        SELECT installation_id FROM guard.workshop_grants        WHERE installation_id=:iid FOR UPDATE    """), {"iid": request.installationId}).first()    _assert_no_profile_transition(db, request.installationId)
+    grant = _grant(db, request.installationId)    if not _eligible(grant):        raise HTTPException(403, "Zmiana profilu wymaga aktywnego serwisowego Pro.")    db.execute(text("""        SELECT installation_id        FROM guard.workshop_standing_remote_authorizations        WHERE installation_id=:iid FOR UPDATE    """), {"iid": request.installationId}).first()    if request.targetMode == "CLIENT":        # An OWNER revocation cannot be replaced by a local toggle. Old        # standing authorization must already be durably revoked.        standing = standing_authorization_record(db, request.installationId)        if (standing and standing["owner_approved_at"] is not None                and standing["revoked_at"] is None):            raise HTTPException(409, "Najpierw OWNER musi cofnąć stałe upoważnienie.")    pending_workshop = db.execute(text("""        SELECT 1 FROM guard.workshop_remote_sessions        WHERE installation_id=:iid          AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')        LIMIT 1    """), {"iid": request.installationId}).first()    pending_paid = db.execute(text("""        SELECT 1 FROM guard.remote_sessions        WHERE installation_id=:iid          AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')        LIMIT 1    """), {"iid": request.installationId}).first()    if pending_workshop or pending_paid:        raise HTTPException(            409, "Zakończ wszystkie sesje Pro i serwisowe, także oczekujące, zanim zmienisz profil."        )
+
 @router.post("/agent/workshop/profile-transition-check")
 def workshop_profile_transition_check(request: WorkshopProfileTransitionCheck):
-    """Fail closed before an explicit local CLIENT<->SERVICE_PRO SCM change.
-
-    Checks all outstanding commercial AND workshop sessions, not only the
-    live session shown by the local GUI. A sessionless local transport is not
-    enough to prove that stopping the Windows agent would be safe.
-    This endpoint does not stop/revoke anything or grant remote access.
-    """
+    """Compatibility-only read-only diagnostic. NEVER authorize Windows SCM."""
     _schema()
     _authenticate(request)
     with engine.begin() as db:
-        # Lock in the same order as grant revocation / OWNER authorization.
-        db.execute(text("""
-            SELECT installation_id FROM guard.workshop_grants
-            WHERE installation_id=:iid FOR UPDATE
-        """), {"iid": request.installationId}).first()
-        grant = _grant(db, request.installationId)
-        if not _eligible(grant):
-            raise HTTPException(403, "Zmiana profilu wymaga aktywnego serwisowego Pro.")
-        db.execute(text("""
-            SELECT installation_id
-            FROM guard.workshop_standing_remote_authorizations
-            WHERE installation_id=:iid FOR UPDATE
-        """), {"iid": request.installationId}).first()
-        if request.targetMode == "CLIENT":
-            # An OWNER revocation cannot be replaced by a local toggle. Old
-            # standing authorization must already be durably revoked.
-            standing = standing_authorization_record(db, request.installationId)
-            if (standing and standing["owner_approved_at"] is not None
-                    and standing["revoked_at"] is None):
-                raise HTTPException(409, "Najpierw OWNER musi cofnąć stałe upoważnienie.")
-        pending_workshop = db.execute(text("""
-            SELECT 1 FROM guard.workshop_remote_sessions
-            WHERE installation_id=:iid
-              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
-            LIMIT 1
-        """), {"iid": request.installationId}).first()
-        pending_paid = db.execute(text("""
-            SELECT 1 FROM guard.remote_sessions
-            WHERE installation_id=:iid
-              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
-            LIMIT 1
-        """), {"iid": request.installationId}).first()
-        if pending_workshop or pending_paid:
-            raise HTTPException(
-                409, "Zakończ wszystkie sesje Pro i serwisowe, także oczekujące, zanim zmienisz profil."
-            )
+        _validate_transition_locked(db, request)
     return JSONResponse({
         "requestId": request.requestId,
         "targetMode": request.targetMode,
         "allowed": True,
+        "serverTime": _now().isoformat(),
+    }, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/agent/workshop/profile-transition-begin")
+def workshop_profile_transition_begin(request: WorkshopProfileTransitionCheck):
+    """Reserve a single local UAC transition, preventing new OWNER sessions.
+
+    The reservation has NO automatic expiry: losing the Windows process keeps
+    access blocked until a deliberately authenticated recovery/reconciliation.
+    The DB row does not authorize unattended access or affect Windows SCM.
+    """
+    _schema()
+    _authenticate(request)
+    with engine.begin() as db:
+        _validate_transition_locked(db, request)
+        existing = db.execute(text("""
+            SELECT reservation_id, released_at
+            FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).mappings().first()
+        if existing and existing["released_at"] is None:
+            raise HTTPException(409, "Poprzednie przełączenie profilu nie zostało zakończone.")
+        reservation = uuid.uuid4()
+        db.execute(text("""
+            INSERT INTO guard.workshop_profile_transition_locks AS profile
+                (installation_id,reservation_id,target_mode,created_at,released_at)
+            VALUES (:iid,:reservation,:target,now(),NULL)
+            ON CONFLICT (installation_id) DO UPDATE
+            SET reservation_id=EXCLUDED.reservation_id,
+                target_mode=EXCLUDED.target_mode,
+                created_at=now(),released_at=NULL
+            WHERE profile.released_at IS NOT NULL
+        """), {"iid": request.installationId,
+                "reservation": reservation, "target": request.targetMode})
+    return JSONResponse({
+        "requestId": request.requestId, "targetMode": request.targetMode,
+        "allowed": True, "reservationId": str(reservation),
+        "serverTime": _now().isoformat(),
+    }, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/agent/workshop/profile-transition-finish")
+def workshop_profile_transition_finish(request: WorkshopProfileTransitionFinish):
+    """Release exactly the reservation held by this authenticated installation.
+
+    Local SCM success and failure both release after the Windows subprocess
+    exits. Network failure or process crash leaves the lock in place.
+    """
+    _schema()
+    _authenticate(request)
+    with engine.begin() as db:
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        existing = db.execute(text("""
+            SELECT reservation_id,target_mode,released_at
+            FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).mappings().first()
+        if (not existing or existing["reservation_id"] != request.reservationId
+                or existing["target_mode"] != request.targetMode):
+            raise HTTPException(409, "Nieprawidłowa rezerwacja przełączenia profilu.")
+        if existing["released_at"] is None:
+            db.execute(text("""
+                UPDATE guard.workshop_profile_transition_locks
+                SET released_at=now()
+                WHERE installation_id=:iid AND reservation_id=:reservation
+            """), {"iid": request.installationId,
+                    "reservation": request.reservationId})
+    return JSONResponse({
+        "requestId": request.requestId, "released": True,
+        "targetMode": request.targetMode,
         "serverTime": _now().isoformat(),
     }, headers={"Cache-Control": "private, no-store"})
 
