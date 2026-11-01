@@ -44,16 +44,34 @@ class FakeCursor:
     def first(self):
         return self.result
 
+    def mappings(self):
+        return self
+
 
 class FakeDatabase:
     def __init__(self, *, workshop_open=False, paid_open=False):
         self.workshop_open = workshop_open
         self.paid_open = paid_open
         self.queries = []
+        self.reservation = None
 
     def execute(self, sql, params=None):
         query = str(sql)
         self.queries.append(query)
+        if "SELECT 1 FROM guard.workshop_profile_transition_locks" in query:
+            return FakeCursor((1,) if self.reservation and self.reservation["released_at"] is None else None)
+        if "SELECT reservation_id" in query and "guard.workshop_profile_transition_locks" in query:
+            return FakeCursor(self.reservation)
+        if "INSERT INTO guard.workshop_profile_transition_locks" in query:
+            self.reservation = {
+                "reservation_id": params["reservation"],
+                "target_mode": params["target"],
+                "released_at": None,
+            }
+            return FakeCursor()
+        if "UPDATE guard.workshop_profile_transition_locks" in query:
+            self.reservation["released_at"] = datetime.now(timezone.utc)
+            return FakeCursor()
         if "SELECT 1 FROM guard.workshop_remote_sessions" in query:
             return FakeCursor((1,) if self.workshop_open else None)
         if "SELECT 1 FROM guard.remote_sessions" in query:
@@ -135,6 +153,81 @@ class ProfileTransitionTests(unittest.TestCase):
     def test_disabled_workshop_license_denies_any_transition(self):
         code, _, _ = self.verify("SERVICE_PRO", enabled=False)
         self.assertEqual(code, 403)
+
+
+class TransitionReservationTests(unittest.TestCase):
+    def setUp(self):
+        self.db = FakeDatabase()
+        self.grant = {"status": "DISCOVERED", "edition": "PRO", "enabled": True}
+        self.record = {
+            "owner_approved_at": datetime.now(timezone.utc),
+            "revoked_at": datetime.now(timezone.utc),
+        }
+
+    def auth(self):
+        return (
+            patch.object(api, "_schema"),
+            patch.object(api, "_authenticate", return_value={"status": "DISCOVERED"}),
+            patch.object(api, "engine", FakeEngine(self.db)),
+            patch.object(api, "_grant", return_value=self.grant),
+            patch.object(api, "standing_authorization_record", return_value=self.record),
+        )
+
+    def test_begin_blocks_new_sessions_and_duplicate_begin(self):
+        req = request("SERVICE_PRO")
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for mocked in self.auth():
+                stack.enter_context(mocked)
+            first = api.workshop_profile_transition_begin(req)
+            content = json.loads(first.body)
+            self.assertTrue(content["allowed"])
+            self.assertEqual(uuid.UUID(content["reservationId"]), self.db.reservation["reservation_id"])
+            with self.assertRaises(HTTPException) as error:
+                api._assert_no_profile_transition(self.db, req.installationId)
+            self.assertEqual(error.exception.status_code, 409)
+            with self.assertRaises(HTTPException) as error:
+                api.workshop_profile_transition_begin(req)
+            self.assertEqual(error.exception.status_code, 409)
+
+    def test_finishing_exact_reservation_unblocks_sessions(self):
+        req = request("CLIENT")
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for mocked in self.auth():
+                stack.enter_context(mocked)
+            received = json.loads(api.workshop_profile_transition_begin(req).body)
+            done = api.WorkshopProfileTransitionFinish(
+                requestId=req.requestId, nonce=req.nonce,
+                sentAt=req.sentAt, installationId=req.installationId,
+                deviceId=req.deviceId, discoveryCredential=req.discoveryCredential,
+                targetMode="CLIENT",
+                reservationId=uuid.UUID(received["reservationId"]), succeeded=True,
+            )
+            reply = json.loads(api.workshop_profile_transition_finish(done).body)
+            self.assertTrue(reply["released"])
+            self.assertIsNotNone(self.db.reservation["released_at"])
+            api._assert_no_profile_transition(self.db, req.installationId)
+            self.assertTrue(json.loads(api.workshop_profile_transition_begin(req).body)["allowed"])
+
+    def test_wrong_reservation_must_not_release(self):
+        req = request("SERVICE_PRO")
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for mocked in self.auth():
+                stack.enter_context(mocked)
+            api.workshop_profile_transition_begin(req)
+            wrong = api.WorkshopProfileTransitionFinish(
+                requestId=req.requestId, nonce=req.nonce,
+                sentAt=req.sentAt, installationId=req.installationId,
+                deviceId=req.deviceId, discoveryCredential=req.discoveryCredential,
+                targetMode="SERVICE_PRO",
+                reservationId=uuid.uuid4(), succeeded=False,
+            )
+            with self.assertRaises(HTTPException) as error:
+                api.workshop_profile_transition_finish(wrong)
+            self.assertEqual(error.exception.status_code, 409)
+            self.assertIsNone(self.db.reservation["released_at"])
 
 
 class MeshGroupAuthorizationTests(unittest.TestCase):
