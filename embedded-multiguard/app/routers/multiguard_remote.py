@@ -665,6 +665,7 @@ def create_remote_session(
                 """
                 SELECT
                     sr.id,sr.installation_id,sr.service_device_id,sr.subject,
+                    gi.installation_external_id,
                     gi.plan_code,gi.lifecycle,gi.valid_until,gi.is_current,
                     gi.mesh_node_id,sr.status AS support_status
                 FROM guard.support_requests sr
@@ -680,12 +681,17 @@ def create_remote_session(
         # Serialize creation of paid sessions with the SERVICE_PRO transition
         # reservation. Guard rows are locked only for the same installation
         # UUID; no live service or session is mutated by this check.
+        # Commercial guard.installations.id is a different UUID from the
+        # actual pending/OWNER installation_external_id. Always serialize on
+        # the latter, as used by SERVICE_PRO grants and Windows identity.
+        external_iid = support["installation_external_id"]
+        if external_iid is None:
+            raise HTTPException(409, "Brak powiązania tożsamości instalacji.")
         connection.execute(text("""
             SELECT installation_id FROM guard.workshop_grants
             WHERE installation_id=:iid FOR UPDATE
-        """), {"iid": support["installation_id"]}).first()
-        _workshop_remote._assert_no_profile_transition(
-            connection, support["installation_id"])
+        """), {"iid": external_iid}).first()
+        _workshop_remote._assert_no_profile_transition(connection, external_iid)
         if (not _has_verified_remote_pro(connection, support, now)
                 or _plan_change_pending(connection,support["installation_id"])):
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
