@@ -842,13 +842,22 @@ def workshop_service_bootstrap_ticket(request: WorkshopAuth):
                 or approval["owner_approved_at"] is None
                 or approval["local_opt_in_attested_at"] is None
                 or approval["revoked_at"] is not None
-                or approval["device_scope"] != "CLIENT_DIAGNOSTIC"
+                or approval["device_scope"] not in ("OWNED_WORKSHOP", "CLIENT_DIAGNOSTIC")
                 or not re.fullmatch(r"[0-9a-f]{64}", approval["prior_consent_sha256"])
                 or approval["approved_mesh_node_id"] not in (None, grant.get("mesh_node_id"))):
             raise HTTPException(403, "Brak ważnych dwóch zgód na rozruch SERVICE PRO.")
         group = expected_remote_mesh_group(grant)
-        if not group or group != os.getenv("MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID", "").strip():
-            raise HTTPException(503, "Grupa SERVICE PRO nie jest zgodna z serwerem.")
+        # A single SHA-pinned SERVICE_PRO executable has one immutable MSH
+        # group. OWNER-owned and delegated diagnostics scopes are allowed
+        # only if the configured server policy for that precise scope agrees
+        # with that group; never silently enroll an OWNED_WORKSHOP node into
+        # a separate diagnostics group.
+        scope_group_key = {
+            "OWNED_WORKSHOP": "MESH_CENTRAL_OWNER_OWNED_MESH_ID",
+            "CLIENT_DIAGNOSTIC": "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID",
+        }[approval["device_scope"]]
+        if not group or group != os.getenv(scope_group_key, "").strip():
+            raise HTTPException(503, "Grupa SERVICE PRO jest niezgodna z upoważnionym zakresem.")
         # Refuse starting while any paid/interactive session has a share.
         conflict = db.execute(text("""
             SELECT 1 FROM guard.remote_sessions
