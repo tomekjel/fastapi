@@ -692,6 +692,16 @@ def create_remote_session(
             WHERE installation_id=:iid FOR UPDATE
         """), {"iid": external_iid}).first()
         _workshop_remote._assert_no_profile_transition(connection, external_iid)
+        # Both commercial and workshop creation acquire the same grant lock
+        # before checking the OTHER mode. This prevents two concurrent
+        # OWNER requests for the same machine from racing across tables.
+        if connection.execute(text("""
+            SELECT 1 FROM guard.workshop_remote_sessions
+            WHERE installation_id=:iid
+              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            LIMIT 1
+        """), {"iid": external_iid}).first():
+            raise HTTPException(409, "Zakończ sesję serwisową przed żądaniem klienta Pro.")
         if (not _has_verified_remote_pro(connection, support, now)
                 or _plan_change_pending(connection,support["installation_id"])):
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
