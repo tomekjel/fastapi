@@ -25,7 +25,7 @@ from app.routers import multiguard_license as license
 from app.routers import multiguard_meshcentral as meshcentral
 from app.routers import multiguard_remote as paid_remote
 
-router = APIRouter(prefix="/multiguard", tags=["multi-guard-workshop-remote"])
+router = APIRouter(tags=["multi-guard-workshop-remote"])
 _lock = threading.Lock()
 _ready = False
 OPEN = ("REQUESTED", "CONSENTED", "CONNECT_READY", "ACTIVE")
