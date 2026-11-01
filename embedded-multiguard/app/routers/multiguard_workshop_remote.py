@@ -1217,3 +1217,118 @@ def bind_for_owner(iid, node_id):
                mesh_node_id=EXCLUDED.mesh_node_id,session_id=NULL,updated_at=now()
         """),{"iid":iid,"node":node_id})
     return {"meshNodeId":node_id}
+
+
+# The router is included under /multiguard by multiguard_remote.
+# Every OWNER control is separately authenticated. No endpoint here
+# changes KeyGate, Windows SCM or signs an unattended activation ticket.
+class OwnerStandingApprovalBody(BaseModel):
+    deviceScope: Literal["OWNED_WORKSHOP", "CLIENT_DIAGNOSTIC"]
+    priorConsentSha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+@router.get("/remote/workshop/entitlement/{installation_id}")
+def owner_workshop_entitlement(
+    installation_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    _schema()
+    with engine.connect() as db:
+        grant = _grant(db, installation_id)
+        record = standing_authorization_record(db, installation_id)
+        mode = remote_entitlement_mode(grant)
+        prepared = bool(record and record["owner_approved_at"] is not None
+                        and record["revoked_at"] is None)
+        confirmed = bool(prepared and record["local_opt_in_attested_at"] is not None)
+        bound = standing_authorization_record_valid(grant, record)
+    # Node online/group policy is verified independently at session start.
+    # A status screen may NEVER set unattendedReady on this DB read alone.
+    return {
+        "mode": mode,
+        "ownerPrepared": prepared,
+        "localOptInAttested": confirmed,
+        "exactNodeBound": bound,
+        "unattendedReady": False,
+    }
+
+
+@router.post("/remote/workshop/standing/{installation_id}/prepare")
+def owner_workshop_prepare_standing(
+    installation_id: uuid.UUID,
+    body: OwnerStandingApprovalBody,
+    _: CurrentUser = Depends(require_owner),
+):
+    return JSONResponse(
+        prepare_standing_authorization_for_owner(
+            installation_id, body.deviceScope, body.priorConsentSha256
+        ),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/remote/workshop/standing/{installation_id}/revoke")
+def owner_workshop_revoke_standing(
+    installation_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    return JSONResponse(
+        revoke_standing_authorization_for_owner(installation_id),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/remote/workshop/{installation_id}/request-consent")
+def owner_workshop_request_interactive(
+    installation_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    return {"sessionId": str(request_consent_for_owner(installation_id))}
+
+
+@router.post("/remote/workshop/{installation_id}/request-standing")
+def owner_workshop_request_standing(
+    installation_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    return {"sessionId": str(request_for_owner(installation_id))}
+
+
+@router.get("/remote/workshop/sessions/{session_id}")
+def owner_workshop_session_status(
+    session_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    _schema()
+    with engine.begin() as db:
+        row = db.execute(text("""
+            SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid
+        """), {"sid": session_id}).mappings().first()
+        if not row:
+            raise HTTPException(404, "Nie znaleziono sesji.")
+        grant = _grant(db, row["installation_id"])
+        if not _eligible(grant):
+            raise HTTPException(403, "Serwisowy Pro nie jest aktywny.")
+        snapshot = _public(row)
+        snapshot["meshLinked"] = session_node_ready(grant, row)
+    return JSONResponse(snapshot, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/remote/workshop/sessions/{session_id}/connect")
+def owner_workshop_connect(
+    session_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    return JSONResponse(
+        connect_for_owner(session_id),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/remote/workshop/sessions/{session_id}/end")
+def owner_workshop_end(
+    session_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    end_for_owner(session_id)
+    return {"ended": True}
+
