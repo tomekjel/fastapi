@@ -5,6 +5,8 @@ Run from repository root with the backend's normal Python dependencies:
     python -m unittest discover -s embedded-multiguard/tests -p 'test_workshop_profile_transition.py'
 """
 import json
+import inspect
+import re
 import sys
 import types
 import unittest
@@ -228,6 +230,28 @@ class TransitionReservationTests(unittest.TestCase):
                 api.workshop_profile_transition_finish(wrong)
             self.assertEqual(error.exception.status_code, 409)
             self.assertIsNone(self.db.reservation["released_at"])
+
+
+
+class PaidInstallationMappingTests(unittest.TestCase):
+    def test_every_paid_session_guard_resolves_external_installation_id(self):
+        # Commercial guard.remote_sessions.installation_id is an INTERNAL
+        # guard.installations.id. Workshop uses the EXTERNAL installation UUID.
+        # Never compare them directly, even when a fake database returns empty.
+        source = inspect.getsource(api)
+        selects = re.findall(
+            r"SELECT 1 FROM guard[.]remote_sessions\\b(.*?)LIMIT 1",
+            source, re.DOTALL,
+        )
+        self.assertEqual(len(selects), 5)
+        for selection in selects:
+            self.assertIn(
+                "JOIN guard.installations gi ON gi.id=rs.installation_id",
+                selection,
+            )
+            self.assertIn("gi.installation_external_id=:iid", selection)
+
+
 
 
 class MeshGroupAuthorizationTests(unittest.TestCase):
