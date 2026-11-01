@@ -169,7 +169,8 @@ document.querySelectorAll('tr[data-mg-compact=yes]').forEach(function(row){
   });
   forever.setAttribute('aria-pressed',String(choice.value==='PERPETUAL'));
   forever.disabled=ed.value!=='SERVICE';
-  if(save&&(choice.value!=='KEEP'||ed.value!==original))save.disabled=false;
+  if(choice.value==='CALENDAR'&&date.value){var parts=date.value.split('-');pick.querySelector('summary').textContent=parts[2]+'.'+parts[1]+'.'+parts[0].slice(2)+' ▾';}
+  if(save)save.disabled=(choice.value==='KEEP'&&ed.value===original);
  }
  pick.addEventListener('toggle',function(){if(pick.open)position();else popup.hidden=true;});
  popup.querySelectorAll('[data-month]').forEach(function(b){b.addEventListener('click',function(){
