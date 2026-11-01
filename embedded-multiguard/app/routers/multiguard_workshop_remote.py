@@ -617,16 +617,17 @@ def workshop_standing_attest(request: WorkshopStandingAttestation):
 
 
 def request_for_owner(iid: uuid.UUID):
-    """Open a service-PRO session only for a licensed, bound, online service node.
+    """Start a standing session only after separate OWNER and local approval.
 
-    No client opt-in or historical standing consent is needed. Eligibility and
-    dedicated server-controlled MeshCentral group are verified on every call.
+    A service licence or online node alone is never unattended authorization.
+    The grant and consent are rechecked under locks before opening a session.
     """
     _schema()
     with engine.connect() as db:
         grant = _grant(db, iid)
-    if not _eligible(grant) or not grant.get("mesh_node_id"):
-        raise HTTPException(403, "Brak aktywnej licencji Pro serwisowej lub węzła.")
+        approval = standing_authorization_record(db, iid)
+    if not standing_authorization_record_valid(grant, approval):
+        raise HTTPException(403, "Wymagane aktualne upoważnienie OWNER i zgoda lokalna dla tego węzła.")
     node = grant["mesh_node_id"]
     try:
         meshcentral.verify_service_pro_node(node)
@@ -643,6 +644,14 @@ def request_for_owner(iid: uuid.UUID):
         grant = _grant(db, iid)
         if not _eligible(grant) or grant.get("mesh_node_id") != node:
             raise HTTPException(403, "Licencja lub przypisany węzeł uległy zmianie.")
+        # Lock the same standing record as revoke/attest, not only the licence.
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid":iid}).first()
+        approval = standing_authorization_record(db, iid)
+        if not standing_authorization_record_valid(grant, approval):
+            raise HTTPException(403, "Upoważnienie OWNER lub zgoda lokalna zostały cofnięte.")
         if _open(db, iid):
             raise HTTPException(409,"Ten komputer ma już otwartą sesję.")
         if db.execute(text("""
@@ -653,7 +662,7 @@ def request_for_owner(iid: uuid.UUID):
             raise HTTPException(409,"Trwa połączenie klienta Pro; zakończ je najpierw.")
         sid = uuid.uuid4()
         now = _now()
-        # Service mode is authorized by server-side license and node membership.
+        # Explicit two-party consent, bound to the same node, was reverified.
         db.execute(text("""
             INSERT INTO guard.workshop_remote_sessions(
                 id,installation_id,status,authorization_kind,
@@ -1026,7 +1035,10 @@ def connect_for_owner(sid):
         if row.get("authorization_kind","SESSION_CONSENT") == "STANDING_SERVICE":
             if list(row["granted_capabilities"] or []) != ["desktop"]:
                 raise HTTPException(403,"Tryb serwisowy dopuszcza wyłącznie pulpit.")
-            scope = "CLIENT_DIAGNOSTIC"
+            approval = standing_authorization_record(db, row["installation_id"])
+            if not standing_authorization_record_valid(grant, approval):
+                raise HTTPException(403,"Brak ważnej zgody OWNER i potwierdzenia lokalnego.")
+            scope = approval["device_scope"]
             try:
                 meshcentral.verify_service_pro_node(grant["mesh_node_id"])
             except meshcentral.MeshCentralError as exc:
@@ -1079,6 +1091,17 @@ def connect_for_owner(sid):
             current_kind = row.get("authorization_kind","SESSION_CONSENT") if row else None
             if scope is not None and current_kind != "STANDING_SERVICE":
                 raise HTTPException(403,"Tryb sesji serwisowej uległ zmianie.")
+            if scope is not None:
+                # Serialize with OWNER revoke/downgrade before publishing the
+                # already-created Mesh link. A failed check revokes that link.
+                db.execute(text("""
+                    SELECT installation_id FROM guard.workshop_standing_remote_authorizations
+                    WHERE installation_id=:iid FOR UPDATE
+                """), {"iid":iid}).first()
+                approval = standing_authorization_record(db, iid)
+                if (not standing_authorization_record_valid(grant, approval)
+                        or approval["device_scope"] != scope):
+                    raise HTTPException(403,"Upoważnienie zostało cofnięte podczas łączenia.")
             if scope is None and current_kind != "SESSION_CONSENT":
                 raise HTTPException(403,"Tryb zgody zmienił się podczas tworzenia sesji.")
             if share_expires <= _now():
