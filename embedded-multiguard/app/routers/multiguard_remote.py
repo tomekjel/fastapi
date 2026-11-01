@@ -653,6 +653,9 @@ def create_remote_session(
     user: CurrentUser = Depends(require_owner),
 ):
     _ensure_schema()
+    # Ensure the shared transition-lock table exists even if the first
+    # request after deploy is a commercial OWNER remote-session request.
+    _workshop_remote._schema()
     now = datetime.now(timezone.utc)
     user_id, user_label = _owner_label(user)
 
