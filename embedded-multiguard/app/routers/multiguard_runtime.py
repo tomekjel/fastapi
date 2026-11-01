@@ -2861,10 +2861,12 @@ def _owner_service_remote_workspace(selected: Optional[uuid.UUID], csrf_token: s
         """), {"iid": selected}).mappings().all() if selected else [])
         approval = (workshop.standing_authorization_record(con, selected)
                     if selected else None)
-        blocked = bool(selected and con.execute(text("""
-            SELECT 1 FROM guard.workshop_profile_transition_locks
+        pending_transition = (con.execute(text("""
+            SELECT target_mode,created_at
+            FROM guard.workshop_profile_transition_locks
             WHERE installation_id=:iid AND released_at IS NULL
-        """), {"iid": selected}).first())
+        """), {"iid": selected}).mappings().first() if selected else None)
+        blocked = bool(pending_transition)
     links = ''.join(
         f'<tr><td><a href="/multiguard/panel/remote?service_selected={m["installation_id"]}">'
         f'{_panel_h(_short_installation_id(m["installation_id"]))}</a></td>'
@@ -2888,7 +2890,15 @@ def _owner_service_remote_workspace(selected: Optional[uuid.UUID], csrf_token: s
     controls = '<h2>Serwisowy Pro — ' + _panel_h(_short_installation_id(selected)) + '</h2>'
     controls += '<p>Tryb serwisowy wymaga osobnego upoważnienia OWNER oraz potwierdzenia na urządzeniu. Zdalny pulpit udostępniamy wyłącznie po zweryfikowaniu MeshCentral.</p>'
     if blocked:
-        controls += '<p>Trwa przełączanie profilu Windows. Nowe sesje pozostają zablokowane do potwierdzenia zakończenia.</p>'
+        target = pending_transition["target_mode"]
+        since = _panel_dt(pending_transition["created_at"])
+        controls += ('<p>Przełączanie Windows na ' + _panel_h(target) +
+                     ' — rezerwacja od ' + _panel_h(since) +
+                     '. Nowe sesje są wstrzymane.</p>'
+                     '<p>Jeżeli UAC lub MultiGuard zostały przerwane, blokada '
+                     'nie wygasa samoczynnie. Nie wolno usuwać jej bez '
+                     'lokalnej kontroli stanu usługi Windows i potwierdzenia '
+                     'zakończenia operacji przez OWNER.</p>')
     elif prepared:
         scope = approval["device_scope"]
         controls += '<p>Upoważnienie: ' + _panel_h(scope) + '. '
