@@ -2831,7 +2831,111 @@ def event_detail(
         "event_id": str(row["event_id"]),
         "service_device_id": str(row["service_device_id"]),
     }
-def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: str = ""):
+def _owner_service_remote_workspace(selected: Optional[uuid.UUID], csrf_token: str):
+    """Same OWNER 'Zdalna pomoc' page; service-only controls and audit trail.
+
+    Database/OWNER status is read-only here. Links are generated only by the
+    existing server-side connect_for_owner authorization path after POST/CSRF.
+    """
+    from app.routers import multiguard_workshop_remote as workshop
+    workshop._schema()
+    with engine.connect() as con:
+        machines = con.execute(text("""
+            SELECT p.installation_id,p.status,g.edition,g.enabled,
+                   COALESCE(labels.friendly_name,'') AS friendly_name
+            FROM guard.pending_installations p
+            JOIN guard.workshop_grants g ON g.installation_id=p.installation_id
+            LEFT JOIN guard.owner_installation_labels labels
+              ON labels.installation_external_id=p.installation_id
+            WHERE g.enabled=TRUE AND g.edition='PRO'
+              AND p.status NOT IN ('ARCHIVED','UNINSTALLED','IGNORED')
+            ORDER BY p.installation_id LIMIT 250
+        """)).mappings().all()
+        chosen = next((m for m in machines if m["installation_id"] == selected), None)
+        if selected and not chosen:
+            raise HTTPException(404, "Nie znaleziono aktywnego komputera serwisowego Pro.")
+        sessions = (con.execute(text("""
+            SELECT id,status,requested_at,authorization_kind
+            FROM guard.workshop_remote_sessions
+            WHERE installation_id=:iid ORDER BY requested_at DESC LIMIT 40
+        """), {"iid": selected}).mappings().all() if selected else [])
+        approval = (workshop.standing_authorization_record(con, selected)
+                    if selected else None)
+        blocked = bool(selected and con.execute(text("""
+            SELECT 1 FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid AND released_at IS NULL
+        """), {"iid": selected}).first())
+    links = ''.join(
+        f'<tr><td><a href="/multiguard/panel/remote?service_selected={m["installation_id"]}">'
+        f'{_panel_h(_short_installation_id(m["installation_id"]))}</a></td>'
+        f'<td>{_panel_h(m["friendly_name"] or "Komputer serwisowy Pro")}</td></tr>'
+        for m in machines
+    )
+    if not selected:
+        return links, "", []
+    def action(path, label, fields=""):
+        return (f'<form method="post" action="{path}">'
+                f'<input type="hidden" name="csrf_token" value="{csrf_token}">'
+                f'{fields}<button type="submit">{label}</button></form>')
+    prepared = bool(approval and approval["owner_approved_at"] and not approval["revoked_at"])
+    locally_approved = bool(prepared and approval["local_opt_in_attested_at"])
+    ready = False
+    if locally_approved and not blocked:
+        # The status endpoint independently checks the exact Mesh node/group
+        # and unattended consent policy; it does NOT open a remote share.
+        status = workshop.owner_workshop_entitlement(selected, None)
+        ready = bool(json.loads(status.body).get("unattendedReady"))
+    controls = '<h2>Serwisowy Pro — ' + _panel_h(_short_installation_id(selected)) + '</h2>'
+    controls += '<p>Tryb serwisowy wymaga osobnego upoważnienia OWNER oraz potwierdzenia na urządzeniu. Zdalny pulpit udostępniamy wyłącznie po zweryfikowaniu MeshCentral.</p>'
+    if blocked:
+        controls += '<p>Trwa przełączanie profilu Windows. Nowe sesje pozostają zablokowane do potwierdzenia zakończenia.</p>'
+    elif prepared:
+        scope = approval["device_scope"]
+        controls += '<p>Upoważnienie: ' + _panel_h(scope) + '. '
+        controls += ('Potwierdzone lokalnie.' if locally_approved else 'Oczekuje na potwierdzenie na komputerze.') + '</p>'
+        controls += '<p>Stan MeshCentral: ' + ('zweryfikowany — pulpit dostępny' if ready else 'niepotwierdzony lub niedostępny') + '</p>'
+        controls += action(f'/multiguard/panel/remote/service/{selected}/revoke',
+                           'COFNIJ STAŁE UPOWAŻNIENIE')
+    else:
+        controls += '<p>Brak aktywnego, indywidualnego upoważnienia. Przed jego zapisaniem wymagany jest wcześniejszy dokument zgody.</p>'
+        controls += action(f'/multiguard/panel/remote/service/{selected}/prepare',
+            'ZAPISZ UPOWAŻNIENIE OWNER',
+            '<label>Zakres<select name="device_scope">'
+            '<option value="OWNED_WORKSHOP">Komputer serwisu</option>'
+            '<option value="CLIENT_DIAGNOSTIC">Diagnostyka komputera klienta</option>'
+            '</select></label>'
+            '<label>SHA-256 dokumentu zgody'
+            '<input name="prior_consent_sha256" minlength="64" maxlength="64" '
+            'pattern="[0-9a-f]{64}" required></label>')
+    if not blocked:
+        controls += action(f'/multiguard/panel/remote/service/{selected}/request-consent',
+                           'POPROŚ O JEDNORAZOWĄ ZGODĘ')
+        if ready:
+            controls += action(f'/multiguard/panel/remote/service/{selected}/request-standing',
+                               'ROZPOCZNIJ SESJĘ SERWISOWĄ')
+    statuses = {
+        'REQUESTED':'Oczekuje na zgodę','CONSENTED':'Zgoda udzielona',
+        'CONNECT_READY':'Gotowa do połączenia','ACTIVE':'Aktywna',
+        'DENIED':'Odmowa','ENDED':'Zakończona','EXPIRED':'Wygasła','ERROR':'Błąd',
+    }
+    history=[]
+    for item in sessions:
+        buttons=''
+        if not blocked and item["status"] in ("CONSENTED","CONNECT_READY","ACTIVE"):
+            buttons += action(f'/multiguard/panel/remote/service/session/{item["id"]}/connect',
+                              'OTWÓRZ PULPIT')
+        if item["status"] in ("REQUESTED","CONSENTED","CONNECT_READY","ACTIVE"):
+            buttons += action(f'/multiguard/panel/remote/service/session/{item["id"]}/end',
+                              'ZAKOŃCZ SESJĘ')
+        kind = ('Stała zgoda' if item["authorization_kind"]=="STANDING_SERVICE"
+                else 'Zgoda na sesję')
+        history.append(f'<tr><td>{_panel_dt(item["requested_at"])}</td>'
+                       f'<td>{_panel_h(kind)} — {_panel_h(statuses.get(item["status"],"Nieznany"))}</td>'
+                       f'<td>{buttons}</td></tr>')
+    return links, controls, history
+
+
+def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: str = "", service_selected: Optional[uuid.UUID] = None):
     """OWNER HTML over the existing consent-based remote session implementation."""
     import time
     from app.routers import multiguard_remote as remote
@@ -2876,6 +2980,8 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
             WHERE installation_id=:id AND status NOT IN ('RESOLVED','CANCELLED')
             ORDER BY created_at DESC LIMIT 20
         """),{"id":selected}).mappings().all() if chosen else []
+    service_links, service_controls, service_history = _owner_service_remote_workspace(
+        service_selected, token)
     links = ''.join(
         f'<tr><td><a href="/multiguard/panel/remote?selected={m["id"]}">'
         f'{_panel_h(_short_installation_id(m["installation_external_id"]))}</a></td>'
@@ -2913,6 +3019,9 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
         if session['status'] in {'REQUESTED','CONSENTED','CONNECT_READY','ACTIVE'}:
             buttons += action(f'/multiguard/panel/remote/{session["id"]}/end','ZAKOŃCZ SESJĘ')
         history.append(f'<tr><td>{_panel_dt(session["requested_at"])}</td><td>{statuses[session["status"]]}</td><td>{buttons}</td></tr>')
+    if service_selected:
+        controls = service_controls
+        history = service_history
     desktop = ('<iframe id="owner-remote-desktop" class="owner-remote-frame" title="Zdalny pulpit" '
                f'src="{_panel_h(desktop_url)}" referrerpolicy="no-referrer" allowfullscreen></iframe>'
                '<button type="button" onclick="document.getElementById(\'owner-remote-desktop\').requestFullscreen()">PEŁNY EKRAN</button>'
@@ -2920,18 +3029,19 @@ def _owner_remote_workspace(selected: Optional[uuid.UUID], q: str, desktop_url: 
     return HTMLResponse(_panel_html(f'''<section class="card"><h1>Zdalna pomoc</h1></section>
         <div class="owner-remote-layout"><section class="card"><h2>Komputery Pro</h2>
         <form method="get"><label>Wyszukaj po ID<input name="q" maxlength="64" value="{_panel_h(q)}"></label><button>SZUKAJ</button></form>
-        <div class="table-wrap"><table><tbody>{links or '<tr><td>Brak komputerów Pro.</td></tr>'}</tbody></table></div></section>
+        <div class="table-wrap"><table><tbody>{links or '<tr><td>Brak komputerów Pro.</td></tr>'}</tbody></table></div>
+        <h2>Komputery serwisowe Pro</h2><div class="table-wrap"><table><tbody>{service_links or '<tr><td>Brak komputerów serwisowych Pro.</td></tr>'}</tbody></table></div></section>
         <section class="card">{controls}{desktop}<p>Blokada myszy i klawiatury klienta nie jest jeszcze dostępna w panelu.</p>
-        <a href="/multiguard/panel/remote{('?selected='+str(selected)) if selected else ''}">ODŚWIEŻ STAN</a>
+        <a href="/multiguard/panel/remote{('?service_selected='+str(service_selected)) if service_selected else (('?selected='+str(selected)) if selected else '')}">ODŚWIEŻ STAN</a>
         <h2>Historia sesji</h2><div class="table-wrap"><table><tbody>{''.join(history) or '<tr><td>Brak sesji.</td></tr>'}</tbody></table></div>
         </section></div>'''), headers={'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer'})
 
 
 @router.get('/panel/remote', response_class=HTMLResponse)
-def owner_remote_panel(selected: Optional[uuid.UUID] = None, q: str = '', _: None = Depends(_panel_auth)):
+def owner_remote_panel(selected: Optional[uuid.UUID] = None, service_selected: Optional[uuid.UUID] = None, q: str = '', _: None = Depends(_panel_auth)):
     if len(q)>64:
         raise HTTPException(400,'Zbyt długi identyfikator.')
-    return _owner_remote_workspace(selected,q.removeprefix('MG-'))
+    return _owner_remote_workspace(selected,q.removeprefix('MG-'),service_selected=service_selected)
 
 
 def _owner_remote_actor(csrf_token):
