@@ -601,6 +601,14 @@ def request_consent_for_owner(iid: uuid.UUID):
         # A pre-consent MeshCentral node is deliberately NOT required.
         if _open(db, iid):
             raise HTTPException(409, "Dla komputera istnieje już otwarta sesja.")
+        if db.execute(text("""
+            SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid
+              AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            LIMIT 1
+        """), {"iid": iid}).first():
+            raise HTTPException(409, "Zakończ sesję klienta Pro przed zgłoszeniem serwisowym.")
         now = _now()
         sid = uuid.uuid4()
         db.execute(text("""
@@ -732,8 +740,8 @@ def request_for_owner(iid: uuid.UUID):
         if db.execute(text("""
             SELECT 1 FROM guard.remote_sessions rs
             JOIN guard.installations gi ON gi.id=rs.installation_id
-            WHERE gi.installation_external_id=:iid AND rs.mesh_public_id IS NOT NULL
-              AND rs.status IN ('CONNECT_READY','ACTIVE')
+            WHERE gi.installation_external_id=:iid
+              AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
             LIMIT 1
         """),{"iid":iid}).first():
             raise HTTPException(409,"Trwa połączenie klienta Pro; zakończ je najpierw.")
