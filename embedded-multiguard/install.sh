@@ -367,6 +367,8 @@ required = [
     "/multiguard/agent/workshop/standing/attest",
     "/multiguard/agent/workshop/standing/bootstrap-ticket",
     "/multiguard/agent/workshop/profile-transition-check",
+    "/multiguard/agent/workshop/profile-transition-begin",
+    "/multiguard/agent/workshop/profile-transition-finish",
     "/multiguard/agent/workshop/mesh-enroll",
     "/multiguard/agent/workshop/support-request",
     "/multiguard/agent/workshop/remote/mesh-enroll",
