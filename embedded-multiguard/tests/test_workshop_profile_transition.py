@@ -243,13 +243,32 @@ class PaidInstallationMappingTests(unittest.TestCase):
             r"SELECT 1 FROM guard[.]remote_sessions\b(.*?)LIMIT 1",
             source, re.DOTALL,
         )
-        self.assertEqual(len(selects), 5)
+        self.assertEqual(len(selects), 6)
         for selection in selects:
             self.assertIn(
                 "JOIN guard.installations gi ON gi.id=rs.installation_id",
                 selection,
             )
             self.assertIn("gi.installation_external_id=:iid", selection)
+
+    def test_commercial_requests_guard_against_open_workshop_session(self):
+        source = (Path(__file__).resolve().parents[1] / "app" / "routers" /
+                  "multiguard_remote.py").read_text(encoding="utf-8")
+        start = source.index("def create_remote_session(")
+        end = source.index('@router.get("/remote-sessions/{session_id}")', start)
+        block = source[start:end]
+        self.assertIn("FROM guard.workshop_remote_sessions", block)
+        self.assertIn("installation_id=:iid", block)
+        self.assertIn("external_iid = support[\"installation_external_id\"]", block)
+        self.assertIn("FOR UPDATE", block)
+
+    def test_workshop_requests_check_paid_pending_before_creation(self):
+        for fn in (api.request_consent_for_owner, api.request_for_owner):
+            source = inspect.getsource(fn)
+            self.assertIn("JOIN guard.installations gi ON gi.id=rs.installation_id", source)
+            self.assertIn("gi.installation_external_id=:iid", source)
+            self.assertIn("'REQUESTED','CONSENTED','CONNECT_READY','ACTIVE'", source)
+
 
 
 
