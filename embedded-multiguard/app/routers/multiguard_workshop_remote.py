@@ -861,9 +861,40 @@ def workshop_mesh_provisioning_plan(request: WorkshopAuth):
 
 
 def _validate_transition_locked(db, request):
-    """Requires workshop grant lock; verifies both remote session tables."""
-    # Lock in the same order as grant revocation / OWNER authorization.    db.execute(text("""        SELECT installation_id FROM guard.workshop_grants        WHERE installation_id=:iid FOR UPDATE    """), {"iid": request.installationId}).first()    _assert_no_profile_transition(db, request.installationId)
-    grant = _grant(db, request.installationId)    if not _eligible(grant):        raise HTTPException(403, "Zmiana profilu wymaga aktywnego serwisowego Pro.")    db.execute(text("""        SELECT installation_id        FROM guard.workshop_standing_remote_authorizations        WHERE installation_id=:iid FOR UPDATE    """), {"iid": request.installationId}).first()    if request.targetMode == "CLIENT":        # An OWNER revocation cannot be replaced by a local toggle. Old        # standing authorization must already be durably revoked.        standing = standing_authorization_record(db, request.installationId)        if (standing and standing["owner_approved_at"] is not None                and standing["revoked_at"] is None):            raise HTTPException(409, "Najpierw OWNER musi cofnąć stałe upoważnienie.")    pending_workshop = db.execute(text("""        SELECT 1 FROM guard.workshop_remote_sessions        WHERE installation_id=:iid          AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')        LIMIT 1    """), {"iid": request.installationId}).first()    pending_paid = db.execute(text("""        SELECT 1 FROM guard.remote_sessions        WHERE installation_id=:iid          AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')        LIMIT 1    """), {"iid": request.installationId}).first()    if pending_workshop or pending_paid:        raise HTTPException(            409, "Zakończ wszystkie sesje Pro i serwisowe, także oczekujące, zanim zmienisz profil."        )
+    """Hold grant lock while checking all workshop and commercial sessions."""
+    db.execute(text("""
+        SELECT installation_id FROM guard.workshop_grants
+        WHERE installation_id=:iid FOR UPDATE
+    """), {"iid": request.installationId}).first()
+    _assert_no_profile_transition(db, request.installationId)
+    grant = _grant(db, request.installationId)
+    if not _eligible(grant):
+        raise HTTPException(403, "Zmiana profilu wymaga aktywnego serwisowego Pro.")
+    db.execute(text("""
+        SELECT installation_id FROM guard.workshop_standing_remote_authorizations
+        WHERE installation_id=:iid FOR UPDATE
+    """), {"iid": request.installationId}).first()
+    if request.targetMode == "CLIENT":
+        standing = standing_authorization_record(db, request.installationId)
+        if (standing and standing["owner_approved_at"] is not None
+                and standing["revoked_at"] is None):
+            raise HTTPException(409, "OWNER musi najpierw cofnąć stałe upoważnienie.")
+    pending_workshop = db.execute(text("""
+        SELECT 1 FROM guard.workshop_remote_sessions
+        WHERE installation_id=:iid
+          AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+        LIMIT 1
+    """), {"iid": request.installationId}).first()
+    pending_paid = db.execute(text("""
+        SELECT 1 FROM guard.remote_sessions
+        WHERE installation_id=:iid
+          AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+        LIMIT 1
+    """), {"iid": request.installationId}).first()
+    if pending_workshop or pending_paid:
+        raise HTTPException(
+            409, "Zakończ wszystkie sesje Pro i serwisowe przed zmianą profilu."
+        )
 
 @router.post("/agent/workshop/profile-transition-check")
 def workshop_profile_transition_check(request: WorkshopProfileTransitionCheck):
