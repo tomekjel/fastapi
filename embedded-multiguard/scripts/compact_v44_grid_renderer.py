@@ -174,7 +174,7 @@ document.querySelectorAll('tr[data-mg-compact=yes]').forEach(function(row){
  popup.querySelectorAll('[data-month]').forEach(function(b){b.addEventListener('click',function(){
   choice.value=b.dataset.month;date.value='';refresh();
  });});
- date.addEventListener('change',function(){if(date.value){choice.value='CALENDAR';refresh();}});
+ function selectedDate(){if(date.value){choice.value='CALENDAR';refresh();}}\n date.addEventListener('input',selectedDate);\n date.addEventListener('change',selectedDate);
  forever.addEventListener('click',function(){choice.value='PERPETUAL';date.value='';refresh();});
  ed.addEventListener('change',refresh);
  document.addEventListener('click',function(e){
