@@ -30,21 +30,44 @@ def build(before,ref):
     old=text_fn(before,"discovery_assignment")
     if "_owner_effective_entitlement_mode(" not in old:
         raise RuntimeError("BLOCK no OWNER mode recheck")
-    needle=('''        return {
-            "assigned": False,
-            "status": "WAITING",
-            "serverTime": _iso(_utcnow()),
-        }''')
-    replacement=('''        return {
-            "assigned": False,
-            "status": "WAITING",
-            **_client_mode_revocation_lease(pending, selected_mode),
-            "serverTime": _iso(_utcnow()),
-        }''')
-    if old.count(needle)!=1:raise RuntimeError("BLOCK unexpected WAITING branch")
-    if "selected_mode == \"SERVICE\"" not in old:
+    # Production V4.4 may have a differently formatted WAITING response.
+    # Select only an unambiguous, literal WAITING dictionary returned
+    # from the discovery handler. Never alter an unrelated endpoint.
+    parsed=ast.parse(old)
+    fn=parsed.body[0]
+    found=[]
+    for node in ast.walk(fn):
+        if not isinstance(node,ast.Return) or not isinstance(node.value,ast.Dict):
+            continue
+        d=node.value
+        pairs=[(k.value,v) for k,v in zip(d.keys,d.values)
+               if isinstance(k,ast.Constant) and isinstance(k.value,str)]
+        waiting=any(k=="status" and isinstance(v,ast.Constant)
+                    and v.value=="WAITING" for k,v in pairs)
+        unassigned=any(k=="assigned" and isinstance(v,ast.Constant)
+                       and v.value is False for k,v in pairs)
+        if waiting and unassigned:
+            found.append(node)
+    if len(found)!=1:
+        raise RuntimeError("BLOCK: expected one unassigned WAITING return; got "+str(len(found)))
+    target=found[0]
+    if any(k is None for k in target.value.keys):
+        raise RuntimeError("BLOCK: existing WAITING unpack; manual review")
+    waiting_source=ast.get_source_segment(old,target)
+    # AST source offsets match original function source. Inject a single
+    # dictionary unpack BEFORE the last key, preserving all existing data.
+    last=target.value.keys[-1]
+    if not isinstance(last,ast.Constant) or last.value!="serverTime":
+        raise RuntimeError("BLOCK: WAITING return tail changed; manual review")
+    line=old.splitlines(keepends=True)
+    last_line=last.lineno-1
+    prefix=line[last_line][:last.col_offset]
+    if not prefix.isspace():
+        raise RuntimeError("BLOCK: ambiguous WAITING indentation")
+    line.insert(last_line, prefix+"**_client_mode_revocation_lease(pending, selected_mode),\\n")
+    changed="".join(line)
+    if 'selected_mode == "SERVICE"' not in old:
         raise RuntimeError("BLOCK no independent SERVICE selection")
-    changed=old.replace(needle,replacement,1)
     # Insert helper BEFORE the endpoint decorator, never between decorator and def.
     decorators=['@router.post("/v1/multi-guard/discovery/assignment")','@router.post(\'/v1/multi-guard/discovery/assignment\')']
     hits=[x for x in decorators if before.count(x)==1]
