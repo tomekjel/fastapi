@@ -3068,6 +3068,105 @@ def _owner_remote_eligible(connection, installation_id):
         raise HTTPException(403,'Sesja wymaga aktywnej licencji Pro.')
 
 
+def _owner_service_remote_redirect(iid: uuid.UUID):
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(
+        f'/multiguard/panel/remote?service_selected={iid}',status_code=303)
+
+
+@router.post('/panel/remote/service/{installation_id}/prepare')
+def owner_remote_service_prepare(
+    installation_id: uuid.UUID,
+    device_scope: str = Form(...),
+    prior_consent_sha256: str = Form(...),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers import multiguard_workshop_remote as workshop
+    _owner_remote_actor(csrf_token)
+    # Never create an approval based on a licence, IP address or node alone.
+    workshop.prepare_standing_authorization_for_owner(
+        installation_id, device_scope, prior_consent_sha256)
+    return _owner_service_remote_redirect(installation_id)
+
+
+@router.post('/panel/remote/service/{installation_id}/revoke')
+def owner_remote_service_revoke(
+    installation_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers import multiguard_workshop_remote as workshop
+    _owner_remote_actor(csrf_token)
+    # Server revocation must be saved even when MeshCentral is unreachable.
+    workshop.revoke_standing_authorization_for_owner(installation_id)
+    return _owner_service_remote_redirect(installation_id)
+
+
+@router.post('/panel/remote/service/{installation_id}/request-consent')
+def owner_remote_service_request_consent(
+    installation_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers import multiguard_workshop_remote as workshop
+    _owner_remote_actor(csrf_token)
+    workshop.request_consent_for_owner(installation_id)
+    return _owner_service_remote_redirect(installation_id)
+
+
+@router.post('/panel/remote/service/{installation_id}/request-standing')
+def owner_remote_service_request_standing(
+    installation_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers import multiguard_workshop_remote as workshop
+    _owner_remote_actor(csrf_token)
+    workshop.request_for_owner(installation_id)
+    return _owner_service_remote_redirect(installation_id)
+
+
+@router.post('/panel/remote/service/session/{session_id}/connect',
+             response_class=HTMLResponse)
+def owner_remote_service_connect(
+    session_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    import os
+    from app.routers import multiguard_workshop_remote as workshop
+    _owner_remote_actor(csrf_token)
+    result = workshop.connect_for_owner(session_id)
+    url = urllib.parse.urlsplit(result["url"])
+    configured = urllib.parse.urlsplit(os.environ.get('MESH_CENTRAL_URL',''))
+    if (url.scheme != 'https' or not configured.hostname
+            or url.hostname != configured.hostname or url.username or url.password):
+        workshop.end_for_owner(session_id)
+        raise HTTPException(502, 'MeshCentral zwrócił nieprawidłowy adres pulpitu.')
+    with engine.connect() as con:
+        iid = con.execute(text("""
+            SELECT installation_id FROM guard.workshop_remote_sessions
+            WHERE id=:sid
+        """), {"sid":session_id}).scalar_one_or_none()
+    if not iid:
+        workshop.end_for_owner(session_id)
+        raise HTTPException(404,"Nie znaleziono sesji serwisowej.")
+    return _owner_remote_workspace(None, '', result["url"], service_selected=iid)
+
+
+@router.post('/panel/remote/service/session/{session_id}/end')
+def owner_remote_service_end(
+    session_id: uuid.UUID,
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers import multiguard_workshop_remote as workshop
+    _owner_remote_actor(csrf_token)
+    iid = workshop.end_for_owner(session_id)
+    return _owner_service_remote_redirect(iid)
+
+
 @router.post('/panel/remote/request')
 def owner_remote_request(support_id: uuid.UUID = Form(...), csrf_token: str = Form(...), _: None = Depends(_panel_auth)):
     from fastapi.responses import RedirectResponse
