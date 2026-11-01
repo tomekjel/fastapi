@@ -674,6 +674,15 @@ def create_remote_session(
 
         if not support:
             raise HTTPException(404, "Nie znaleziono zgłoszenia Multi-Guard.")
+        # Serialize creation of paid sessions with the SERVICE_PRO transition
+        # reservation. Guard rows are locked only for the same installation
+        # UUID; no live service or session is mutated by this check.
+        connection.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": support["installation_id"]}).first()
+        _workshop_remote._assert_no_profile_transition(
+            connection, support["installation_id"])
         if (not _has_verified_remote_pro(connection, support, now)
                 or _plan_change_pending(connection,support["installation_id"])):
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
