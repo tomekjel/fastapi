@@ -1539,19 +1539,24 @@ def owner_workshop_entitlement(
         bound = standing_authorization_record_valid(grant, record)
         node = grant.get("mesh_node_id") if bound else None
         scope = record["device_scope"] if bound else None
+        transition_pending = bool(db.execute(text("""
+            SELECT 1 FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid AND released_at IS NULL LIMIT 1
+        """), {"iid": installation_id}).first())
     # A database authorization is never sufficient to label a SERVICE PRO
     # computer as ready. Confirm the exact ONLINE node, dedicated group and
     # effective desktop consent policy with MeshCentral; never create a share
     # from this read-only endpoint. A future connect call rechecks all of it.
     online = False
-    if node and scope:
+    if node and scope and not transition_pending:
         try:
             online = meshcentral.verify_standing_service_node(node, scope) == node
         except meshcentral.MeshCentralError:
             online = False
-    ready = bool(bound and online)
+    ready = bool(bound and online and not transition_pending)
     reason = (
         "SERVICE_PRO_READY" if ready else
+        "SERVICE_PRO_PROFILE_TRANSITION_PENDING" if transition_pending else
         "SERVICE_PRO_ENTITLEMENT_REQUIRED" if mode != "SERVICE_PRO" else
         "SERVICE_PRO_OWNER_APPROVAL_REQUIRED" if not prepared else
         "SERVICE_PRO_LOCAL_OPT_IN_REQUIRED" if not confirmed else
@@ -1565,6 +1570,7 @@ def owner_workshop_entitlement(
         "exactNodeBound": bound,
         "meshNodeOnlineAndPolicyVerified": online,
         "unattendedReady": ready,
+        "profileTransitionPending": transition_pending,
         "reasonCode": reason,
     }, headers={"Cache-Control": "private, no-store"})
 
