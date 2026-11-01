@@ -6,6 +6,8 @@ on:
       - feature/multiguard-workshop-pro-integrate-20261101
     paths:
       - "embedded-multiguard/app/routers/multiguard_workshop_remote.py"
+      - "embedded-multiguard/app/routers/multiguard_runtime.py"
+      - "embedded-multiguard/app/routers/multiguard_remote.py"
       - "embedded-multiguard/tests/test_workshop_profile_transition.py"
       - ".github/workflows/workshop-service-pro-offline-tests.yml"
   workflow_dispatch:
@@ -34,6 +36,8 @@ jobs:
         run: |
           python -m py_compile \
             embedded-multiguard/app/routers/multiguard_workshop_remote.py \
+            embedded-multiguard/app/routers/multiguard_remote.py \
+            embedded-multiguard/app/routers/multiguard_runtime.py \
             embedded-multiguard/tests/test_workshop_profile_transition.py
       - name: Test SERVICE PRO in-memory guard only
         env:
@@ -51,3 +55,7 @@ jobs:
           grep -Fq 'cp -a "$BACKUP_DIR/multiguard_workshop_remote.py" "$WORKSHOP_REMOTE_ROUTER_FILE"' embedded-multiguard/install.sh
           grep -Fq '"/multiguard/agent/workshop/standing/bootstrap-ticket"' embedded-multiguard/install.sh
           grep -Fq '"/multiguard/agent/workshop/profile-transition-check"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/agent/workshop/profile-transition-begin"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/agent/workshop/profile-transition-finish"' embedded-multiguard/install.sh
+          grep -Fq "@router.post('/panel/remote/service/" embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq "def _owner_service_remote_workspace(" embedded-multiguard/app/routers/multiguard_runtime.py
