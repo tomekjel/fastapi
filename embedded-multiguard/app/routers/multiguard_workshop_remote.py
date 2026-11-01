@@ -658,7 +658,7 @@ def request_for_owner(iid: uuid.UUID):
         raise HTTPException(403, "Wymagane aktualne upoważnienie OWNER i zgoda lokalna dla tego węzła.")
     node = grant["mesh_node_id"]
     try:
-        meshcentral.verify_service_pro_node(node)
+        meshcentral.verify_standing_service_node(node, approval["device_scope"])
     except meshcentral.MeshCentralError as exc:
         raise HTTPException(
             409, "Wymagana potwierdzona usługa online w dedykowanej grupie MeshCentral."
@@ -1173,7 +1173,7 @@ def connect_for_owner(sid):
                 raise HTTPException(403,"Brak ważnej zgody OWNER i potwierdzenia lokalnego.")
             scope = approval["device_scope"]
             try:
-                meshcentral.verify_service_pro_node(grant["mesh_node_id"])
+                meshcentral.verify_standing_service_node(grant["mesh_node_id"],scope)
             except meshcentral.MeshCentralError as exc:
                 raise HTTPException(409,"Węzeł nie należy do aktywnej grupy serwisowej.") from exc
         if row["status"] not in ("CONSENTED","CONNECT_READY","ACTIVE"):
@@ -1215,7 +1215,7 @@ def connect_for_owner(sid):
         # Stop even a just-created link if it no longer belongs to the exact
         # approved diagnostic MeshCentral group.
         if scope is not None:
-            meshcentral.verify_service_pro_node(node)
+            meshcentral.verify_standing_service_node(node,scope)
         with engine.begin() as db:
             row=db.execute(text("""
                 SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid FOR UPDATE
