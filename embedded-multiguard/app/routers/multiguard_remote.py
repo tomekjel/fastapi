@@ -1118,3 +1118,12 @@ def bind_mesh_node(
             )
 
     return {"status": "ok", "meshNodeId": node_id}
+
+
+# Add the authenticated /multiguard/agent/workshop/... API routes to the
+# existing production-registered /multiguard router. Keeping one parent
+# router preserves all commercial PRO endpoints and avoids any changes to
+# application entrypoints. Importing last avoids the workshop module's
+# existing read-only dependency on commercial schema/serializers.
+from app.routers import multiguard_workshop_remote as _workshop_remote
+router.include_router(_workshop_remote.router)
