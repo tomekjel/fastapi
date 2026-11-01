@@ -813,6 +813,78 @@ def workshop_mesh_provisioning_plan(request: WorkshopAuth):
     }
 
 
+@router.post("/agent/workshop/standing/bootstrap-ticket")
+def workshop_service_bootstrap_ticket(request: WorkshopAuth):
+    """Sign ONE short-lived, installation-bound Windows SCM enrollment ticket.
+
+    Bootstrapping the offline service only permits it to connect to MeshCentral.
+    It never grants a desktop/share capability. Every share still requires a
+    separately verified live node/group, same standing record and revocation
+    state. The GUI must request this AFTER OWNER+local written opt-in.
+    """
+    import base64
+    _schema()
+    pending = _authenticate(request)
+    with engine.begin() as db:
+        # Consistent lock order with OWNER revoke and grant downgrade.
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        db.execute(text("""
+            SELECT installation_id
+            FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        grant = _grant(db, request.installationId)
+        approval = standing_authorization_record(db, request.installationId)
+        if (not _eligible(grant) or not approval
+                or approval["owner_approved_at"] is None
+                or approval["local_opt_in_attested_at"] is None
+                or approval["revoked_at"] is not None
+                or approval["device_scope"] != "CLIENT_DIAGNOSTIC"
+                or not re.fullmatch(r"[0-9a-f]{64}", approval["prior_consent_sha256"])
+                or approval["approved_mesh_node_id"] not in (None, grant.get("mesh_node_id"))):
+            raise HTTPException(403, "Brak ważnych dwóch zgód na rozruch SERVICE PRO.")
+        group = expected_remote_mesh_group(grant)
+        if not group or group != os.getenv("MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID", "").strip():
+            raise HTTPException(503, "Grupa SERVICE PRO nie jest zgodna z serwerem.")
+        # Refuse starting while any paid/interactive session has a share.
+        conflict = db.execute(text("""
+            SELECT 1 FROM guard.remote_sessions
+            WHERE installation_id=:iid AND mesh_public_id IS NOT NULL
+              AND status IN ('CONNECT_READY','ACTIVE') LIMIT 1
+        """), {"iid": request.installationId}).first()
+        if conflict or _open(db, request.installationId):
+            raise HTTPException(409, "Zakończ istniejącą sesję przed przełączeniem profilu.")
+        issued = _now()
+        ticket = {
+            "schemaVersion": 1,
+            "kind": "MG_SERVICE_PRO_BOOTSTRAP_V1",
+            "installationId": str(request.installationId),
+            "deviceId": str(pending["device_id"]),
+            "requestId": str(request.requestId),
+            "nonce": str(uuid.uuid4()),
+            "profile": "SERVICE_PRO",
+            "meshGroupId": group,
+            "priorConsentSha256": approval["prior_consent_sha256"],
+            "issuedAt": issued.isoformat(),
+            "expiresAt": (issued + timedelta(seconds=60)).isoformat(),
+            "enrollmentOnly": True,
+            "unattendedAuthorized": False,
+        }
+        payload = json.dumps(ticket, sort_keys=True, ensure_ascii=False,
+                             separators=(",", ":"))
+        signature = license._signing_key().sign(payload.encode("utf-8"))
+    return {
+        "requestId": str(request.requestId),
+        "ticket": {
+            "payload": payload,
+            "signatureB64": base64.b64encode(signature).decode("ascii"),
+        },
+    }
+
+
 @router.post("/agent/workshop/mesh-enroll")
 def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
     """Identity-bound registration; OWNER never has to type MeshCentral node IDs."""
