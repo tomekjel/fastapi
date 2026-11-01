@@ -730,9 +730,11 @@ def request_for_owner(iid: uuid.UUID):
         if _open(db, iid):
             raise HTTPException(409,"Ten komputer ma już otwartą sesję.")
         if db.execute(text("""
-            SELECT 1 FROM guard.remote_sessions
-            WHERE installation_id=:iid AND mesh_public_id IS NOT NULL
-              AND status IN ('CONNECT_READY','ACTIVE') LIMIT 1
+            SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid AND rs.mesh_public_id IS NOT NULL
+              AND rs.status IN ('CONNECT_READY','ACTIVE')
+            LIMIT 1
         """),{"iid":iid}).first():
             raise HTTPException(409,"Trwa połączenie klienta Pro; zakończ je najpierw.")
         sid = uuid.uuid4()
@@ -820,9 +822,11 @@ def workshop_session_mesh_enroll(request: WorkshopSessionMeshEnrollment):
         # have an active public share: do not silently reuse the transport
         # while that viewer is still connected/authorized.
         if db.execute(text("""
-            SELECT 1 FROM guard.remote_sessions
-            WHERE installation_id=:iid AND mesh_public_id IS NOT NULL
-              AND status IN ('CONNECT_READY','ACTIVE') LIMIT 1
+            SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid AND rs.mesh_public_id IS NOT NULL
+              AND rs.status IN ('CONNECT_READY','ACTIVE')
+            LIMIT 1
         """), {"iid":request.installationId}).first():
             raise HTTPException(409, "Najpierw zakończ aktywne udostępnienie komercyjne.")
         db.execute(text("""INSERT INTO guard.workshop_mesh_nodes(installation_id,mesh_node_id,session_id)
@@ -886,10 +890,11 @@ def _validate_transition_locked(db, request):
         LIMIT 1
     """), {"iid": request.installationId}).first()
     pending_paid = db.execute(text("""
-        SELECT 1 FROM guard.remote_sessions
-        WHERE installation_id=:iid
-          AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
-        LIMIT 1
+        SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid
+              AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            LIMIT 1
     """), {"iid": request.installationId}).first()
     if pending_workshop or pending_paid:
         raise HTTPException(
@@ -1032,9 +1037,11 @@ def workshop_service_bootstrap_ticket(request: WorkshopAuth):
             raise HTTPException(503, "Grupa SERVICE PRO jest niezgodna z upoważnionym zakresem.")
         # Refuse starting while any paid/interactive session has a share.
         conflict = db.execute(text("""
-            SELECT 1 FROM guard.remote_sessions
-            WHERE installation_id=:iid AND mesh_public_id IS NOT NULL
-              AND status IN ('CONNECT_READY','ACTIVE') LIMIT 1
+            SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid AND rs.mesh_public_id IS NOT NULL
+              AND rs.status IN ('CONNECT_READY','ACTIVE')
+            LIMIT 1
         """), {"iid": request.installationId}).first()
         if conflict or _open(db, request.installationId):
             raise HTTPException(409, "Zakończ istniejącą sesję przed przełączeniem profilu.")
@@ -1163,9 +1170,11 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
         # Avoid destroying an already active commercial viewer when an
         # installation switches to workshop mode with the same service.
         if db.execute(text("""
-            SELECT 1 FROM guard.remote_sessions
-            WHERE installation_id=:iid AND mesh_public_id IS NOT NULL
-              AND status IN ('CONNECT_READY','ACTIVE') LIMIT 1
+            SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid AND rs.mesh_public_id IS NOT NULL
+              AND rs.status IN ('CONNECT_READY','ACTIVE')
+            LIMIT 1
         """), {"iid":request.installationId}).first():
             raise HTTPException(409, "Najpierw zakończ aktywne udostępnienie komercyjne.")
         assigned = db.execute(text("""
