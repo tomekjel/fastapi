@@ -40,6 +40,12 @@ class WorkshopAuth(BaseModel):
     discoveryCredential: str = Field(min_length=32, max_length=512)
 
 
+class WorkshopProfileTransitionCheck(WorkshopAuth):
+    # Read-only. A GUI/UAC action is required independently; this cannot
+    # itself change SCM, Windows profiles, consent or MeshCentral nodes.
+    targetMode: Literal["SERVICE_PRO", "CLIENT"]
+
+
 class WorkshopStandingAttestation(WorkshopAuth):
     # Only an explicit, interactive GUI action may submit this command.
     # Discovery auth alone can never stand in for OWNER's separate approval.
@@ -811,6 +817,62 @@ def workshop_mesh_provisioning_plan(request: WorkshopAuth):
         "unattendedAuthorized": False,
         "serverTime": _now().isoformat(),
     }
+
+
+@router.post("/agent/workshop/profile-transition-check")
+def workshop_profile_transition_check(request: WorkshopProfileTransitionCheck):
+    """Fail closed before an explicit local CLIENT<->SERVICE_PRO SCM change.
+
+    Checks all outstanding commercial AND workshop sessions, not only the
+    live session shown by the local GUI. A sessionless local transport is not
+    enough to prove that stopping the Windows agent would be safe.
+    This endpoint does not stop/revoke anything or grant remote access.
+    """
+    _schema()
+    _authenticate(request)
+    with engine.begin() as db:
+        # Lock in the same order as grant revocation / OWNER authorization.
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        grant = _grant(db, request.installationId)
+        if not _eligible(grant):
+            raise HTTPException(403, "Zmiana profilu wymaga aktywnego serwisowego Pro.")
+        db.execute(text("""
+            SELECT installation_id
+            FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        if request.targetMode == "CLIENT":
+            # An OWNER revocation cannot be replaced by a local toggle. Old
+            # standing authorization must already be durably revoked.
+            standing = standing_authorization_record(db, request.installationId)
+            if (standing and standing["owner_approved_at"] is not None
+                    and standing["revoked_at"] is None):
+                raise HTTPException(409, "Najpierw OWNER musi cofnąć stałe upoważnienie.")
+        pending_workshop = db.execute(text("""
+            SELECT 1 FROM guard.workshop_remote_sessions
+            WHERE installation_id=:iid
+              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            LIMIT 1
+        """), {"iid": request.installationId}).first()
+        pending_paid = db.execute(text("""
+            SELECT 1 FROM guard.remote_sessions
+            WHERE installation_id=:iid
+              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            LIMIT 1
+        """), {"iid": request.installationId}).first()
+        if pending_workshop or pending_paid:
+            raise HTTPException(
+                409, "Zakończ wszystkie sesje Pro i serwisowe, także oczekujące, zanim zmienisz profil."
+            )
+    return JSONResponse({
+        "requestId": request.requestId,
+        "targetMode": request.targetMode,
+        "allowed": True,
+        "serverTime": _now().isoformat(),
+    }, headers={"Cache-Control": "private, no-store"})
 
 
 @router.post("/agent/workshop/standing/bootstrap-ticket")
