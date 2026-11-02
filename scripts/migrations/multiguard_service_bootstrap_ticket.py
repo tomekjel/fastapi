@@ -16,7 +16,7 @@ if anchor not in s:raise SystemExit("STOP: unexpected production module")
 addition='''
 @router.post("/agent/workshop/standing/bootstrap-ticket")
 def workshop_service_bootstrap_ticket(request: WorkshopAuth):
-    """60-second device-specific signed enrollment ticket, not remote consent."""
+    """45-second signed enrollment ticket; NEVER grants remote access."""
     import base64
     import json
     import os
