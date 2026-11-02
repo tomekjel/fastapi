@@ -1,6 +1,6 @@
 # MultiGuard SERVICE PRO — przerwana zmiana profilu Windows
 
-Status: procedura diagnostyczna do zatwierdzenia; **bez automatycznego odblokowania**, bez zmian produkcyjnych.
+Status: procedura ręczna wdrożona w roboczych PR #31 i #33; **bez automatycznego odblokowania**, jeszcze bez testu Windows/MeshCentral na produkcji.
 
 ## Dlaczego blokada nie ma limitu czasu
 
@@ -37,9 +37,16 @@ WHERE gi.installation_external_id=:iid
 
 ## Zwalnianie — tylko bezpieczną ścieżką
 
-Dopuszczalna jest wyłącznie uwierzytelniona, identyfikowana przez dokładny `reservationId` operacja `/multiguard/agent/workshop/profile-transition-finish` **po** udokumentowanym potwierdzeniu ustalonego, zweryfikowanego stanu usługi. Ścieżka automatyczna aplikacji wykonuje te kontrole bezpośrednio po UAC. **Procedura OWNER-assisted recovery po nieodwracalnej utracie rezerwacji przez aplikację nie jest jeszcze wdrożona**; do czasu jej dodania rezerwacja pozostaje zablokowana, a obsługa wymaga osobnego audytu technicznego.
+1. OWNER otwiera panel **Zdalna pomoc** i wybiera właściwy komputer serwisowy z aktywną blokadą. **Dopiero po potwierdzeniu zakończenia okna UAC i wszelkich procesów podwyższonych** zaznacza oświadczenie i wybiera **Zezwól na lokalne odzyskanie**. Serwer wymaga, by rezerwacja miała co najmniej 2 minuty, sprawdza brak sesji w obu tabelach i zapisuje 5-minutową zgodę powiązaną z dokładnym `reservationId`. Samo zatwierdzenie NICZEGO nie odblokowuje.
+2. Na **tym samym komputerze** lokalny operator wybiera w MultiGuard **Sprawdź blokadę**. Serwer ujawnia ID i kierunek przełączenia tylko uwierzytelnionej instalacji z aktywnym upoważnieniem OWNER.
+3. Operator wybiera **Odzyskaj po kontroli Windows**. Aplikacja uruchamia własnego inspektora chronionej usługi `multiguardagent` (własność, SHA-256, konfiguracja Mesh/MSH, stan SCM). Dopuszczalne wyniki: dla docelowego SERVICE_PRO — `SERVICE_PRO_DORMANT`, `CLIENT_STOPPED` lub `CLIENT_RUNNING`; dla docelowego CLIENT — `CLIENT_STOPPED` lub `SERVICE_PRO_DORMANT`. Działający SERVICE PRO ani jakikolwiek niezweryfikowany stan **nigdy** nie odblokowują rezerwacji.
+4. Z tego samego urządzenia klient wywołuje uwierzytelnione `/multiguard/agent/workshop/profile-transition-recover` z dokładnym ID, kierunkiem i lokalnie zweryfikowanym profilem. Serwer pod blokadą transakcyjną ponownie sprawdza aktywność zgody OWNER, uprawnienie licencji, brak sesji komercyjnych i serwisowych oraz wymagane cofnięcie standing approval przy przejściu do CLIENT. Dopiero wtedy zapisuje audyt i zwalnia rezerwację.
 
-**NIE UŻYWAJ** `DELETE`, ręcznego `UPDATE released_at`, czyszczenia dziennika własności SCM, reinstalacji obcego MeshAgent ani wymuszania `Start-Service` SERVICE PRO. Nie przenoś też urządzenia pomiędzy grupami MeshCentral na podstawie samego hostname.
+Zgoda OWNER jest jednorazowa w obrębie konkretnej rezerwacji i ważna przez 5 minut. Brak sieci, brak upoważnienia, niezgodny identyfikator, aktywny pulpit lub niebezpieczny wynik inspektora pozostawia sesje zablokowane. Ta ścieżka nie uruchamia MeshAgent i nie zmienia SCM.
+
+**NIE UŻYWAJ** `DELETE`, ręcznego `UPDATE released_at`, czyszczenia dziennika własności SCM, reinstalacji obcego MeshAgent ani wymuszania `Start-Service` SERVICE PRO. Nie przenoś urządzenia pomiędzy grupami MeshCentral na podstawie samego hostname.
+
+**Ograniczenie:** FastAPI nie może zdalnie potwierdzić stanu SCM. Bezpieczne odblokowanie wymaga rzeczywistego sprawdzenia przez zainstalowaną aplikację i niezależnego potwierdzenia OWNER, że żaden proces UAC już nie pracuje. Wymaga to dalszych testów awaryjnych na Windows przed dopuszczeniem klientów.
 
 ## Warunki przed wdrożeniem produkcyjnym
 
