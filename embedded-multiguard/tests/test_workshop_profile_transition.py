@@ -318,6 +318,26 @@ class TransitionRecoveryTests(TransitionReservationTests):
         self.assertTrue(api._verified_recovery_profile("SERVICE_PRO", "CLIENT_RUNNING"))
         self.assertTrue(api._verified_recovery_profile("CLIENT", "SERVICE_PRO_DORMANT"))
 
+    def test_recovery_rejects_any_new_commercial_session(self):
+        req, stack = self.make()
+        with stack:
+            api.approve_transition_recovery_for_owner(req.installationId)
+            self.db.paid_open = True
+            with self.assertRaises(HTTPException) as error:
+                api.workshop_profile_transition_recover(self.recovery(req))
+            self.assertEqual(error.exception.status_code, 409)
+            self.assertIsNone(self.db.reservation["released_at"])
+
+    def test_recovery_rejects_any_new_workshop_session(self):
+        req, stack = self.make()
+        with stack:
+            api.approve_transition_recovery_for_owner(req.installationId)
+            self.db.workshop_open = True
+            with self.assertRaises(HTTPException) as error:
+                api.workshop_profile_transition_recover(self.recovery(req))
+            self.assertEqual(error.exception.status_code, 409)
+            self.assertIsNone(self.db.reservation["released_at"])
+
     def test_verified_recovery_requires_owner_then_releases(self):
         req, stack = self.make()
         with stack:
