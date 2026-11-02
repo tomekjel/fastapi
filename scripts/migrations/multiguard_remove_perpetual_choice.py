@@ -1,42 +1,56 @@
 #!/usr/bin/env python3
-"""One-time safe migration: forbid new perpetual OWNER license choices.
+"""Disable new perpetual terms in the production OWNER license grid.
 
-Execute on LXC 103 in /opt/multiservis. No database writes. Existing grants
-are preserved. The migration is idempotent and aborts if code differs.
+No DB mutation, no service restart, no changes to existing grants. Invoked
+with --check for a read-only preflight or --apply to write an exact patch.
 """
-from pathlib import Path
-from datetime import datetime, timezone
+import argparse
 import ast
+from datetime import datetime, timezone
+from pathlib import Path
+import re
 import shutil
 
-p = Path("app/routers/multiguard_license.py")
-s = p.read_text(encoding="utf-8")
-old = 'if choice not in ("KEEP", "3", "6", "12", "CALENDAR", "PERPETUAL"):'
-new = 'if choice not in ("KEEP", "3", "6", "12", "CALENDAR"):'
-if old in s:
-    if s.count(old) != 1:
-        raise SystemExit("ABORT: unexpected number of term validators")
-    updated = s.replace(old, new)
-elif new in s:
-    updated = s
-else:
-    raise SystemExit("ABORT: expected term validator absent")
-ast.parse(updated, filename=str(p))
+def patch(source: str) -> str:
+    old = 'if choice not in ("KEEP", "3", "6", "12", "CALENDAR", "PERPETUAL"):'
+    new = 'if choice not in ("KEEP", "3", "6", "12", "CALENDAR"):'
+    if source.count(old) == 1:
+        out = source.replace(old, new)
+    elif source.count(new) == 1:
+        out = source
+    else:
+        raise ValueError("Unknown OWNER term validator; aborting")
+    # Remove only a literal option, leaving other legacy code untouched.
+    pattern = r'<option\\b[^>]*\\bvalue\\s*=\\s*["\\\']PERPETUAL["\\\'][^>]*>.*?</option>'
+    matches = list(re.finditer(pattern, out, flags=re.I | re.S))
+    if len(matches) > 2:
+        raise ValueError("Unexpected number of perpetual UI options")
+    out = re.sub(pattern, "", out, flags=re.I | re.S)
+    ast.parse(out)
+    return out
 
-# Remove perpetual choice only inside HTML <option> or button controls, never
-# rewrite the broader licensing logic based on an unreviewed global replace.
-import re
-matches = list(re.finditer(r'<option\b[^>]*\bvalue\s*=\s*["\']PERPETUAL["\'][^>]*>.*?</option>', updated, re.I | re.S))
-if len(matches) > 2:
-    raise SystemExit("ABORT: unexpected perpetual option count")
-updated = re.sub(r'<option\b[^>]*\bvalue\s*=\s*["\']PERPETUAL["\'][^>]*>.*?</option>', '', updated, flags=re.I | re.S)
-ast.parse(updated, filename=str(p))
-if updated != s:
+def main():
+    ap = argparse.ArgumentParser()
+    group = ap.add_mutually_exclusive_group(required=True)
+    group.add_argument("--check", action="store_true")
+    group.add_argument("--apply", action="store_true")
+    args = ap.parse_args()
+    p = Path("app/routers/multiguard_license.py")
+    original = p.read_text(encoding="utf-8")
+    updated = patch(original)
+    if args.check:
+        print("PREFLIGHT_OK", "PATCH_REQUIRED" if updated != original else "ALREADY_APPLIED")
+        return
+    if updated == original:
+        print("ALREADY_APPLIED")
+        return
     backup = p.with_name(p.name + ".backup-no-perpetual-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
     shutil.copy2(p, backup)
     p.write_text(updated, encoding="utf-8")
-    print("PATCH_OK backup:", backup)
-else:
-    print("ALREADY_APPLIED")
-print("VALIDATOR_PERPETUAL_REMOVED:", old not in updated)
-print("NO DATABASE OR SERVICE CHANGES")
+    if p.read_text(encoding="utf-8") != updated:
+        shutil.copy2(backup, p)
+        raise RuntimeError("Write verification failed; original restored")
+    print("PATCH_OK", "BACKUP", backup)
+
+if __name__ == "__main__":
+    main()
