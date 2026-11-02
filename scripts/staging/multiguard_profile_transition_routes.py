@@ -25,13 +25,23 @@ def check(db, req):
     if not wr._eligible(grant):
         raise HTTPException(403, "Brak aktywnej licencji SERVICE.")
     iid = req.installationId
-    for table in ("guard.remote_sessions", "guard.workshop_remote_sessions"):
-        if db.execute(text(
-            "SELECT 1 FROM " + table +
-            " WHERE installation_id=:iid AND status IN "
-            "('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE') LIMIT 1"
-        ), {"iid": iid}).first():
-            raise HTTPException(409, "Najpierw zamknij sesję zdalną.")
+    # Workshop rows use the canonical UUID. Customer Pro sessions use
+    # guard.installations.id, a different UUID. Check each exact scope.
+    if db.execute(text("""
+        SELECT 1 FROM guard.workshop_remote_sessions
+        WHERE installation_id=:iid
+          AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+        LIMIT 1
+    """), {"iid": iid}).first():
+        raise HTTPException(409, "Najpierw zamknij sesję serwisową.")
+    if db.execute(text("""
+        SELECT 1 FROM guard.remote_sessions rs
+        JOIN guard.installations gi ON gi.id=rs.installation_id
+        WHERE gi.installation_external_id=:iid_text
+          AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+        LIMIT 1
+    """), {"iid_text": str(iid)}).first():
+        raise HTTPException(409, "Najpierw zamknij sesję klienta Pro.")
 
 def refuse_while_transition_reserved(db, installation_id):
     """Shared guard for BOTH customer Pro and SERVICE session admission.
