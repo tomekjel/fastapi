@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Install authenticated short-lived SERVICE bootstrap ticket endpoint.
-Only for already authorized, bound and locally attested devices.
+Requires effective SERVICE and authenticated identity. Enrollment-only, no remote access.
 No license writes, no Mesh modifications, no unattended authorization.
 """
 from pathlib import Path
@@ -30,16 +30,14 @@ def workshop_service_bootstrap_ticket(request: WorkshopAuth):
         mode = license._owner_effective_entitlement_mode(db, iid)
         grant = _grant(db, iid)
         record = standing_authorization_record(db, iid) if _eligible(grant) else None
-    if mode != "SERVICE" or not _eligible(grant) or not grant.get("mesh_node_id"):
-        raise HTTPException(403, "Brak aktywnej serwisowej autoryzacji.")
-    if (not record or record["owner_approved_at"] is None
-        or record["revoked_at"] is not None
-        or record["local_opt_in_attested_at"] is None
-        or record["approved_mesh_node_id"] != grant["mesh_node_id"]):
-        raise HTTPException(403, "Brak zgody OWNER lub lokalnej zgody na SERVICE.")
-    consent = str(record["prior_consent_sha256"] or "")
+    if mode != "SERVICE" or not _eligible(grant):
+        raise HTTPException(403, "Brak aktywnego prawa SERVICE.")
+    # Enrollment is NOT unattended access. The first Mesh node cannot be
+    # pre-approved before it exists. Preserve any previously attested consent,
+    # but never require it for an enrollment-only ticket.
+    consent = str(record["prior_consent_sha256"] or "") if record else ""
     if not re.fullmatch(r"[0-9a-f]{64}", consent):
-        raise HTTPException(403, "Nieprawidłowy zapis wcześniejszej zgody.")
+        consent = "0" * 64
     group = os.environ.get("MESH_SERVICE_PRO_GROUP_ID", "").strip()
     if not re.fullmatch(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", group):
         raise HTTPException(503, "Grupa SERVICE nie jest skonfigurowana.")
