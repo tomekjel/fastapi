@@ -21,7 +21,7 @@ def patch(source: str) -> str:
     else:
         raise ValueError("Unknown OWNER term validator; aborting")
     # Remove only a literal option, leaving other legacy code untouched.
-    pattern = r'<option\\b[^>]*\\bvalue\\s*=\\s*["\\\']PERPETUAL["\\\'][^>]*>.*?</option>'
+    pattern = r"""<option\b[^>]*\bvalue\s*=\s*["']PERPETUAL["'][^>]*>.*?</option>"""
     matches = list(re.finditer(pattern, out, flags=re.I | re.S))
     if len(matches) > 2:
         raise ValueError("Unexpected number of perpetual UI options")
