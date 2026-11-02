@@ -1,0 +1,66 @@
+name: Workshop SERVICE PRO isolated regression tests
+
+on:
+  push:
+    branches:
+      - feature/multiguard-workshop-pro-integrate-20261101
+    paths:
+      - "embedded-multiguard/app/routers/multiguard_workshop_remote.py"
+      - "embedded-multiguard/app/routers/multiguard_runtime.py"
+      - "embedded-multiguard/app/routers/multiguard_remote.py"
+      - "embedded-multiguard/tests/test_workshop_profile_transition.py"
+      - ".github/workflows/workshop-service-pro-offline-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  workshop-offline:
+    name: Static syntax and isolated authorization tests (NO DEPLOY)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install only pure test framework requirements
+        run: |
+          python -m pip install --disable-pip-version-check \
+            "fastapi>=0.110,<1.0" \
+            "sqlalchemy>=2.0,<3.0"
+      - name: Verify SERVICE PRO Python syntax
+        run: |
+          python -m py_compile \
+            embedded-multiguard/app/routers/multiguard_workshop_remote.py \
+            embedded-multiguard/app/routers/multiguard_remote.py \
+            embedded-multiguard/app/routers/multiguard_runtime.py \
+            embedded-multiguard/tests/test_workshop_profile_transition.py
+      - name: Test SERVICE PRO in-memory guard only
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python -m unittest discover -v \
+            -s embedded-multiguard/tests \
+            -p test_workshop_profile_transition.py
+      - name: Verify installer rollback and runtime router included
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n embedded-multiguard/install.sh
+          grep -Fq 'curl -fsSL "$RAW_BASE/app/routers/multiguard_workshop_remote.py"' embedded-multiguard/install.sh
+          grep -Fq 'cp -a "$BACKUP_DIR/multiguard_workshop_remote.py" "$WORKSHOP_REMOTE_ROUTER_FILE"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/agent/workshop/standing/bootstrap-ticket"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/agent/workshop/profile-transition-check"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/agent/workshop/profile-transition-begin"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/agent/workshop/profile-transition-finish"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/agent/workshop/profile-transition-recovery-status"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/agent/workshop/profile-transition-recover"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/remote/workshop/transition/{installation_id}/authorize-recovery"' embedded-multiguard/install.sh
+          grep -Fq "def owner_remote_service_authorize_recovery(" embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq "def workshop_profile_transition_recover(" embedded-multiguard/app/routers/multiguard_workshop_remote.py
+          grep -Fq "@router.post('/panel/remote/service/" embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq "def _owner_service_remote_workspace(" embedded-multiguard/app/routers/multiguard_runtime.py

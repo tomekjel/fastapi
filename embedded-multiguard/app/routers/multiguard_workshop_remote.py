@@ -1,0 +1,1827 @@
+"""OWNER-only workshop PRO remote sessions, separated from KeyGate licences.
+
+The 0.3.42 BETA Windows client authenticates with its existing discovery
+credential. No commercial licence, synthetic KeyGate key, or remote access
+without an explicit per-session desktop consent is created here.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import text
+
+from app.database import engine
+from app.security import CurrentUser, require_owner
+from app.routers import multiguard_license as license
+from app.routers import multiguard_meshcentral as meshcentral
+
+router = APIRouter(tags=["multi-guard-workshop-remote"])
+
+
+def _paid_remote():
+    """Resolve the commercial router only at request time.
+
+    multiguard_remote mounts THIS router at module import. A top-level
+    reverse import here made offline tests (and other import orders) cyclic.
+    Both routes are retained; no sharing or authorization semantics change.
+    """
+    from app.routers import multiguard_remote
+    return multiguard_remote
+_lock = threading.Lock()
+_ready = False
+OPEN = ("REQUESTED", "CONSENTED", "CONNECT_READY", "ACTIVE")
+
+
+class WorkshopAuth(BaseModel):
+    requestId: str = Field(min_length=8, max_length=128)
+    nonce: str = Field(min_length=8, max_length=128)
+    sentAt: datetime
+    installationId: uuid.UUID
+    deviceId: str = Field(min_length=16, max_length=128)
+    discoveryCredential: str = Field(min_length=32, max_length=512)
+
+
+class WorkshopProfileTransitionCheck(WorkshopAuth):
+    # Read-only. A GUI/UAC action is required independently; this cannot
+    # itself change SCM, Windows profiles, consent or MeshCentral nodes.
+    targetMode: Literal["SERVICE_PRO", "CLIENT"]
+
+
+class WorkshopProfileTransitionFinish(WorkshopAuth):
+    reservationId: uuid.UUID
+    targetMode: Literal["SERVICE_PRO", "CLIENT"]
+    succeeded: bool
+
+
+class WorkshopProfileTransitionRecovery(WorkshopAuth):
+    reservationId: uuid.UUID
+    targetMode: Literal["SERVICE_PRO", "CLIENT"]
+    verifiedProfile: Literal["CLIENT_RUNNING", "CLIENT_STOPPED", "SERVICE_PRO_DORMANT"]
+    localConfirmation: Literal[True]
+
+
+class WorkshopStandingAttestation(WorkshopAuth):
+    # Only an explicit, interactive GUI action may submit this command.
+    # Discovery auth alone can never stand in for OWNER's separate approval.
+    explicitConsent: Literal[True]
+    acknowledgedConsentSha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class WorkshopMeshEnrollment(WorkshopAuth):
+    # Local MeshAgent registry NodeId, without domain or node/ prefix.
+    meshNodeId: str = Field(min_length=64, max_length=64)
+
+
+class WorkshopDecision(WorkshopAuth):
+    sessionId: uuid.UUID
+    allowDesktop: bool
+    allowFiles: bool = False
+
+
+class WorkshopSessionMeshEnrollment(WorkshopMeshEnrollment):
+    sessionId: uuid.UUID
+
+
+class WorkshopEnd(WorkshopAuth):
+    sessionId: uuid.UUID
+    reason: str = Field(default="CLIENT_ENDED", max_length=80)
+
+
+class WorkshopSupport(WorkshopAuth):
+    localRequestId: uuid.UUID
+    subject: str = Field(min_length=1, max_length=240)
+    description: str = Field(default="", max_length=6000)
+    diagnosticsIncluded: bool = False
+    diagnostics: Any = None
+
+
+def _require_workshop_transport_consent(row, installation_id, now):
+    """Keep the workshop temporary CLIENT transport on per-request consent.
+
+    Newer commercial backend no longer exposes its old private helper.
+    This local check neither creates approval nor grants SERVICE_PRO access.
+    """
+    if (not row or row["installation_id"] != installation_id
+            or row.get("authorization_kind", "SESSION_CONSENT") != "SESSION_CONSENT"
+            or row["status"] != "CONSENTED" or row["expires_at"] <= now
+            or row.get("ended_at") is not None
+            or row.get("consented_at") is None
+            or "desktop" not in (row.get("granted_capabilities") or [])
+            or row.get("mesh_public_id")):
+        raise HTTPException(409, "Brak aktualnej zgody na rejestrację agenta tej sesji.")
+
+
+def _now():
+    return datetime.now(timezone.utc)
+
+
+def _schema():
+    global _ready
+    if _ready:
+        return
+    _paid_remote()._ensure_schema()
+    with _lock:
+        if _ready:
+            return
+        with engine.begin() as db:
+            for query in (
+                """CREATE TABLE IF NOT EXISTS guard.workshop_mesh_nodes (
+                   installation_id UUID PRIMARY KEY
+                     REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+                   mesh_node_id TEXT NOT NULL UNIQUE,
+                   updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
+                """ALTER TABLE guard.workshop_mesh_nodes
+                   ADD COLUMN IF NOT EXISTS session_id UUID""",
+                """CREATE TABLE IF NOT EXISTS guard.workshop_support_requests (
+                   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                   local_request_id UUID NOT NULL UNIQUE,
+                   installation_id UUID NOT NULL
+                     REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+                   subject TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+                   diagnostics_included BOOLEAN NOT NULL DEFAULT FALSE,
+                   created_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
+                """CREATE INDEX IF NOT EXISTS ix_workshop_support_installation
+                   ON guard.workshop_support_requests(installation_id,created_at DESC)""",
+                """CREATE TABLE IF NOT EXISTS guard.workshop_remote_sessions (
+                   id UUID PRIMARY KEY,
+                   installation_id UUID NOT NULL
+                     REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+                   subject TEXT NOT NULL DEFAULT 'Zdalna pomoc serwisowa',
+                   requested_by_name TEXT NOT NULL DEFAULT 'OWNER',
+                   status TEXT NOT NULL CHECK (status IN
+                     ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE','DENIED',
+                      'ENDED','EXPIRED','ERROR')),
+                   requested_capabilities JSONB NOT NULL DEFAULT '["desktop"]'::jsonb,
+                   granted_capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+                   requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                   expires_at TIMESTAMPTZ NOT NULL,
+                   consented_at TIMESTAMPTZ,connected_at TIMESTAMPTZ,
+                   reconnect_until TIMESTAMPTZ,ended_at TIMESTAMPTZ,
+                   last_activity_at TIMESTAMPTZ,
+                   mesh_public_id TEXT,mesh_share_expires_at TIMESTAMPTZ,
+                   last_error TEXT)""",
+                # Existing sessions remain bound to interactive consent.
+                # A standing session MUST carry its own explicit mode marker.
+                """ALTER TABLE guard.workshop_remote_sessions
+                   ADD COLUMN IF NOT EXISTS authorization_kind TEXT NOT NULL
+                   DEFAULT 'SESSION_CONSENT'""",
+                """CREATE UNIQUE INDEX IF NOT EXISTS uq_workshop_remote_open
+                   ON guard.workshop_remote_sessions(installation_id)
+                   WHERE status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')""",
+                """CREATE TABLE IF NOT EXISTS guard.workshop_remote_events (
+                   id BIGSERIAL PRIMARY KEY,
+                   session_id UUID NOT NULL REFERENCES guard.workshop_remote_sessions(id)
+                     ON DELETE CASCADE,
+                   event_type TEXT NOT NULL,actor_type TEXT NOT NULL,
+                   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
+                # SERVICE PRO assignment alone never activates remote sharing.
+                # Separate recorded approval and opt-in must bind the same node.
+                """CREATE TABLE IF NOT EXISTS guard.workshop_standing_remote_authorizations (
+                   installation_id UUID PRIMARY KEY
+                     REFERENCES guard.workshop_grants(installation_id) ON DELETE CASCADE,
+                   approved_mesh_node_id TEXT,
+                   device_scope TEXT NOT NULL
+                     CHECK (device_scope IN ('OWNED_WORKSHOP','CLIENT_DIAGNOSTIC')),
+                   owner_approved_at TIMESTAMPTZ,
+                   local_opt_in_attested_at TIMESTAMPTZ,
+                   prior_consent_sha256 TEXT NOT NULL
+                     CHECK (char_length(prior_consent_sha256) = 64),
+                   revoked_at TIMESTAMPTZ,
+                   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                   updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
+                # Existing deployments may still have a NOT NULL column. A
+                # preliminary OWNER/local consent must be possible BEFORE
+                # a first-time service agent can enroll its node.
+                """ALTER TABLE guard.workshop_standing_remote_authorizations
+                   ALTER COLUMN approved_mesh_node_id DROP NOT NULL""",
+                """CREATE TABLE IF NOT EXISTS guard.workshop_profile_transition_locks (
+                   installation_id UUID PRIMARY KEY
+                     REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+                   reservation_id UUID NOT NULL,
+                   target_mode TEXT NOT NULL CHECK (target_mode IN (\'SERVICE_PRO\',\'CLIENT\')),
+                   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                   released_at TIMESTAMPTZ,
+                   recovery_owner_approved_at TIMESTAMPTZ,
+                   recovery_owner_reservation_id UUID,
+                   recovered_profile TEXT)""",
+                """ALTER TABLE guard.workshop_profile_transition_locks
+                   ADD COLUMN IF NOT EXISTS recovery_owner_approved_at TIMESTAMPTZ""",
+                """ALTER TABLE guard.workshop_profile_transition_locks
+                   ADD COLUMN IF NOT EXISTS recovery_owner_reservation_id UUID""",
+                """ALTER TABLE guard.workshop_profile_transition_locks
+                   ADD COLUMN IF NOT EXISTS recovered_profile TEXT""",
+                """CREATE TABLE IF NOT EXISTS guard.workshop_profile_transition_audit (
+                   id BIGSERIAL PRIMARY KEY,
+                   installation_id UUID NOT NULL,
+                   reservation_id UUID NOT NULL,
+                   action TEXT NOT NULL,
+                   verified_profile TEXT,
+                   actor_type TEXT NOT NULL,
+                   created_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
+                """CREATE TABLE IF NOT EXISTS guard.workshop_standing_remote_audit (
+                   id BIGSERIAL PRIMARY KEY,
+                   installation_id UUID NOT NULL
+                     REFERENCES guard.pending_installations(installation_id) ON DELETE CASCADE,
+                   action TEXT NOT NULL
+                     CHECK (action IN ('OWNER_APPROVED','LOCAL_OPT_IN_ATTESTED','OWNER_REVOKED','SERVICE_RIGHTS_CHANGED')),
+                   actor_type TEXT NOT NULL DEFAULT 'OWNER',
+                   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
+            ):
+                db.execute(text(query))
+        _ready = True
+
+
+def _assert_no_profile_transition(db, iid):
+    """Called while locking workshop_grants for this installation.
+
+    A transition stays reserved until explicitly finished. Crashed Windows
+    clients fail closed rather than releasing a timed lease during an UAC
+    prompt. OWNER must recover interrupted operations intentionally.
+    """
+    if db.execute(text("""
+        SELECT 1 FROM guard.workshop_profile_transition_locks
+        WHERE installation_id=:iid AND released_at IS NULL LIMIT 1
+    """), {"iid": iid}).first():
+        raise HTTPException(409, "Trwa zmiana profilu Windows; nowe sesje są zablokowane.")
+
+
+def _grant(db, iid):
+    return db.execute(text("""
+        SELECT g.edition,g.enabled,p.status,p.installation_id,m.mesh_node_id,m.session_id AS mesh_session_id
+        FROM guard.pending_installations p
+        LEFT JOIN guard.workshop_grants g ON g.installation_id=p.installation_id
+        LEFT JOIN guard.workshop_mesh_nodes m ON m.installation_id=p.installation_id
+        WHERE p.installation_id=:id
+    """), {"id": iid}).mappings().first()
+
+
+def remote_entitlement_mode(grant):
+    """Read-only server truth, separate from Windows' possibly stale licence."""
+    if not grant:
+        return "UNREGISTERED"
+    status = grant["status"]
+    if status in ("ASSIGNED", "PROVISIONED"):
+        return "CUSTOMER_LICENSE"
+    if status in ("ARCHIVED", "UNINSTALLED", "IGNORED"):
+        return "INACTIVE_INSTALLATION"
+    if not grant["enabled"]:
+        return "SERVICE_DISABLED"
+    if grant["edition"] == "STANDARD":
+        return "SERVICE_STANDARD"
+    if grant["edition"] == "PRO":
+        return "SERVICE_PRO"
+    return "UNKNOWN_DENIED"
+
+
+
+def expected_remote_mesh_group(grant):
+    """Resolve the target group from authoritative server licence state.
+
+    This is a fail-closed planning helper, NOT a permission to move an existing
+    MeshCentral node. Group changes must revoke active shares first, verify
+    installation identity, and be committed with the licence transition.
+    """
+    mode = remote_entitlement_mode(grant)
+    if mode == "SERVICE_PRO":
+        key = "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID"
+    elif mode == "CUSTOMER_LICENSE" and grant.get("edition") == "PRO":
+        key = "MESH_CENTRAL_CUSTOMER_MESH_ID"
+    else:
+        return None
+    group = os.getenv(key, "").strip()
+    if not re.fullmatch(r"mesh/[A-Za-z0-9_.-]{0,64}/[A-Za-z0-9@$]{64}", group):
+        return None
+    # Never allow the unattended group to alias either customer route,
+    # including the existing single-prompt legacy MeshCentral configuration.
+    if mode == "SERVICE_PRO":
+        customer_groups = (
+            os.getenv("MESH_CENTRAL_CUSTOMER_MESH_ID", "").strip(),
+            os.getenv("MESH_CENTRAL_SINGLE_PROMPT_MESH_ID", "").strip(),
+        )
+        if group in customer_groups:
+            return None
+    elif mode == "CUSTOMER_LICENSE":
+        if group == os.getenv("MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID", "").strip():
+            return None
+    return group
+
+
+def _eligible(grant):
+    return remote_entitlement_mode(grant) == "SERVICE_PRO"
+
+
+def standing_authorization_record(db, installation_id):
+    """Read-only: a SERVICE PRO grant alone never authorizes unattended access.
+
+    Any later share must ALSO verify exact live node and pinned mesh group.
+    """
+    return db.execute(text("""
+        SELECT approved_mesh_node_id, device_scope, owner_approved_at,
+               local_opt_in_attested_at, prior_consent_sha256, revoked_at
+        FROM guard.workshop_standing_remote_authorizations
+        WHERE installation_id=:iid
+    """), {"iid": installation_id}).mappings().first()
+
+
+def standing_authorization_record_valid(grant, record):
+    """Both separately recorded confirmations and exact node binding required."""
+    if not _eligible(grant) or not grant.get("mesh_node_id") or not record:
+        return False
+    return bool(
+        record["approved_mesh_node_id"] == grant["mesh_node_id"]
+        and record["device_scope"] in ("OWNED_WORKSHOP", "CLIENT_DIAGNOSTIC")
+        and record["owner_approved_at"] is not None
+        and record["local_opt_in_attested_at"] is not None
+        and record["revoked_at"] is None
+        and isinstance(record["prior_consent_sha256"], str)
+        and bool(re.fullmatch(r"[0-9a-f]{64}", record["prior_consent_sha256"]))
+    )
+
+
+def session_node_ready(grant, row):
+    return bool(grant and row and grant.get("mesh_node_id")
+                and grant.get("mesh_session_id") == row["id"])
+
+
+def _can_replace_session_node(previous, installation_id):
+    # Only retire a binding whose verified session has actually ended and
+    # whose share was revoked. Legacy/manual/foreign bindings fail closed.
+    return bool(previous and previous["installation_id"] == installation_id
+                and previous["status"] in ("ENDED", "EXPIRED", "DENIED")
+                and previous.get("ended_at") is not None
+                and not previous.get("mesh_public_id"))
+
+
+def _authenticate(request: WorkshopAuth):
+    # Digest comparison and device binding are done by the existing registered
+    # discovery identity; never create credentials during remote requests.
+    now = _now()
+    when = request.sentAt
+    if when.tzinfo is None or abs((now - when).total_seconds()) > 300:
+        raise HTTPException(401, "Wygasłe uwierzytelnienie żądania zdalnego.")
+    pending = license._authenticate_pending(
+        str(request.installationId), request.deviceId, request.discoveryCredential
+    )
+    # The identity token does not authorize the service-license API. Paid
+    # customer PRO uses a separate KeyGate path with fresh local consent.
+    if pending["status"] in ("ASSIGNED", "PROVISIONED"):
+        raise HTTPException(
+            409,
+            "REMOTE_MODE_CUSTOMER_LICENSE: Ta instalacja ma licencję klienta. Zdalna pomoc wymaga ścieżki "
+            "klienta Pro i każdorazowej zgody; sprawdź tryb licencji w MultiGuard.",
+        )
+    if pending["status"] in ("ARCHIVED", "UNINSTALLED", "IGNORED"):
+        raise HTTPException(403, "Instalacja nieaktywna lub wycofana; zdalny dostęp zablokowany.")
+    return pending
+
+
+def _event(db, sid, code, actor="BACKEND"):
+    db.execute(text("""
+        INSERT INTO guard.workshop_remote_events(session_id,event_type,actor_type)
+        VALUES (:id,:code,:actor)
+    """), {"id": sid, "code": code, "actor": actor})
+
+
+def _public(row):
+    if row is None:
+        return None
+    # Wire-compatible with the 0.3.42 BETA RemoteSessionSnapshot.
+    return {
+        "sessionId": str(row["id"]),
+        "supportRequestId": str(row["id"]),
+        "status": row["status"],
+        # Explicit wire discriminator; older interactive sessions default to
+        # session-specific consent. A standing session MUST NOT trigger the
+        # client's consent-based MeshAgent enrollment or prompt.
+        "authorizationKind": row.get("authorization_kind","SESSION_CONSENT"),
+        "technicianDisplayName": row["requested_by_name"],
+        "subject": row["subject"],
+        "requestedCapabilities": list(row["requested_capabilities"] or []),
+        "grantedCapabilities": list(row["granted_capabilities"] or []),
+        "requestedAt": _paid_remote()._iso(row["requested_at"]),
+        "expiresAt": _paid_remote()._iso(row.get("mesh_share_expires_at")
+                                      if row["status"] in {"CONNECT_READY", "ACTIVE"}
+                                      else row["expires_at"]),
+        "consentedAt": _paid_remote()._iso(row["consented_at"]),
+        "connectedAt": _paid_remote()._iso(row["connected_at"]),
+        "endedAt": _paid_remote()._iso(row["ended_at"]),
+        "reconnectUntil": _paid_remote()._iso(row["reconnect_until"]),
+        "meshReady": bool(row["mesh_public_id"]),
+        "lastError": row["last_error"],
+    }
+
+
+def _open(db, iid, *, entitlement_lost=False):
+    """No SQL EXPIRED until MeshCentral confirms the old share is revoked."""
+    grant = _grant(db, iid)
+    active = db.execute(text("""
+        SELECT * FROM guard.workshop_remote_sessions
+        WHERE installation_id=:id AND status IN
+             ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+        FOR UPDATE
+    """), {"id": iid}).mappings().first()
+    if not active:
+        return None
+    now = _now()
+    timeout = (
+        active["status"] in ("REQUESTED", "CONSENTED") and active["expires_at"] <= now
+    ) or (
+        active["status"] in ("CONNECT_READY", "ACTIVE")
+        and (active["mesh_share_expires_at"] is None
+             or active["mesh_share_expires_at"] <= now)
+    )
+    if timeout or entitlement_lost or not _eligible(grant):
+        if active["mesh_public_id"]:
+            if not grant or not grant["mesh_node_id"]:
+                raise HTTPException(502, "Nie można potwierdzić cofnięcia linku MeshCentral.")
+            try:
+                meshcentral.revoke_share(grant["mesh_node_id"], active["mesh_public_id"])
+            except meshcentral.MeshCentralError as exc:
+                raise HTTPException(502, "Nie potwierdzono cofnięcia wygasłego dostępu.") from exc
+        db.execute(text("""
+            UPDATE guard.workshop_remote_sessions SET status='EXPIRED',
+                ended_at=COALESCE(ended_at,:now),last_activity_at=:now,
+                mesh_public_id=NULL,mesh_share_expires_at=NULL WHERE id=:sid
+        """), {"now": now, "sid":active["id"]})
+        _event(db, active["id"], "ENTITLEMENT_LOST" if entitlement_lost else "EXPIRED")
+        return None
+    return active
+
+
+def prepare_standing_authorization_for_owner(iid,device_scope,receipt_sha256):
+    """OWNER records prior written consent; cannot activate remote access.
+
+    Requires separate on-device confirmation and the correct live MeshCentral
+    group before unattended access can ever be enabled. Never accept a node
+    identifier from this request: bind exclusively to the saved installation.
+    """
+    if device_scope not in ("OWNED_WORKSHOP","CLIENT_DIAGNOSTIC"):
+        raise HTTPException(400,"Nieprawidłowy zakres zgody serwisowej.")
+    if not isinstance(receipt_sha256,str) or not re.fullmatch(r"[0-9a-f]{64}",receipt_sha256):
+        raise HTTPException(400,"Wymagany SHA-256 dokumentu zgody.")
+    _schema()
+    with engine.connect() as db:
+        grant=_grant(db,iid)
+    if not _eligible(grant):
+        raise HTTPException(403,"Wymagana aktywna instalacja serwisowa Pro.")
+    pinned_node=grant["mesh_node_id"]
+    # First deployment may not yet have a Mesh node. Record earlier consent
+    # against the authenticated installation; do NOT mark it unattended-ready.
+    # If a node already exists, independently verify it now.
+    if pinned_node:
+        try:
+            if not meshcentral.verify_registered_node(pinned_node):
+                raise HTTPException(409,"Nie potwierdzono węzła urządzenia w MeshCentral.")
+        except meshcentral.MeshCentralError as exc:
+            raise HTTPException(502,"Nie można potwierdzić urządzenia w MeshCentral.") from exc
+    with engine.begin() as db:
+        # Lock before writing and revalidate against a concurrent licence
+        # conversion or MeshAgent node change.
+        db.execute(text("""
+            SELECT installation_id FROM guard.pending_installations
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":iid}).first()
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":iid}).first()
+        grant=_grant(db,iid)
+        if not _eligible(grant) or grant.get("mesh_node_id")!=pinned_node:
+            raise HTTPException(409,"Uprawnienia lub węzeł zmieniły się podczas potwierdzania.")
+        previous=db.execute(text("""
+            SELECT revoked_at FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":iid}).mappings().first()
+        if previous and previous["revoked_at"] is None:
+            raise HTTPException(409,"Upoważnienie jest już zapisane; najpierw je cofnij.")
+        db.execute(text("""
+            INSERT INTO guard.workshop_standing_remote_authorizations
+              (installation_id,approved_mesh_node_id,device_scope,
+               owner_approved_at,local_opt_in_attested_at,
+               prior_consent_sha256,revoked_at)
+            VALUES (:iid,:node,:scope,:now,NULL,:receipt,NULL)
+            ON CONFLICT (installation_id) DO UPDATE SET
+              approved_mesh_node_id=EXCLUDED.approved_mesh_node_id,
+              device_scope=EXCLUDED.device_scope,
+              owner_approved_at=EXCLUDED.owner_approved_at,
+              local_opt_in_attested_at=NULL,
+              prior_consent_sha256=EXCLUDED.prior_consent_sha256,
+              revoked_at=NULL,updated_at=now()
+        """),{"iid":iid,"node":pinned_node,"scope":device_scope,
+               "receipt":receipt_sha256,"now":_now()})
+        db.execute(text("""
+            INSERT INTO guard.workshop_standing_remote_audit
+              (installation_id,action,actor_type)
+            VALUES (:iid,'OWNER_APPROVED','OWNER')
+        """),{"iid":iid})
+    return {"recorded":True,"localDeviceConsentPending":True,
+            "meshGroupVerificationPending":True,"unattendedReady":False}
+
+
+def invalidate_standing_authorization(db, iid, reason):
+    """Durably invalidate any prior authorization, never erase the audit trail.
+
+    Called by OWNER explicit revocation or as part of the SAME transaction
+    that removes service PRO rights. A future re-enablement requires entirely
+    new independent approvals and an up-to-date local attestation.
+    """
+    if reason not in ("OWNER_REVOKED", "SERVICE_RIGHTS_CHANGED"):
+        raise ValueError("Unrecognized standing authorization invalidation.")
+    record = db.execute(text("""
+        SELECT revoked_at
+        FROM guard.workshop_standing_remote_authorizations
+        WHERE installation_id=:iid FOR UPDATE
+    """), {"iid": iid}).mappings().first()
+    if not record or record["revoked_at"] is not None:
+        return False
+    db.execute(text("""
+        UPDATE guard.workshop_standing_remote_authorizations
+        SET revoked_at=:now,updated_at=:now
+        WHERE installation_id=:iid AND revoked_at IS NULL
+    """), {"iid":iid,"now":_now()})
+    db.execute(text("""
+        INSERT INTO guard.workshop_standing_remote_audit
+          (installation_id,action,actor_type)
+        VALUES (:iid,:action,'OWNER')
+    """), {"iid":iid,"action":reason})
+    return True
+
+
+def revoke_standing_authorization_for_owner(iid):
+    """OWNER may always revoke; MeshCentral failure is reported, never hidden.
+
+    The database revocation COMMMITS even when an external share fails to
+    revoke, so no later request can rely on this standing authorization.
+    """
+    _schema()
+    share_failure = False
+    with engine.begin() as db:
+        # Match downgrade and session-start lock order: grant first. This
+        # serializes revoke with licence changes and prevents AB/BA deadlocks.
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":iid}).first()
+        prior = db.execute(text("""
+            SELECT revoked_at
+            FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid":iid}).mappings().first()
+        if prior is None or prior["revoked_at"] is not None:
+            return {"revoked":True,"previouslyActive":False,"shareRevokeConfirmed":True}
+        try:
+            _open(db,iid,entitlement_lost=True)
+        except HTTPException as exc:
+            # Do not rollback revocation just because MeshCentral is offline.
+            # Clearly disclose to OWNER that old links may remain alive.
+            if exc.status_code not in (502, 503):
+                raise
+            share_failure = True
+        invalidate_standing_authorization(db,iid,"OWNER_REVOKED")
+    if share_failure:
+        raise HTTPException(
+            502,
+            "Stałe upoważnienie zapisano jako cofnięte, ale MeshCentral nie "
+            "potwierdził zamknięcia poprzedniego linku. Wymagana kontrola sesji.",
+        )
+    return {"revoked":True,"previouslyActive":True,"shareRevokeConfirmed":True}
+
+
+def close_before_rights_change(db, iid: uuid.UUID):
+    """Called with guard.workshop_grants row locked in one DB transaction.
+
+    If Mesh revoke fails, the surrounding SQL transaction rolls back and
+    leaves the PRO entitlement in place for a retry instead of falsely
+    claiming remote access was disabled.
+    """
+    _open(db, iid, entitlement_lost=True)
+    invalidate_standing_authorization(db,iid,"SERVICE_RIGHTS_CHANGED")
+
+
+def request_consent_for_owner(iid: uuid.UUID):
+    """OWNER's explicit one-click request; NEVER unattended and no preexisting node.
+
+    The dormant MeshAgent is enrolled only after the client independently
+    accepts this specific server-created session. OWNER cannot set CONSENTED.
+    """
+    _schema()
+    with engine.begin() as db:
+        db.execute(text("""SELECT installation_id FROM guard.workshop_grants
+                           WHERE installation_id=:iid FOR UPDATE"""), {"iid": iid}).first()
+        _assert_no_profile_transition(db, iid)
+        grant = _grant(db, iid)
+        if not _eligible(grant):
+            raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
+        # Expire/revoke a stale session and forbid a second concurrent request.
+        # A pre-consent MeshCentral node is deliberately NOT required.
+        if _open(db, iid):
+            raise HTTPException(409, "Dla komputera istnieje już otwarta sesja.")
+        if db.execute(text("""
+            SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid
+              AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            LIMIT 1
+        """), {"iid": iid}).first():
+            raise HTTPException(409, "Zakończ sesję klienta Pro przed zgłoszeniem serwisowym.")
+        now = _now()
+        sid = uuid.uuid4()
+        db.execute(text("""
+            INSERT INTO guard.workshop_remote_sessions(
+                id,installation_id,status,expires_at,last_activity_at)
+            VALUES (:sid,:iid,'REQUESTED',:expires,:now)
+        """), {
+            "sid": sid, "iid": iid,
+            "expires": now + timedelta(minutes=10), "now": now,
+        })
+        _event(db, sid, "OWNER_REQUESTED", "TECHNICIAN")
+        return sid
+
+
+@router.post("/agent/workshop/standing/status")
+def workshop_standing_status(request: WorkshopAuth):
+    """Read-only local GUI status; no permission changes or unattended link."""
+    _schema()
+    _authenticate(request)
+    with engine.connect() as db:
+        grant = _grant(db, request.installationId)
+        record = (standing_authorization_record(db, request.installationId)
+                  if _eligible(grant) else None)
+    if not _eligible(grant):
+        raise HTTPException(403,"Serwisowy Pro jest nieaktywny.")
+    approved = bool(record and record["owner_approved_at"] is not None
+                    and record["revoked_at"] is None
+                    and record["approved_mesh_node_id"] == grant.get("mesh_node_id"))
+    return {
+        "requestId":request.requestId,
+        "ownerPrepared":approved,
+        "deviceScope":record["device_scope"] if approved else None,
+        "priorConsentSha256":record["prior_consent_sha256"] if approved else None,
+        "localOptInAttested":bool(approved and record["local_opt_in_attested_at"] is not None),
+        "meshNodeBindingPending":bool(approved and not grant.get("mesh_node_id")),
+        "unattendedReady":False,
+    }
+
+
+@router.post("/agent/workshop/standing/attest")
+def workshop_standing_attest(request: WorkshopStandingAttestation):
+    """One-time explicit local GUI confirmation tied to OWNER approval.
+
+    This does not create a remote session or change MeshCentral groups.
+    A valid standing record is necessary but never sufficient for access.
+    """
+    _schema()
+    _authenticate(request)
+    with engine.begin() as db:
+        # Serialize against revoke, reinstall, node reassignment, downgrade.
+        db.execute(text("""SELECT installation_id
+            FROM guard.pending_installations WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":request.installationId}).first()
+        db.execute(text("""SELECT installation_id
+            FROM guard.workshop_grants WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":request.installationId}).first()
+        grant = _grant(db, request.installationId)
+        if not _eligible(grant):
+            raise HTTPException(403,"Brak aktywnej licencji serwisowej Pro.")
+        record = db.execute(text("""
+            SELECT approved_mesh_node_id,device_scope,owner_approved_at,
+                   local_opt_in_attested_at,prior_consent_sha256,revoked_at
+            FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":request.installationId}).mappings().first()
+        if (not record or record["revoked_at"] is not None
+                or record["owner_approved_at"] is None
+                or record["approved_mesh_node_id"] not in (None,grant["mesh_node_id"])
+                or record["prior_consent_sha256"] != request.acknowledgedConsentSha256):
+            raise HTTPException(403,"Brak bieżącego upoważnienia OWNER dla tego komputera.")
+        if record["local_opt_in_attested_at"] is not None:
+            raise HTTPException(409,"Zgoda lokalna została już zarejestrowana.")
+        db.execute(text("""
+            UPDATE guard.workshop_standing_remote_authorizations
+            SET approved_mesh_node_id=COALESCE(approved_mesh_node_id,:node),
+                local_opt_in_attested_at=:now,updated_at=:now
+            WHERE installation_id=:iid AND revoked_at IS NULL
+              AND local_opt_in_attested_at IS NULL
+        """),{"iid":request.installationId,"now":_now(),
+               "node":grant["mesh_node_id"]})
+        db.execute(text("""
+            INSERT INTO guard.workshop_standing_remote_audit
+                (installation_id,action,actor_type)
+            VALUES (:iid,'LOCAL_OPT_IN_ATTESTED','LOCAL_USER')
+        """),{"iid":request.installationId})
+    return {"requestId":request.requestId,
+            "localOptInAttested":True,"unattendedReady":False}
+
+
+def request_for_owner(iid: uuid.UUID):
+    """Start a standing session only after separate OWNER and local approval.
+
+    A service licence or online node alone is never unattended authorization.
+    The grant and consent are rechecked under locks before opening a session.
+    """
+    _schema()
+    with engine.connect() as db:
+        grant = _grant(db, iid)
+        approval = standing_authorization_record(db, iid)
+    if not standing_authorization_record_valid(grant, approval):
+        raise HTTPException(403, "Wymagane aktualne upoważnienie OWNER i zgoda lokalna dla tego węzła.")
+    node = grant["mesh_node_id"]
+    try:
+        meshcentral.verify_standing_service_node(node, approval["device_scope"])
+    except meshcentral.MeshCentralError as exc:
+        raise HTTPException(
+            409, "Wymagana potwierdzona usługa online w dedykowanej grupie MeshCentral."
+        ) from exc
+    with engine.begin() as db:
+        # Serialize with licence changes; the node and service grant must remain valid.
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":iid}).first()
+        _assert_no_profile_transition(db, iid)
+        grant = _grant(db, iid)
+        if not _eligible(grant) or grant.get("mesh_node_id") != node:
+            raise HTTPException(403, "Licencja lub przypisany węzeł uległy zmianie.")
+        # Lock the same standing record as revoke/attest, not only the licence.
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid":iid}).first()
+        approval = standing_authorization_record(db, iid)
+        if not standing_authorization_record_valid(grant, approval):
+            raise HTTPException(403, "Upoważnienie OWNER lub zgoda lokalna zostały cofnięte.")
+        if _open(db, iid):
+            raise HTTPException(409,"Ten komputer ma już otwartą sesję.")
+        if db.execute(text("""
+            SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid
+              AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            LIMIT 1
+        """),{"iid":iid}).first():
+            raise HTTPException(409,"Trwa połączenie klienta Pro; zakończ je najpierw.")
+        sid = uuid.uuid4()
+        now = _now()
+        # Explicit two-party consent, bound to the same node, was reverified.
+        db.execute(text("""
+            INSERT INTO guard.workshop_remote_sessions(
+                id,installation_id,status,authorization_kind,
+                requested_capabilities,granted_capabilities,
+                requested_at,expires_at,consented_at,last_activity_at
+            ) VALUES (
+                :sid,:iid,'CONSENTED','STANDING_SERVICE',
+                '["desktop"]'::jsonb,'["desktop"]'::jsonb,
+                :now,:expires,:consent,:now
+            )
+        """),{"sid":sid,"iid":iid,"now":now,
+               "expires":now+timedelta(minutes=5),
+               "consent":now})
+        updated = db.execute(text("""
+            UPDATE guard.workshop_mesh_nodes SET session_id=:sid,updated_at=:now
+            WHERE installation_id=:iid AND mesh_node_id=:node
+            RETURNING installation_id
+        """),{"sid":sid,"now":now,"iid":iid,"node":node}).first()
+        if not updated:
+            raise HTTPException(409,"Nie potwierdzono stałego powiązania węzła serwisowego.")
+        _event(db,sid,"SERVICE_PRO_OWNER_REQUESTED","TECHNICIAN")
+    return sid
+
+
+@router.post("/agent/workshop/remote/mesh-enroll")
+def workshop_session_mesh_enroll(request: WorkshopSessionMeshEnrollment):
+    _schema()
+    _authenticate(request)
+    def validate(db, lock=False):
+        grant = _grant(db, request.installationId)
+        if not _eligible(grant):
+            raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
+        row = db.execute(text("SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid"
+                              + (" FOR UPDATE" if lock else "")),
+                         {"sid":request.sessionId}).mappings().first()
+        # A standing service session already uses the OWNER-verified native
+        # SCM node. It must NEVER be sent through the one-time consent-group
+        # enrollment: that would misbind or re-enroll an existing MeshAgent.
+        if row and row.get("authorization_kind", "SESSION_CONSENT") != "SESSION_CONSENT":
+            raise HTTPException(
+                409, "Stała sesja serwisowa korzysta z zatwierdzonego węzła "
+                     "MeshCentral; rejestracja agenta pojedynczej sesji jest zabroniona."
+            )
+        _require_workshop_transport_consent(row, request.installationId, _now())
+        return grant
+    with engine.connect() as db:
+        validate(db)
+    try:
+        node = meshcentral.verify_session_node(
+            request.meshNodeId, str(request.sessionId), persistent_service=True,
+            single_prompt=(os.getenv("MESH_CENTRAL_SESSION_CONSENT_POLICY_ATTESTED") == "1"),
+        )
+    except meshcentral.MeshCentralError as exc:
+        raise HTTPException(409, "Serwer nie potwierdził jeszcze agenta tej sesji.") from exc
+    with engine.begin() as db:
+        db.execute(text("SELECT installation_id FROM guard.workshop_grants WHERE installation_id=:iid FOR UPDATE"),
+                   {"iid":request.installationId})
+        grant = validate(db, True)
+        if grant.get("mesh_node_id") and grant.get("mesh_session_id") != request.sessionId:
+            previous = db.execute(text("""SELECT * FROM guard.workshop_remote_sessions
+                WHERE id=:sid FOR UPDATE"""),
+                {"sid": grant.get("mesh_session_id")}).mappings().first()
+            if not _can_replace_session_node(previous, request.installationId):
+                raise HTTPException(409, "Poprzednie powiązanie agenta nie zostało bezpiecznie zakończone.")
+        elif grant.get("mesh_node_id") not in (None, "", node):
+            raise HTTPException(409, "Bieżąca sesja ma już innego agenta.")
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:node))"), {"node":node})
+        # Same physical installation uses ONE long-lived MeshAgent SCM node
+        # across both licence modes. Do not accept a different installation.
+        if db.execute(text("""
+            SELECT 1 FROM guard.installations
+            WHERE mesh_node_id=:node
+              AND installation_external_id<>:iid LIMIT 1
+        """), {"node":node, "iid":request.installationId}).first():
+            raise HTTPException(409, "Agent jest przypisany do innej instalacji.")
+        if db.execute(text("""SELECT 1 FROM guard.workshop_mesh_nodes
+                WHERE mesh_node_id=:node AND installation_id<>:iid"""),
+                {"node":node,"iid":request.installationId}).first():
+            raise HTTPException(409, "Agent jest przypisany do innej instalacji serwisowej.")
+        # A commercial session belonging to this same installation may
+        # have an active public share: do not silently reuse the transport
+        # while that viewer is still connected/authorized.
+        if db.execute(text("""
+            SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid AND rs.mesh_public_id IS NOT NULL
+              AND rs.status IN ('CONNECT_READY','ACTIVE')
+            LIMIT 1
+        """), {"iid":request.installationId}).first():
+            raise HTTPException(409, "Najpierw zakończ aktywne udostępnienie komercyjne.")
+        db.execute(text("""INSERT INTO guard.workshop_mesh_nodes(installation_id,mesh_node_id,session_id)
+            VALUES (:iid,:node,:sid) ON CONFLICT(installation_id) DO UPDATE
+            SET mesh_node_id=EXCLUDED.mesh_node_id,session_id=EXCLUDED.session_id,updated_at=now()"""),
+            {"iid":request.installationId,"node":node,"sid":request.sessionId})
+        _event(db, request.sessionId, "SESSION_AGENT_VERIFIED", "CLIENT")
+    return {"requestId":request.requestId,"sessionId":str(request.sessionId),"accepted":True}
+
+
+@router.post("/agent/workshop/mesh-provisioning-plan")
+def workshop_mesh_provisioning_plan(request: WorkshopAuth):
+    """Return server-selected service mesh ID to a registered workshop client.
+
+    A mesh ID is routing metadata, not an install token or unattended grant.
+    The client must obtain an approved MeshAgent package by a separate
+    protected provisioning path and complete identity-bound enrollment.
+    """
+    _schema()
+    _authenticate(request)
+    with engine.connect() as db:
+        grant = _grant(db, request.installationId)
+        if not _eligible(grant):
+            raise HTTPException(403, "Instalacja nie ma aktywnej licencji serwisowej PRO.")
+        group = expected_remote_mesh_group(grant)
+        if group is None:
+            raise HTTPException(503, "Nie skonfigurowano oddzielnej grupy serwisowej.")
+    return {
+        "requestId": request.requestId,
+        "mode": "SERVICE_PRO",
+        "meshGroupId": group,
+        "requiredAgentProfile": "SERVICE_PRO",
+        "unattendedAuthorized": False,
+        "serverTime": _now().isoformat(),
+    }
+
+
+def _validate_transition_locked(db, request, *, recovery=False):
+    """Hold grant lock while checking all workshop and commercial sessions."""
+    db.execute(text("""
+        SELECT installation_id FROM guard.workshop_grants
+        WHERE installation_id=:iid FOR UPDATE
+    """), {"iid": request.installationId}).first()
+    if not recovery:
+        _assert_no_profile_transition(db, request.installationId)
+    grant = _grant(db, request.installationId)
+    if not _eligible(grant):
+        raise HTTPException(403, "Zmiana profilu wymaga aktywnego serwisowego Pro.")
+    db.execute(text("""
+        SELECT installation_id FROM guard.workshop_standing_remote_authorizations
+        WHERE installation_id=:iid FOR UPDATE
+    """), {"iid": request.installationId}).first()
+    if request.targetMode == "CLIENT":
+        standing = standing_authorization_record(db, request.installationId)
+        if (standing and standing["owner_approved_at"] is not None
+                and standing["revoked_at"] is None):
+            raise HTTPException(409, "OWNER musi najpierw cofnąć stałe upoważnienie.")
+    pending_workshop = db.execute(text("""
+        SELECT 1 FROM guard.workshop_remote_sessions
+        WHERE installation_id=:iid
+          AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+        LIMIT 1
+    """), {"iid": request.installationId}).first()
+    pending_paid = db.execute(text("""
+        SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid
+              AND rs.status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            LIMIT 1
+    """), {"iid": request.installationId}).first()
+    if pending_workshop or pending_paid:
+        raise HTTPException(
+            409, "Zakończ wszystkie sesje Pro i serwisowe przed zmianą profilu."
+        )
+
+@router.post("/agent/workshop/profile-transition-check")
+def workshop_profile_transition_check(request: WorkshopProfileTransitionCheck):
+    """Compatibility-only read-only diagnostic. NEVER authorize Windows SCM."""
+    _schema()
+    _authenticate(request)
+    with engine.begin() as db:
+        _validate_transition_locked(db, request)
+    return JSONResponse({
+        "requestId": request.requestId,
+        "targetMode": request.targetMode,
+        "allowed": True,
+        "serverTime": _now().isoformat(),
+    }, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/agent/workshop/profile-transition-begin")
+def workshop_profile_transition_begin(request: WorkshopProfileTransitionCheck):
+    """Reserve a single local UAC transition, preventing new OWNER sessions.
+
+    The reservation has NO automatic expiry: losing the Windows process keeps
+    access blocked until a deliberately authenticated recovery/reconciliation.
+    The DB row does not authorize unattended access or affect Windows SCM.
+    """
+    _schema()
+    _authenticate(request)
+    with engine.begin() as db:
+        _validate_transition_locked(db, request)
+        existing = db.execute(text("""
+            SELECT reservation_id, released_at
+            FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).mappings().first()
+        if existing and existing["released_at"] is None:
+            raise HTTPException(409, "Poprzednie przełączenie profilu nie zostało zakończone.")
+        reservation = uuid.uuid4()
+        db.execute(text("""
+            INSERT INTO guard.workshop_profile_transition_locks AS profile
+                (installation_id,reservation_id,target_mode,created_at,released_at)
+            VALUES (:iid,:reservation,:target,now(),NULL)
+            ON CONFLICT (installation_id) DO UPDATE
+            SET reservation_id=EXCLUDED.reservation_id,
+                target_mode=EXCLUDED.target_mode,
+                created_at=now(),released_at=NULL,
+                recovery_owner_approved_at=NULL,
+                recovery_owner_reservation_id=NULL,recovered_profile=NULL
+            WHERE profile.released_at IS NOT NULL
+        """), {"iid": request.installationId,
+                "reservation": reservation, "target": request.targetMode})
+    return JSONResponse({
+        "requestId": request.requestId, "targetMode": request.targetMode,
+        "allowed": True, "reservationId": str(reservation),
+        "serverTime": _now().isoformat(),
+    }, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/agent/workshop/profile-transition-finish")
+def workshop_profile_transition_finish(request: WorkshopProfileTransitionFinish):
+    """Release exactly the reservation held by this authenticated installation.
+
+    Local SCM success and failure both release after the Windows subprocess
+    exits. Network failure or process crash leaves the lock in place.
+    """
+    _schema()
+    _authenticate(request)
+    with engine.begin() as db:
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        existing = db.execute(text("""
+            SELECT reservation_id,target_mode,released_at
+            FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).mappings().first()
+        if (not existing or existing["reservation_id"] != request.reservationId
+                or existing["target_mode"] != request.targetMode):
+            raise HTTPException(409, "Nieprawidłowa rezerwacja przełączenia profilu.")
+        if existing["released_at"] is None:
+            db.execute(text("""
+                UPDATE guard.workshop_profile_transition_locks
+                SET released_at=now()
+                WHERE installation_id=:iid AND reservation_id=:reservation
+            """), {"iid": request.installationId,
+                    "reservation": request.reservationId})
+    return JSONResponse({
+        "requestId": request.requestId, "released": True,
+        "targetMode": request.targetMode,
+        "serverTime": _now().isoformat(),
+    }, headers={"Cache-Control": "private, no-store"})
+
+
+def _verified_recovery_profile(target: str, inspected: str) -> bool:
+    """Accepted SHA/MSH-owned SCM states; SERVICE_PRO_RUNNING is NEVER safe."""
+    return inspected in ({
+        "SERVICE_PRO": {"SERVICE_PRO_DORMANT", "CLIENT_STOPPED", "CLIENT_RUNNING"},
+        "CLIENT": {"CLIENT_STOPPED", "SERVICE_PRO_DORMANT"},
+    }.get(target, set()))
+
+
+def approve_transition_recovery_for_owner(iid: uuid.UUID):
+    """Explicit OWNER action only; approval never releases the reservation.
+
+    Before approval OWNER must verify UAC has fully exited on this Windows
+    host; the additional local SCM inspection is performed by the app.
+    """
+    _schema()
+    from types import SimpleNamespace
+    with engine.begin() as db:
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": iid}).first()
+        lock = db.execute(text("""
+            SELECT reservation_id,target_mode,created_at,released_at
+            FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": iid}).mappings().first()
+        if not lock or lock["released_at"] is not None:
+            raise HTTPException(409, "Brak aktywnej rezerwacji do odzyskania.")
+        if lock["created_at"] > _now() - timedelta(minutes=2):
+            raise HTTPException(409, "Rezerwacja jest zbyt świeża; potwierdź zakończenie procesu UAC.")
+        _validate_transition_locked(db, SimpleNamespace(
+            installationId=iid, targetMode=lock["target_mode"]), recovery=True)
+        db.execute(text("""
+            UPDATE guard.workshop_profile_transition_locks
+            SET recovery_owner_approved_at=:now,
+                recovery_owner_reservation_id=:rid
+            WHERE installation_id=:iid AND reservation_id=:rid
+              AND released_at IS NULL
+        """), {"now": _now(), "iid": iid, "rid": lock["reservation_id"]})
+        db.execute(text("""
+            INSERT INTO guard.workshop_profile_transition_audit
+                (installation_id,reservation_id,action,actor_type)
+            VALUES (:iid,:rid,'OWNER_RECOVERY_APPROVED','OWNER')
+        """), {"iid":iid, "rid":lock["reservation_id"]})
+    return {"approved":True,"reservationId":str(lock["reservation_id"])}
+
+
+@router.post("/remote/workshop/transition/{installation_id}/authorize-recovery")
+def owner_approve_transition_recovery(
+    installation_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    return approve_transition_recovery_for_owner(installation_id)
+
+
+@router.post("/agent/workshop/profile-transition-recovery-status")
+def workshop_profile_transition_recovery_status(request: WorkshopAuth):
+    """Read-only; no reserved UUID is returned without exact agent identity."""
+    _schema()
+    _authenticate(request)
+    with engine.connect() as db:
+        lock = db.execute(text("""
+            SELECT reservation_id,target_mode,released_at,
+                   recovery_owner_approved_at,recovery_owner_reservation_id
+            FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid
+        """), {"iid": request.installationId}).mappings().first()
+    active = bool(lock and lock["released_at"] is None)
+    approved = bool(active and lock["recovery_owner_approved_at"] is not None
+        and lock["recovery_owner_approved_at"] > _now()-timedelta(minutes=5)
+        and lock["recovery_owner_reservation_id"] == lock["reservation_id"])
+    return JSONResponse({
+        "requestId":request.requestId,"pending":active,
+        "ownerRecoveryApproved":approved,
+        "reservationId":str(lock["reservation_id"]) if approved else None,
+        "targetMode":lock["target_mode"] if approved else None,
+    }, headers={"Cache-Control":"private, no-store"})
+
+
+@router.post("/agent/workshop/profile-transition-recover")
+def workshop_profile_transition_recover(request: WorkshopProfileTransitionRecovery):
+    """Manual post-crash recovery requires OWNER plus same-host local SCM check.
+
+    The backend cannot inspect SCM. It relies on an *explicit local GUI*
+    verification from the registered device, and an independent fresh OWNER
+    approval of the EXACT held reservation. Unknown/Running SERVICE_PRO fails
+    closed; never infer completion from a timed lease or device nickname.
+    """
+    _schema()
+    _authenticate(request)
+    if not _verified_recovery_profile(request.targetMode, request.verifiedProfile):
+        raise HTTPException(409, "Niebezpieczny stan usługi Windows — blokada pozostaje.")
+    from types import SimpleNamespace
+    with engine.begin() as db:
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        lock = db.execute(text("""
+            SELECT reservation_id,target_mode,released_at,
+                   recovery_owner_approved_at,recovery_owner_reservation_id
+            FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).mappings().first()
+        if (not lock or lock["released_at"] is not None
+                or lock["reservation_id"] != request.reservationId
+                or lock["target_mode"] != request.targetMode
+                or lock["recovery_owner_reservation_id"] != request.reservationId
+                or lock["recovery_owner_approved_at"] is None
+                or lock["recovery_owner_approved_at"] <= _now()-timedelta(minutes=5)):
+            raise HTTPException(409, "Wymagana świeża zgoda OWNER dla dokładnie tej rezerwacji.")
+        _validate_transition_locked(db, SimpleNamespace(
+            installationId=request.installationId,
+            targetMode=request.targetMode), recovery=True)
+        db.execute(text("""
+            UPDATE guard.workshop_profile_transition_locks
+            SET released_at=now(),recovered_profile=:profile,
+                recovery_owner_approved_at=NULL,recovery_owner_reservation_id=NULL
+            WHERE installation_id=:iid AND reservation_id=:rid AND released_at IS NULL
+        """), {"iid": request.installationId,"rid":request.reservationId,
+                "profile":request.verifiedProfile})
+        db.execute(text("""
+            INSERT INTO guard.workshop_profile_transition_audit
+                (installation_id,reservation_id,action,actor_type,verified_profile)
+            VALUES (:iid,:rid,'LOCAL_VERIFIED_RECOVERY','LOCAL_ADMIN',:profile)
+        """), {"iid":request.installationId,"rid":request.reservationId,
+                "profile":request.verifiedProfile})
+    return JSONResponse({
+        "requestId":request.requestId,"released":True,
+        "targetMode":request.targetMode,"verifiedProfile":request.verifiedProfile,
+    }, headers={"Cache-Control":"private, no-store"})
+
+
+@router.post("/agent/workshop/standing/bootstrap-ticket")
+def workshop_service_bootstrap_ticket(request: WorkshopAuth):
+    """Sign ONE short-lived, installation-bound Windows SCM enrollment ticket.
+
+    Bootstrapping the offline service only permits it to connect to MeshCentral.
+    It never grants a desktop/share capability. Every share still requires a
+    separately verified live node/group, same standing record and revocation
+    state. The GUI must request this AFTER OWNER+local written opt-in.
+    """
+    import base64
+    _schema()
+    pending = _authenticate(request)
+    with engine.begin() as db:
+        # Consistent lock order with OWNER revoke and grant downgrade.
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        db.execute(text("""
+            SELECT installation_id
+            FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        grant = _grant(db, request.installationId)
+        approval = standing_authorization_record(db, request.installationId)
+        if (not _eligible(grant) or not approval
+                or approval["owner_approved_at"] is None
+                or approval["local_opt_in_attested_at"] is None
+                or approval["revoked_at"] is not None
+                or approval["device_scope"] not in ("OWNED_WORKSHOP", "CLIENT_DIAGNOSTIC")
+                or not re.fullmatch(r"[0-9a-f]{64}", approval["prior_consent_sha256"])
+                or approval["approved_mesh_node_id"] not in (None, grant.get("mesh_node_id"))):
+            raise HTTPException(403, "Brak ważnych dwóch zgód na rozruch SERVICE PRO.")
+        group = expected_remote_mesh_group(grant)
+        # A single SHA-pinned SERVICE_PRO executable has one immutable MSH
+        # group. OWNER-owned and delegated diagnostics scopes are allowed
+        # only if the configured server policy for that precise scope agrees
+        # with that group; never silently enroll an OWNED_WORKSHOP node into
+        # a separate diagnostics group.
+        scope_group_key = {
+            "OWNED_WORKSHOP": "MESH_CENTRAL_OWNER_OWNED_MESH_ID",
+            "CLIENT_DIAGNOSTIC": "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID",
+        }[approval["device_scope"]]
+        if not group or group != os.getenv(scope_group_key, "").strip():
+            raise HTTPException(503, "Grupa SERVICE PRO jest niezgodna z upoważnionym zakresem.")
+        # Refuse starting while any paid/interactive session has a share.
+        conflict = db.execute(text("""
+            SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid AND rs.mesh_public_id IS NOT NULL
+              AND rs.status IN ('CONNECT_READY','ACTIVE')
+            LIMIT 1
+        """), {"iid": request.installationId}).first()
+        if conflict or _open(db, request.installationId):
+            raise HTTPException(409, "Zakończ istniejącą sesję przed przełączeniem profilu.")
+        issued = _now()
+        ticket = {
+            "schemaVersion": 1,
+            "kind": "MG_SERVICE_PRO_BOOTSTRAP_V1",
+            "installationId": str(request.installationId),
+            "deviceId": str(pending["device_id"]),
+            "requestId": str(request.requestId),
+            "nonce": str(uuid.uuid4()),
+            "profile": "SERVICE_PRO",
+            "meshGroupId": group,
+            "priorConsentSha256": approval["prior_consent_sha256"],
+            "issuedAt": issued.isoformat(),
+            "expiresAt": (issued + timedelta(seconds=60)).isoformat(),
+            "enrollmentOnly": True,
+            "unattendedAuthorized": False,
+        }
+        payload = json.dumps(ticket, sort_keys=True, ensure_ascii=False,
+                             separators=(",", ":"))
+        signature = license._signing_key().sign(payload.encode("utf-8"))
+    return {
+        "requestId": str(request.requestId),
+        "ticket": {
+            "payload": payload,
+            "signatureB64": base64.b64encode(signature).decode("ascii"),
+        },
+    }
+
+
+def authorized_standing_mesh_group(grant, approval):
+    """Exact group pinned by both the approved scope AND SERVICE_PRO license.
+
+    Registration cannot change an OWNER-approved scope or redirect a machine
+    into a different MeshCentral group just because its agent is online.
+    """
+    if not _eligible(grant) or not approval:
+        raise HTTPException(403, "Brak licencji lub upoważnienia SERVICE PRO.")
+    if (approval["owner_approved_at"] is None
+            or approval["local_opt_in_attested_at"] is None
+            or approval["revoked_at"] is not None
+            or approval["device_scope"] not in ("OWNED_WORKSHOP", "CLIENT_DIAGNOSTIC")
+            or not isinstance(approval["prior_consent_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", approval["prior_consent_sha256"])):
+        raise HTTPException(403, "Wymagane są dwie aktualne zgody na ten komputer.")
+    group = expected_remote_mesh_group(grant)
+    scope_key = {
+        "OWNED_WORKSHOP": "MESH_CENTRAL_OWNER_OWNED_MESH_ID",
+        "CLIENT_DIAGNOSTIC": "MESH_CENTRAL_SERVICE_DIAGNOSTICS_MESH_ID",
+    }[approval["device_scope"]]
+    scope_group = os.getenv(scope_key, "").strip()
+    if not group or not scope_group or group != scope_group:
+        raise HTTPException(503, "Grupa SERVICE PRO nie zgadza się z zakresem zgody.")
+    approved_node = approval["approved_mesh_node_id"]
+    if approved_node not in (None, grant.get("mesh_node_id")):
+        raise HTTPException(403, "OWNER zatwierdził inny węzeł SERVICE PRO.")
+    return group
+
+
+@router.post("/agent/workshop/mesh-enroll")
+def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
+    """Identity-bound registration; OWNER never has to type MeshCentral node IDs."""
+    _schema()
+    _authenticate(request)
+    # Fail early for STANDARD/disabled installations; do not permit them to
+    # flood the MeshCentral management CLI with arbitrary lookup requests.
+    with engine.connect() as db:
+        grant = _grant(db, request.installationId)
+        approval = standing_authorization_record(db, request.installationId)
+        authorized_standing_mesh_group(grant, approval)
+        approved_scope = approval["device_scope"]
+    local_id = request.meshNodeId
+    if not re.fullmatch(r"[A-Za-z0-9@$]{64}", local_id):
+        raise HTTPException(400, "Nieprawidłowy identyfikator MeshAgent.")
+    domain = os.getenv("MESH_CENTRAL_DOMAIN_ID", "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{0,64}", domain):
+        raise HTTPException(503, "Nieprawidłowa domena MeshCentral.")
+    node = f"node/{domain}/{local_id}"
+    # Server-side read-only verification defeats guessed IDs and hostname
+    # collisions; never trust the client-provided node ID without MeshCtrl.
+    try:
+        verified = meshcentral.verify_standing_service_node(node, approved_scope)
+    except meshcentral.MeshCentralError as exc:
+        raise HTTPException(
+            409, "MeshAgent musi być online w grupie zatwierdzonej dla zakresu upoważnienia."
+        ) from exc
+    if verified != node:
+        raise HTTPException(409, "Nie potwierdzono przypisanego węzła serwisowego.")
+    with engine.begin() as db:
+        # Serialize against OWNER revocation and PRO->STANDARD downgrade.
+        grant_lock = db.execute(text("""
+            SELECT enabled,edition FROM guard.workshop_grants
+            WHERE installation_id=:id FOR UPDATE
+        """), {"id":request.installationId}).mappings().first()
+        if not grant_lock or not grant_lock["enabled"] or grant_lock["edition"] != "PRO":
+            raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
+        grant = _grant(db, request.installationId)
+        if not _eligible(grant):
+            raise HTTPException(403, "Instalacja nie ma aktywnego serwisowego Pro.")
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_standing_remote_authorizations
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        current_approval = standing_authorization_record(db, request.installationId)
+        authorized_standing_mesh_group(grant, current_approval)
+        if current_approval["device_scope"] != approved_scope:
+            raise HTTPException(409, "Zakres upoważnienia zmienił się podczas powiązania.")
+        # Serialize the cross-mode association with commercial enrollment
+        # using exactly the same advisory lock on the full MeshCentral node.
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:node))"), {"node":node})
+        commercial = db.execute(text("""
+            SELECT 1 FROM guard.installations
+            WHERE mesh_node_id=:node
+              AND installation_external_id<>:iid LIMIT 1
+        """), {"node":node, "iid":request.installationId}).first()
+        if commercial:
+            raise HTTPException(409, "Węzeł należy do innego typu instalacji.")
+        # A valid SERVICE_PRO node may not be claimed by two workshop PCs.
+        # The advisory lock above serializes concurrent enrollment on this ID.
+        workshop_collision = db.execute(text("""
+            SELECT 1 FROM guard.workshop_mesh_nodes
+            WHERE mesh_node_id=:node AND installation_id<>:iid LIMIT 1
+        """), {"node":node,"iid":request.installationId}).first()
+        if workshop_collision:
+            raise HTTPException(409, "Węzeł SERVICE PRO jest już powiązany z inną instalacją.")
+        # Avoid destroying an already active commercial viewer when an
+        # installation switches to workshop mode with the same service.
+        if db.execute(text("""
+            SELECT 1 FROM guard.remote_sessions rs
+            JOIN guard.installations gi ON gi.id=rs.installation_id
+            WHERE gi.installation_external_id=:iid AND rs.mesh_public_id IS NOT NULL
+              AND rs.status IN ('CONNECT_READY','ACTIVE')
+            LIMIT 1
+        """), {"iid":request.installationId}).first():
+            raise HTTPException(409, "Najpierw zakończ aktywne udostępnienie komercyjne.")
+        assigned = db.execute(text("""
+            SELECT mesh_node_id FROM guard.workshop_mesh_nodes
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid":request.installationId}).scalar_one_or_none()
+        if assigned and assigned != node:
+            open_session = db.execute(text("""
+                SELECT 1 FROM guard.workshop_remote_sessions
+                WHERE installation_id=:iid
+                  AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+                LIMIT 1
+            """), {"iid":request.installationId}).first()
+            if open_session:
+                raise HTTPException(409, "Nie można zmieniać węzła podczas sesji.")
+        db.execute(text("""
+            INSERT INTO guard.workshop_mesh_nodes AS owned (installation_id,mesh_node_id)
+            VALUES (:iid,:node)
+            ON CONFLICT (installation_id) DO UPDATE
+            SET mesh_node_id=EXCLUDED.mesh_node_id,
+                session_id=CASE WHEN owned.mesh_node_id=EXCLUDED.mesh_node_id
+                    THEN owned.session_id ELSE NULL END,
+                updated_at=now()
+        """), {"iid":request.installationId, "node":node})
+        # Complete first-enrollment binding ONLY after MeshCentral confirms
+        # the exact SERVICE_PRO node/group, under the same grant lock. A
+        # pre-existing approved node is never replaced by a different one.
+        db.execute(text("""
+            UPDATE guard.workshop_standing_remote_authorizations
+            SET approved_mesh_node_id=:node,updated_at=now()
+            WHERE installation_id=:iid AND approved_mesh_node_id IS NULL
+              AND revoked_at IS NULL
+              AND owner_approved_at IS NOT NULL
+              AND local_opt_in_attested_at IS NOT NULL
+        """), {"iid":request.installationId,"node":node})
+        current = standing_authorization_record(db, request.installationId)
+        if current and current["approved_mesh_node_id"] not in (None,node):
+            # The record belongs to a previous service node: OWNER must
+            # explicitly revoke and approve a new device after re-enrollment.
+            invalidate_standing_authorization(db,request.installationId,"SERVICE_RIGHTS_CHANGED")
+    return {"requestId":request.requestId,"accepted":True,
+            "meshReady":True,"serverTime":_now().isoformat()}
+
+
+@router.post("/agent/workshop/support-request")
+def workshop_support_request(request: WorkshopSupport):
+    _schema()
+    _authenticate(request)
+    with engine.begin() as db:
+        if not _eligible(_grant(db,request.installationId)):
+            raise HTTPException(403,"Zgłoszenie serwisowe wymaga aktywnego Pro.")
+        received = db.execute(text("""
+            INSERT INTO guard.workshop_support_requests(
+                local_request_id,installation_id,subject,description,diagnostics_included)
+            VALUES (:local,:iid,:subject,:description,:diag)
+            ON CONFLICT (local_request_id) DO NOTHING RETURNING id
+        """),{
+            "local":request.localRequestId,"iid":request.installationId,
+            "subject":request.subject[:240],"description":request.description[:6000],
+            "diag":bool(request.diagnosticsIncluded)
+        }).scalar_one_or_none()
+        # Do not persist diagnostics in this initial transport. The user
+        # can submit reports through the dedicated opt-in diagnostics route.
+    return {"requestId":request.requestId,"accepted":True,"duplicate":received is None,
+            "serverTime":_now().isoformat()}
+
+
+@router.post("/agent/workshop/remote/poll")
+def workshop_remote_poll(request: WorkshopAuth):
+    _schema()
+    _authenticate(request)
+    with engine.begin() as db:
+        grant = _grant(db,request.installationId)
+        row = _open(db,request.installationId,entitlement_lost=not _eligible(grant))
+    return {"requestId":request.requestId,"serverTime":_now().isoformat(),
+            "session":_public(row)}
+
+
+@router.post("/agent/workshop/remote/decision")
+def workshop_remote_decision(request: WorkshopDecision):
+    _schema()
+    _authenticate(request)
+    if request.allowFiles and not request.allowDesktop:
+        raise HTTPException(400,"Pliki wymagają zgody na pulpit.")
+    expired = False
+    with engine.begin() as db:
+        if not _eligible(_grant(db,request.installationId)) and request.allowDesktop:
+            raise HTTPException(403, "Zdalna pomoc wymaga serwisowego Pro.")
+        row = db.execute(text("""
+            SELECT * FROM guard.workshop_remote_sessions
+            WHERE id=:sid AND installation_id=:iid FOR UPDATE
+        """), {"sid":request.sessionId,"iid":request.installationId}).mappings().first()
+        if not row:
+            raise HTTPException(404,"Nie znaleziono żądania.")
+        if row["status"]!="REQUESTED":
+            # A timed-out GUI response can be retried without a second click.
+            # Reuse only the exact prior decision. Never renew an expired lease.
+            same_approval = (
+                row["status"] in ("CONSENTED", "CONNECT_READY", "ACTIVE")
+                and request.allowDesktop
+                and set(row["granted_capabilities"] or [])
+                    == ({"desktop", "files"} if request.allowFiles else {"desktop"})
+                and (row.get("mesh_share_expires_at") or row["expires_at"]) > _now()
+            )
+            same_denial = row["status"] == "DENIED" and not request.allowDesktop
+            if same_approval or same_denial:
+                return {"requestId":request.requestId,"serverTime":_now().isoformat(),
+                        "session":_public(row)}
+            raise HTTPException(409,"Żądanie nie oczekuje na decyzję.")
+        if row["expires_at"]<_now():
+            expired = True
+            db.execute(text("""
+                UPDATE guard.workshop_remote_sessions
+                SET status='EXPIRED',ended_at=:now WHERE id=:sid
+            """),{"sid":row["id"],"now":_now()})
+            _event(db,row["id"],"CONSENT_TIMEOUT")
+        elif not request.allowDesktop:
+            db.execute(text("""
+                UPDATE guard.workshop_remote_sessions
+                SET status='DENIED',ended_at=:now WHERE id=:sid
+            """),{"sid":row["id"],"now":_now()})
+            _event(db,row["id"],"CLIENT_DENIED","CLIENT")
+        else:
+            allowed=["desktop"]+(["files"] if request.allowFiles else [])
+            consented_at = _now()
+            db.execute(text("""
+                UPDATE guard.workshop_remote_sessions
+                SET status='CONSENTED',consented_at=:now,
+                    expires_at=:consent_expires,
+                    granted_capabilities=CAST(:caps AS jsonb)
+                WHERE id=:sid
+            """),{"sid":row["id"],"now":consented_at,
+                  "consent_expires":consented_at+timedelta(minutes=10),
+                  "caps":json.dumps(allowed)})
+            _event(db,row["id"],"CLIENT_CONSENTED","CLIENT")
+        updated = db.execute(text("""
+            SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid
+        """), {"sid":row["id"]}).mappings().one()
+    if expired:
+        return JSONResponse(status_code=410,content={"detail":"Zgoda na sesję wygasła."})
+    return {"requestId":request.requestId,"serverTime":_now().isoformat(),
+            "session":_public(updated)}
+
+
+def _end(db, row, node):
+    if row["mesh_public_id"]:
+        if not node:
+            raise HTTPException(502,"Brak węzła do cofnięcia udostępnienia.")
+        try:
+            meshcentral.revoke_share(node,row["mesh_public_id"])
+        except meshcentral.MeshCentralError as exc:
+            raise HTTPException(502,"Nie potwierdzono zakończenia połączenia.") from exc
+    db.execute(text("""
+        UPDATE guard.workshop_remote_sessions SET status='ENDED',
+            ended_at=COALESCE(ended_at,:now),last_activity_at=:now,
+            mesh_public_id=NULL,mesh_share_expires_at=NULL WHERE id=:sid
+    """),{"sid":row["id"],"now":_now()})
+
+
+@router.post("/agent/workshop/remote/end")
+def workshop_remote_end(request: WorkshopEnd):
+    _schema()
+    _authenticate(request)
+    with engine.begin() as db:
+        row=db.execute(text("""
+            SELECT * FROM guard.workshop_remote_sessions
+            WHERE id=:sid AND installation_id=:iid FOR UPDATE
+        """),{"sid":request.sessionId,"iid":request.installationId}).mappings().first()
+        if not row:
+            raise HTTPException(404,"Nie znaleziono sesji.")
+        grant=_grant(db,request.installationId)
+        _end(db,row,grant["mesh_node_id"] if grant else None)
+        _event(db,row["id"],"CLIENT_ENDED","CLIENT")
+    return {"requestId":request.requestId,"serverTime":_now().isoformat(),
+            "ended":True,"revokeConfirmed":True}
+
+
+def end_for_owner(sid):
+    _schema()
+    with engine.begin() as db:
+        row=db.execute(text("""
+            SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid FOR UPDATE
+        """),{"sid":sid}).mappings().first()
+        if not row:
+            raise HTTPException(404,"Nie znaleziono sesji.")
+        grant=_grant(db,row["installation_id"])
+        _end(db,row,grant["mesh_node_id"] if grant else None)
+        _event(db,row["id"],"OWNER_ENDED","TECHNICIAN")
+    return row["installation_id"]
+
+
+def connect_for_owner(sid):
+    _schema()
+    with engine.begin() as db:
+        row=db.execute(text("""
+            SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid FOR UPDATE
+        """),{"sid":sid}).mappings().first()
+        if not row:
+            raise HTTPException(404,"Nie znaleziono sesji.")
+        grant=_grant(db,row["installation_id"])
+        if not _eligible(grant):
+            raise HTTPException(403,"Tryb serwisowy Pro jest nieaktywny.")
+        if row.get("authorization_kind","SESSION_CONSENT") not in ("SESSION_CONSENT","STANDING_SERVICE"):
+            raise HTTPException(403,"Nieznany sposób autoryzacji sesji.")
+        scope = None
+        if row.get("authorization_kind","SESSION_CONSENT") == "STANDING_SERVICE":
+            if list(row["granted_capabilities"] or []) != ["desktop"]:
+                raise HTTPException(403,"Tryb serwisowy dopuszcza wyłącznie pulpit.")
+            approval = standing_authorization_record(db, row["installation_id"])
+            if not standing_authorization_record_valid(grant, approval):
+                raise HTTPException(403,"Brak ważnej zgody OWNER i potwierdzenia lokalnego.")
+            scope = approval["device_scope"]
+            try:
+                meshcentral.verify_standing_service_node(grant["mesh_node_id"],scope)
+            except meshcentral.MeshCentralError as exc:
+                raise HTTPException(409,"Węzeł nie należy do aktywnej grupy serwisowej.") from exc
+        if row["status"] not in ("CONSENTED","CONNECT_READY","ACTIVE"):
+            raise HTTPException(409,"Klient nie wyraził zgody na pulpit.")
+        if (row["status"] in ("CONNECT_READY", "ACTIVE")
+                and (row["mesh_share_expires_at"] is None
+                     or row["mesh_share_expires_at"] <= _now())):
+            raise HTTPException(410, "Udostępnienie wygasło; rozpocznij nową sesję.")
+        if row["status"]=="CONSENTED" and row["expires_at"]<_now():
+            # Leave state unchanged for retryable expiration reconciliation.
+            raise HTTPException(410,"Zgoda na sesję wygasła.")
+        if not session_node_ready(grant, row):
+            raise HTTPException(409,"Brak powiązania MeshCentral.")
+        if "desktop" not in (row["granted_capabilities"] or []):
+            raise HTTPException(409,"Nie udzielono zgody na pulpit.")
+        node=grant["mesh_node_id"]
+        previous=row["mesh_public_id"]
+        caps=list(row["granted_capabilities"] or [])
+        iid=row["installation_id"]
+    if previous:
+        try:
+            meshcentral.revoke_share(node,previous)
+        except meshcentral.MeshCentralError as exc:
+            raise HTTPException(502,"Nie potwierdzono cofnięcia poprzedniego linku.") from exc
+    # MeshCentral starts the share lease during the external call, not when
+    # the database transaction eventually commits. Never advertise a later
+    # expiry than the remote service can guarantee.
+    share_expires = _now() + timedelta(minutes=60)
+    try:
+        share = (
+            meshcentral.create_standing_service_share(
+                node,scope,f"Multi-Servis diagnostyka {str(sid)[:8]}",60
+            ) if scope is not None else
+            meshcentral.create_client_approved_share(node,str(sid),f"Multi-Servis {str(sid)[:8]}",caps,60)
+        )
+    except meshcentral.MeshCentralError as exc:
+        raise HTTPException(502, f"MeshCentral: {exc}") from exc
+    try:
+        # Stop even a just-created link if it no longer belongs to the exact
+        # approved diagnostic MeshCentral group.
+        if scope is not None:
+            meshcentral.verify_standing_service_node(node,scope)
+        with engine.begin() as db:
+            row=db.execute(text("""
+                SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid FOR UPDATE
+            """),{"sid":sid}).mappings().first()
+            grant=_grant(db,iid)
+            current_kind = row.get("authorization_kind","SESSION_CONSENT") if row else None
+            if scope is not None and current_kind != "STANDING_SERVICE":
+                raise HTTPException(403,"Tryb sesji serwisowej uległ zmianie.")
+            if scope is not None:
+                # Serialize with OWNER revoke/downgrade before publishing the
+                # already-created Mesh link. A failed check revokes that link.
+                db.execute(text("""
+                    SELECT installation_id FROM guard.workshop_standing_remote_authorizations
+                    WHERE installation_id=:iid FOR UPDATE
+                """), {"iid":iid}).first()
+                approval = standing_authorization_record(db, iid)
+                if (not standing_authorization_record_valid(grant, approval)
+                        or approval["device_scope"] != scope):
+                    raise HTTPException(403,"Upoważnienie zostało cofnięte podczas łączenia.")
+            if scope is None and current_kind != "SESSION_CONSENT":
+                raise HTTPException(403,"Tryb zgody zmienił się podczas tworzenia sesji.")
+            if share_expires <= _now():
+                raise HTTPException(410, "Nowy link MeshCentral wygasł przed zapisem.")
+            if (not row or not _eligible(grant) or not session_node_ready(grant, row)
+                    or grant["mesh_node_id"]!=node or row.get("ended_at") is not None
+                    or row["mesh_public_id"] != previous
+                    or (row["status"] in ("CONNECT_READY", "ACTIVE")
+                        and (row["mesh_share_expires_at"] is None
+                             or row["mesh_share_expires_at"] <= _now()))
+                    or row["status"] not in ("CONSENTED","CONNECT_READY","ACTIVE")
+                    or "desktop" not in (row["granted_capabilities"] or [])
+                    or list(row["granted_capabilities"] or []) != caps
+                    or (row["status"] == "CONSENTED" and row["expires_at"] <= _now())):
+                raise HTTPException(403,"Uprawnienie, węzeł lub zgoda zmieniły się.")
+            db.execute(text("""
+                UPDATE guard.workshop_remote_sessions
+                SET status='CONNECT_READY',mesh_public_id=:public,
+                    mesh_share_expires_at=:expires,last_error=NULL,
+                    last_activity_at=:now WHERE id=:sid
+            """),{"sid":sid,"public":share.public_id,
+                 "expires":share_expires,"now":_now()})
+            _event(db,sid,"MESH_CREATED","MESH")
+    except Exception:
+        try:
+            meshcentral.revoke_share(node,share.public_id)
+        except meshcentral.MeshCentralError:
+            pass
+        raise
+    return {"sessionId":str(sid),"url":share.url,
+            "expiresAt":share_expires.isoformat(),
+            "capabilities":caps}
+
+
+def bind_for_owner(iid, node_id):
+    _schema()
+    node_id=node_id.strip()
+    if not node_id.startswith("node/") or len(node_id)>300:
+        raise HTTPException(400,"MeshCentral wymaga identyfikatora node/…")
+    with engine.begin() as db:
+        grant=_grant(db,iid)
+        if not _eligible(grant):
+            raise HTTPException(403,"Wymagany serwisowy Pro.")
+        collision=db.execute(text("""
+            SELECT 1 FROM guard.installations
+            WHERE mesh_node_id=:node AND is_current=TRUE LIMIT 1
+        """),{"node":node_id}).first()
+        if collision:
+            raise HTTPException(409, "Węzeł MeshCentral przypisany jest do innej licencji.")
+        lock=db.execute(text("""
+            SELECT id FROM guard.workshop_remote_sessions
+            WHERE installation_id=:iid AND mesh_public_id IS NOT NULL FOR UPDATE
+        """),{"iid":iid}).first()
+        previous=grant["mesh_node_id"]
+        if lock and previous!=node_id:
+            raise HTTPException(409,"Najpierw zakończ udostępnioną sesję.")
+        db.execute(text("""
+            INSERT INTO guard.workshop_mesh_nodes(installation_id,mesh_node_id)
+            VALUES (:iid,:node)
+            ON CONFLICT (installation_id) DO UPDATE SET
+               mesh_node_id=EXCLUDED.mesh_node_id,session_id=NULL,updated_at=now()
+        """),{"iid":iid,"node":node_id})
+    return {"meshNodeId":node_id}
+
+
+# The router is included under /multiguard by multiguard_remote.
+# Every OWNER control is separately authenticated. No endpoint here
+# changes KeyGate, Windows SCM or signs an unattended activation ticket.
+class OwnerStandingApprovalBody(BaseModel):
+    deviceScope: Literal["OWNED_WORKSHOP", "CLIENT_DIAGNOSTIC"]
+    priorConsentSha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+@router.get("/remote/workshop/entitlement/{installation_id}")
+def owner_workshop_entitlement(
+    installation_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    _schema()
+    with engine.connect() as db:
+        grant = _grant(db, installation_id)
+        record = standing_authorization_record(db, installation_id)
+        mode = remote_entitlement_mode(grant)
+        prepared = bool(record and record["owner_approved_at"] is not None
+                        and record["revoked_at"] is None)
+        confirmed = bool(prepared and record["local_opt_in_attested_at"] is not None)
+        bound = standing_authorization_record_valid(grant, record)
+        node = grant.get("mesh_node_id") if bound else None
+        scope = record["device_scope"] if bound else None
+        transition_pending = bool(db.execute(text("""
+            SELECT 1 FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid AND released_at IS NULL LIMIT 1
+        """), {"iid": installation_id}).first())
+    # A database authorization is never sufficient to label a SERVICE PRO
+    # computer as ready. Confirm the exact ONLINE node, dedicated group and
+    # effective desktop consent policy with MeshCentral; never create a share
+    # from this read-only endpoint. A future connect call rechecks all of it.
+    online = False
+    if node and scope and not transition_pending:
+        try:
+            online = meshcentral.verify_standing_service_node(node, scope) == node
+        except meshcentral.MeshCentralError:
+            online = False
+    ready = bool(bound and online and not transition_pending)
+    reason = (
+        "SERVICE_PRO_READY" if ready else
+        "SERVICE_PRO_PROFILE_TRANSITION_PENDING" if transition_pending else
+        "SERVICE_PRO_ENTITLEMENT_REQUIRED" if mode != "SERVICE_PRO" else
+        "SERVICE_PRO_OWNER_APPROVAL_REQUIRED" if not prepared else
+        "SERVICE_PRO_LOCAL_OPT_IN_REQUIRED" if not confirmed else
+        "SERVICE_PRO_NODE_BINDING_REQUIRED" if not bound else
+        "SERVICE_PRO_MESH_OFFLINE_OR_POLICY_UNVERIFIED"
+    )
+    return JSONResponse({
+        "mode": mode,
+        "ownerPrepared": prepared,
+        "localOptInAttested": confirmed,
+        "exactNodeBound": bound,
+        "meshNodeOnlineAndPolicyVerified": online,
+        "unattendedReady": ready,
+        "profileTransitionPending": transition_pending,
+        "reasonCode": reason,
+    }, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/remote/workshop/standing/{installation_id}/prepare")
+def owner_workshop_prepare_standing(
+    installation_id: uuid.UUID,
+    body: OwnerStandingApprovalBody,
+    _: CurrentUser = Depends(require_owner),
+):
+    return JSONResponse(
+        prepare_standing_authorization_for_owner(
+            installation_id, body.deviceScope, body.priorConsentSha256
+        ),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/remote/workshop/standing/{installation_id}/revoke")
+def owner_workshop_revoke_standing(
+    installation_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    return JSONResponse(
+        revoke_standing_authorization_for_owner(installation_id),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/remote/workshop/{installation_id}/request-consent")
+def owner_workshop_request_interactive(
+    installation_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    return {"sessionId": str(request_consent_for_owner(installation_id))}
+
+
+@router.post("/remote/workshop/{installation_id}/request-standing")
+def owner_workshop_request_standing(
+    installation_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    return {"sessionId": str(request_for_owner(installation_id))}
+
+
+@router.get("/remote/workshop/sessions/{session_id}")
+def owner_workshop_session_status(
+    session_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    _schema()
+    with engine.begin() as db:
+        row = db.execute(text("""
+            SELECT * FROM guard.workshop_remote_sessions WHERE id=:sid
+        """), {"sid": session_id}).mappings().first()
+        if not row:
+            raise HTTPException(404, "Nie znaleziono sesji.")
+        grant = _grant(db, row["installation_id"])
+        if not _eligible(grant):
+            raise HTTPException(403, "Serwisowy Pro nie jest aktywny.")
+        snapshot = _public(row)
+        snapshot["meshLinked"] = session_node_ready(grant, row)
+    return JSONResponse(snapshot, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/remote/workshop/sessions/{session_id}/connect")
+def owner_workshop_connect(
+    session_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    return JSONResponse(
+        connect_for_owner(session_id),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/remote/workshop/sessions/{session_id}/end")
+def owner_workshop_end(
+    session_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    end_for_owner(session_id)
+    return {"ended": True}
+

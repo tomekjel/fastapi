@@ -653,6 +653,9 @@ def create_remote_session(
     user: CurrentUser = Depends(require_owner),
 ):
     _ensure_schema()
+    # Ensure the shared transition-lock table exists even if the first
+    # request after deploy is a commercial OWNER remote-session request.
+    _workshop_remote._schema()
     now = datetime.now(timezone.utc)
     user_id, user_label = _owner_label(user)
 
@@ -662,6 +665,7 @@ def create_remote_session(
                 """
                 SELECT
                     sr.id,sr.installation_id,sr.service_device_id,sr.subject,
+                    gi.installation_external_id,
                     gi.plan_code,gi.lifecycle,gi.valid_until,gi.is_current,
                     gi.mesh_node_id,sr.status AS support_status
                 FROM guard.support_requests sr
@@ -674,6 +678,30 @@ def create_remote_session(
 
         if not support:
             raise HTTPException(404, "Nie znaleziono zgłoszenia Multi-Guard.")
+        # Serialize creation of paid sessions with the SERVICE_PRO transition
+        # reservation. Guard rows are locked only for the same installation
+        # UUID; no live service or session is mutated by this check.
+        # Commercial guard.installations.id is a different UUID from the
+        # actual pending/OWNER installation_external_id. Always serialize on
+        # the latter, as used by SERVICE_PRO grants and Windows identity.
+        external_iid = support["installation_external_id"]
+        if external_iid is None:
+            raise HTTPException(409, "Brak powiązania tożsamości instalacji.")
+        connection.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": external_iid}).first()
+        _workshop_remote._assert_no_profile_transition(connection, external_iid)
+        # Both commercial and workshop creation acquire the same grant lock
+        # before checking the OTHER mode. This prevents two concurrent
+        # OWNER requests for the same machine from racing across tables.
+        if connection.execute(text("""
+            SELECT 1 FROM guard.workshop_remote_sessions
+            WHERE installation_id=:iid
+              AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            LIMIT 1
+        """), {"iid": external_iid}).first():
+            raise HTTPException(409, "Zakończ sesję serwisową przed żądaniem klienta Pro.")
         if (not _has_verified_remote_pro(connection, support, now)
                 or _plan_change_pending(connection,support["installation_id"])):
             raise HTTPException(403, "Zdalna pomoc wymaga aktywnej licencji Pro.")
@@ -1118,3 +1146,12 @@ def bind_mesh_node(
             )
 
     return {"status": "ok", "meshNodeId": node_id}
+
+
+# Add the authenticated /multiguard/agent/workshop/... API routes to the
+# existing production-registered /multiguard router. Keeping one parent
+# router preserves all commercial PRO endpoints and avoids any changes to
+# application entrypoints. Importing last avoids the workshop module's
+# existing read-only dependency on commercial schema/serializers.
+from app.routers import multiguard_workshop_remote as _workshop_remote
+router.include_router(_workshop_remote.router)
