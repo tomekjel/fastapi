@@ -4,6 +4,7 @@ Run only in /opt/multiservis on LXC 103 after production backup.
 No license modes/flags are enabled here.
 """
 from pathlib import Path
+import uuid
 from datetime import datetime, timezone
 import ast
 import shutil
@@ -21,7 +22,7 @@ new = '''    if pending["status"] in ("ASSIGNED", "PROVISIONED"):
         # paid KeyGate link. Mere existence of a grant is NOT sufficient.
         with engine.connect() as db:
             selected = license._owner_effective_entitlement_mode(
-                db, request.installationId
+                db, uuid.UUID(str(request.installationId))
             )
             grant = _grant(db, request.installationId)
             allowed_service = selected == "SERVICE" and _eligible(grant)
@@ -31,12 +32,16 @@ new = '''    if pending["status"] in ("ASSIGNED", "PROVISIONED"):
                 "REMOTE_MODE_CUSTOMER_LICENSE: Tryb CLIENT wymaga ścieżki Pro "
                 "i każdorazowej zgody; serwisowy dostęp jest wyłączony.",
             )'''
-if s.count(old) != 1:
-    raise SystemExit("ABORT: production source differs; no changes")
-if s.count(new) != 0:
-    raise SystemExit("ABORT: migration already applied")
-changed = s.replace(old, new)
+if s.count(old) == 1 and s.count(new) == 0:
+    changed = s.replace(old, new)
+elif s.count(old) == 0 and s.count(new) == 1:
+    changed = s
+else:
+    raise SystemExit("ABORT: unexpected production source; no changes")
 ast.parse(changed, filename=str(p))
+if changed == s:
+    print("ALREADY_APPLIED")
+    raise SystemExit(0)
 backup = p.with_name(p.name + ".backup-service-auth-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
 shutil.copy2(p, backup)
 p.write_text(changed, encoding="utf-8")
