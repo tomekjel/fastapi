@@ -18,6 +18,28 @@ class FinishRequest(ProfileRequest):
     reservationId: UUID
     succeeded: bool
 
+def authenticate_transition(req):
+    """Authenticate a registered device in either owner mode.
+
+    _authenticate rejects CLIENT after OWNER has switched out of SERVICE.
+    That must not prevent the machine from disabling the SERVICE profile.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    when = req.sentAt
+    if when.tzinfo is None or abs((now - when).total_seconds()) > 300:
+        raise HTTPException(401, "Wygasłe uwierzytelnienie przełączenia.")
+    pending = wr.license._authenticate_pending(
+        str(req.installationId), req.deviceId, req.discoveryCredential
+    )
+    if pending["status"] in ("ARCHIVED", "UNINSTALLED", "IGNORED"):
+        raise HTTPException(403, "Instalacja nieaktywna.")
+    if req.targetMode == "SERVICE_PRO":
+        wr._authenticate(req)
+    elif req.targetMode != "CLIENT":
+        raise HTTPException(400, "Nieprawidłowy profil Windows.")
+
+
 def check(db, req):
     if req.targetMode not in ("SERVICE_PRO", "CLIENT"):
         raise HTTPException(400, "Nieprawidłowy profil Windows.")
@@ -80,7 +102,7 @@ def schema(db):
 @router.post("/agent/workshop/profile-transition-begin")
 def begin(req: ProfileRequest):
     wr._schema()
-    wr._authenticate(req)
+    authenticate_transition(req)
     with wr.engine.begin() as db:
         schema(db)
         # Serialize with other transitions for the same installation.
@@ -113,7 +135,7 @@ def begin(req: ProfileRequest):
 @router.post("/agent/workshop/profile-transition-finish")
 def finish(req: FinishRequest):
     wr._schema()
-    wr._authenticate(req)
+    authenticate_transition(req)
     with wr.engine.begin() as db:
         schema(db)
         row=db.execute(text("""
@@ -139,7 +161,7 @@ def finish(req: FinishRequest):
 @router.post("/agent/workshop/profile-transition-recovery-status")
 def recovery_status(req: wr.WorkshopAuth):
     wr._schema()
-    wr._authenticate(req)
+    authenticate_transition(req)
     with wr.engine.begin() as db:
         schema(db)
         row=db.execute(text("""
@@ -160,6 +182,6 @@ class RecoverRequest(ProfileRequest):
 def recover(req: RecoverRequest):
     # Never trust a local assertion by itself as proof of administrator
     # authorization. Separate OWNER approval workflow is still required.
-    wr._authenticate(req)
+    authenticate_transition(req)
     raise HTTPException(409, "Odzyskanie wymaga odrębnego zatwierdzenia OWNER.")
 
