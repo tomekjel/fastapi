@@ -22,8 +22,14 @@ def check(db, req):
     if req.targetMode not in ("SERVICE_PRO", "CLIENT"):
         raise HTTPException(400, "Nieprawidłowy profil Windows.")
     grant = wr._grant(db, req.installationId)
-    if not wr._eligible(grant):
+    # OWNER may have selected CLIENT before Windows finishes restoring its
+    # dormant profile; do not deadlock the safe SERVICE -> CLIENT recovery.
+    if req.targetMode == "SERVICE_PRO" and not wr._eligible(grant):
         raise HTTPException(403, "Brak aktywnej licencji SERVICE.")
+    if req.targetMode == "CLIENT" and (
+        not grant or grant["owner_mode"] not in ("CLIENT", "SERVICE")
+    ):
+        raise HTTPException(403, "Brak uprawnienia do przywrócenia profilu klienta.")
     iid = req.installationId
     # Workshop rows use the canonical UUID. Customer Pro sessions use
     # guard.installations.id, a different UUID. Check each exact scope.
