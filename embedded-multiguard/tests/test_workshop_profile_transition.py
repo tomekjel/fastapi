@@ -12,7 +12,7 @@ import types
 import unittest
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -68,11 +68,20 @@ class FakeDatabase:
             self.reservation = {
                 "reservation_id": params["reservation"],
                 "target_mode": params["target"],
+                "created_at": datetime.now(timezone.utc)-timedelta(minutes=3),
                 "released_at": None,
+                "recovery_owner_approved_at": None,
+                "recovery_owner_reservation_id": None,
             }
             return FakeCursor()
         if "UPDATE guard.workshop_profile_transition_locks" in query:
-            self.reservation["released_at"] = datetime.now(timezone.utc)
+            if "SET recovery_owner_approved_at" in query:
+                self.reservation["recovery_owner_approved_at"] = params["now"]
+                self.reservation["recovery_owner_reservation_id"] = params["rid"]
+            else:
+                self.reservation["released_at"] = datetime.now(timezone.utc)
+            return FakeCursor()
+        if "INSERT INTO guard.workshop_profile_transition_audit" in query:
             return FakeCursor()
         if "SELECT 1 FROM guard.workshop_remote_sessions" in query:
             return FakeCursor((1,) if self.workshop_open else None)
@@ -230,6 +239,100 @@ class TransitionReservationTests(unittest.TestCase):
                 api.workshop_profile_transition_finish(wrong)
             self.assertEqual(error.exception.status_code, 409)
             self.assertIsNone(self.db.reservation["released_at"])
+
+
+
+class TransitionRecoveryTests(TransitionReservationTests):
+    """Independent mock DB verifies the real recovery policy, not a fake route."""
+
+    def make(self, target="SERVICE_PRO"):
+        from contextlib import ExitStack
+        req = request(target)
+        stack = ExitStack()
+        for mocked in self.auth():
+            stack.enter_context(mocked)
+        api.workshop_profile_transition_begin(req)
+        return req, stack
+
+    def recovery(self, req, *, identifier=None, profile="SERVICE_PRO_DORMANT"):
+        return api.WorkshopProfileTransitionRecovery(
+            requestId=req.requestId, nonce=req.nonce, sentAt=req.sentAt,
+            installationId=req.installationId, deviceId=req.deviceId,
+            discoveryCredential=req.discoveryCredential,
+            targetMode=req.targetMode,
+            reservationId=identifier or self.db.reservation["reservation_id"],
+            verifiedProfile=profile, localConfirmation=True,
+        )
+
+    def test_owner_approval_alone_does_not_unlock(self):
+        req, stack = self.make()
+        with stack:
+            api.approve_transition_recovery_for_owner(req.installationId)
+            self.assertIsNone(self.db.reservation["released_at"])
+            api._assert_no_profile_transition(self.db, req.installationId)
+
+    def test_no_owner_approval_keeps_lock(self):
+        req, stack = self.make()
+        with stack:
+            with self.assertRaises(HTTPException) as error:
+                api.workshop_profile_transition_recover(self.recovery(req))
+            self.assertEqual(error.exception.status_code, 409)
+            self.assertIsNone(self.db.reservation["released_at"])
+
+    def test_too_recent_reservation_cannot_be_approved(self):
+        req, stack = self.make()
+        with stack:
+            self.db.reservation["created_at"] = datetime.now(timezone.utc)
+            with self.assertRaises(HTTPException) as error:
+                api.approve_transition_recovery_for_owner(req.installationId)
+            self.assertEqual(error.exception.status_code, 409)
+
+    def test_approval_expires_without_unlocking(self):
+        req, stack = self.make()
+        with stack:
+            api.approve_transition_recovery_for_owner(req.installationId)
+            self.db.reservation["recovery_owner_approved_at"] -= timedelta(minutes=6)
+            with self.assertRaises(HTTPException) as error:
+                api.workshop_profile_transition_recover(self.recovery(req))
+            self.assertEqual(error.exception.status_code, 409)
+
+    def test_wrong_reservation_cannot_recover(self):
+        req, stack = self.make()
+        with stack:
+            api.approve_transition_recovery_for_owner(req.installationId)
+            with self.assertRaises(HTTPException) as error:
+                api.workshop_profile_transition_recover(
+                    self.recovery(req, identifier=uuid.uuid4()))
+            self.assertEqual(error.exception.status_code, 409)
+
+    def test_local_inspection_deny_running_service_pro(self):
+        self.assertFalse(api._verified_recovery_profile("CLIENT", "SERVICE_PRO_RUNNING"))
+        self.assertFalse(api._verified_recovery_profile("SERVICE_PRO", "SERVICE_PRO_RUNNING"))
+        self.assertFalse(api._verified_recovery_profile("CLIENT", "CLIENT_RUNNING"))
+        self.assertTrue(api._verified_recovery_profile("SERVICE_PRO", "CLIENT_RUNNING"))
+        self.assertTrue(api._verified_recovery_profile("CLIENT", "SERVICE_PRO_DORMANT"))
+
+    def test_verified_recovery_requires_owner_then_releases(self):
+        req, stack = self.make()
+        with stack:
+            api.approve_transition_recovery_for_owner(req.installationId)
+            result = api.workshop_profile_transition_recover(self.recovery(req))
+            self.assertTrue(json.loads(result.body)["released"])
+            self.assertIsNotNone(self.db.reservation["released_at"])
+            api._assert_no_profile_transition(self.db, req.installationId)
+
+    def test_recovery_status_shows_id_only_after_owner_approval(self):
+        req, stack = self.make()
+        with stack:
+            status = json.loads(api.workshop_profile_transition_recovery_status(req).body)
+            self.assertTrue(status["pending"])
+            self.assertFalse(status["ownerRecoveryApproved"])
+            self.assertIsNone(status["reservationId"])
+            api.approve_transition_recovery_for_owner(req.installationId)
+            status = json.loads(api.workshop_profile_transition_recovery_status(req).body)
+            self.assertTrue(status["ownerRecoveryApproved"])
+            self.assertEqual(uuid.UUID(status["reservationId"]),
+                             self.db.reservation["reservation_id"])
 
 
 
