@@ -391,6 +391,15 @@ class PaidInstallationMappingTests(unittest.TestCase):
         self.assertIn("external_iid = support[\"installation_external_id\"]", block)
         self.assertIn("FOR UPDATE", block)
 
+    def test_mesh_node_owner_check_uses_external_installation_id(self):
+        # Internal guard.installations.id differs from the UUID of the same
+        # physical Windows machine in guard.pending_installations.
+        for endpoint in (api.workshop_session_mesh_enroll,
+                         api.workshop_mesh_enroll):
+            source = inspect.getsource(endpoint)
+            self.assertIn("installation_external_id<>:iid", source)
+            self.assertNotIn("AND id<>:iid", source)
+
     def test_workshop_requests_check_paid_pending_before_creation(self):
         for fn in (api.request_consent_for_owner, api.request_for_owner):
             source = inspect.getsource(fn)
