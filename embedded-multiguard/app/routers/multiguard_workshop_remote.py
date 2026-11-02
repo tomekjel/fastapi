@@ -843,7 +843,8 @@ def workshop_session_mesh_enroll(request: WorkshopSessionMeshEnrollment):
         # across both licence modes. Do not accept a different installation.
         if db.execute(text("""
             SELECT 1 FROM guard.installations
-            WHERE mesh_node_id=:node AND id<>:iid LIMIT 1
+            WHERE mesh_node_id=:node
+              AND installation_external_id<>:iid LIMIT 1
         """), {"node":node, "iid":request.installationId}).first():
             raise HTTPException(409, "Agent jest przypisany do innej instalacji.")
         if db.execute(text("""SELECT 1 FROM guard.workshop_mesh_nodes
@@ -1323,7 +1324,8 @@ def workshop_mesh_enroll(request: WorkshopMeshEnrollment):
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:node))"), {"node":node})
         commercial = db.execute(text("""
             SELECT 1 FROM guard.installations
-            WHERE mesh_node_id=:node AND id<>:iid LIMIT 1
+            WHERE mesh_node_id=:node
+              AND installation_external_id<>:iid LIMIT 1
         """), {"node":node, "iid":request.installationId}).first()
         if commercial:
             raise HTTPException(409, "Węzeł należy do innego typu instalacji.")
