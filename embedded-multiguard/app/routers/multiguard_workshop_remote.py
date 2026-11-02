@@ -1025,6 +1025,139 @@ def workshop_profile_transition_finish(request: WorkshopProfileTransitionFinish)
     }, headers={"Cache-Control": "private, no-store"})
 
 
+def _verified_recovery_profile(target: str, inspected: str) -> bool:
+    """Accepted SHA/MSH-owned SCM states; SERVICE_PRO_RUNNING is NEVER safe."""
+    return inspected in ({
+        "SERVICE_PRO": {"SERVICE_PRO_DORMANT", "CLIENT_STOPPED", "CLIENT_RUNNING"},
+        "CLIENT": {"CLIENT_STOPPED", "SERVICE_PRO_DORMANT"},
+    }.get(target, set()))
+
+
+def approve_transition_recovery_for_owner(iid: uuid.UUID):
+    """Explicit OWNER action only; approval never releases the reservation.
+
+    Before approval OWNER must verify UAC has fully exited on this Windows
+    host; the additional local SCM inspection is performed by the app.
+    """
+    _schema()
+    from types import SimpleNamespace
+    with engine.begin() as db:
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": iid}).first()
+        lock = db.execute(text("""
+            SELECT reservation_id,target_mode,created_at,released_at
+            FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": iid}).mappings().first()
+        if not lock or lock["released_at"] is not None:
+            raise HTTPException(409, "Brak aktywnej rezerwacji do odzyskania.")
+        if lock["created_at"] > _now() - timedelta(minutes=2):
+            raise HTTPException(409, "Rezerwacja jest zbyt świeża; potwierdź zakończenie procesu UAC.")
+        _validate_transition_locked(db, SimpleNamespace(
+            installationId=iid, targetMode=lock["target_mode"]), recovery=True)
+        db.execute(text("""
+            UPDATE guard.workshop_profile_transition_locks
+            SET recovery_owner_approved_at=:now,
+                recovery_owner_reservation_id=:rid
+            WHERE installation_id=:iid AND reservation_id=:rid
+              AND released_at IS NULL
+        """), {"now": _now(), "iid": iid, "rid": lock["reservation_id"]})
+        db.execute(text("""
+            INSERT INTO guard.workshop_profile_transition_audit
+                (installation_id,reservation_id,action,actor_type)
+            VALUES (:iid,:rid,'OWNER_RECOVERY_APPROVED','OWNER')
+        """), {"iid":iid, "rid":lock["reservation_id"]})
+    return {"approved":True,"reservationId":str(lock["reservation_id"])}
+
+
+@router.post("/remote/workshop/transition/{installation_id}/authorize-recovery")
+def owner_approve_transition_recovery(
+    installation_id: uuid.UUID,
+    _: CurrentUser = Depends(require_owner),
+):
+    return approve_transition_recovery_for_owner(installation_id)
+
+
+@router.post("/agent/workshop/profile-transition-recovery-status")
+def workshop_profile_transition_recovery_status(request: WorkshopAuth):
+    """Read-only; no reserved UUID is returned without exact agent identity."""
+    _schema()
+    _authenticate(request)
+    with engine.connect() as db:
+        lock = db.execute(text("""
+            SELECT reservation_id,target_mode,released_at,
+                   recovery_owner_approved_at,recovery_owner_reservation_id
+            FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid
+        """), {"iid": request.installationId}).mappings().first()
+    active = bool(lock and lock["released_at"] is None)
+    approved = bool(active and lock["recovery_owner_approved_at"] is not None
+        and lock["recovery_owner_approved_at"] > _now()-timedelta(minutes=5)
+        and lock["recovery_owner_reservation_id"] == lock["reservation_id"])
+    return JSONResponse({
+        "requestId":request.requestId,"pending":active,
+        "ownerRecoveryApproved":approved,
+        "reservationId":str(lock["reservation_id"]) if approved else None,
+        "targetMode":lock["target_mode"] if approved else None,
+    }, headers={"Cache-Control":"private, no-store"})
+
+
+@router.post("/agent/workshop/profile-transition-recover")
+def workshop_profile_transition_recover(request: WorkshopProfileTransitionRecovery):
+    """Manual post-crash recovery requires OWNER plus same-host local SCM check.
+
+    The backend cannot inspect SCM. It relies on an *explicit local GUI*
+    verification from the registered device, and an independent fresh OWNER
+    approval of the EXACT held reservation. Unknown/Running SERVICE_PRO fails
+    closed; never infer completion from a timed lease or device nickname.
+    """
+    _schema()
+    _authenticate(request)
+    if not _verified_recovery_profile(request.targetMode, request.verifiedProfile):
+        raise HTTPException(409, "Niebezpieczny stan usługi Windows — blokada pozostaje.")
+    from types import SimpleNamespace
+    with engine.begin() as db:
+        db.execute(text("""
+            SELECT installation_id FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).first()
+        lock = db.execute(text("""
+            SELECT reservation_id,target_mode,released_at,
+                   recovery_owner_approved_at,recovery_owner_reservation_id
+            FROM guard.workshop_profile_transition_locks
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": request.installationId}).mappings().first()
+        if (not lock or lock["released_at"] is not None
+                or lock["reservation_id"] != request.reservationId
+                or lock["target_mode"] != request.targetMode
+                or lock["recovery_owner_reservation_id"] != request.reservationId
+                or lock["recovery_owner_approved_at"] is None
+                or lock["recovery_owner_approved_at"] <= _now()-timedelta(minutes=5)):
+            raise HTTPException(409, "Wymagana świeża zgoda OWNER dla dokładnie tej rezerwacji.")
+        _validate_transition_locked(db, SimpleNamespace(
+            installationId=request.installationId,
+            targetMode=request.targetMode), recovery=True)
+        db.execute(text("""
+            UPDATE guard.workshop_profile_transition_locks
+            SET released_at=now(),recovered_profile=:profile,
+                recovery_owner_approved_at=NULL,recovery_owner_reservation_id=NULL
+            WHERE installation_id=:iid AND reservation_id=:rid AND released_at IS NULL
+        """), {"iid": request.installationId,"rid":request.reservationId,
+                "profile":request.verifiedProfile})
+        db.execute(text("""
+            INSERT INTO guard.workshop_profile_transition_audit
+                (installation_id,reservation_id,action,actor_type,verified_profile)
+            VALUES (:iid,:rid,'LOCAL_VERIFIED_RECOVERY','LOCAL_ADMIN',:profile)
+        """), {"iid":request.installationId,"rid":request.reservationId,
+                "profile":request.verifiedProfile})
+    return JSONResponse({
+        "requestId":request.requestId,"released":True,
+        "targetMode":request.targetMode,"verifiedProfile":request.verifiedProfile,
+    }, headers={"Cache-Control":"private, no-store"})
+
+
 @router.post("/agent/workshop/standing/bootstrap-ticket")
 def workshop_service_bootstrap_ticket(request: WorkshopAuth):
     """Sign ONE short-lived, installation-bound Windows SCM enrollment ticket.
