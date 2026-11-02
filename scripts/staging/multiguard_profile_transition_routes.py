@@ -85,7 +85,7 @@ def finish(req: FinishRequest):
     with wr.engine.begin() as db:
         schema(db)
         row=db.execute(text("""
-            SELECT reservation_id,target_mode,state
+            SELECT reservation_id,target_mode,state,expires_at
             FROM guard.workshop_profile_transitions
             WHERE installation_id=:iid FOR UPDATE
         """),{"iid":req.installationId}).mappings().first()
@@ -93,6 +93,11 @@ def finish(req: FinishRequest):
             raise HTTPException(409,"Rezerwacja nie odpowiada instalacji.")
         if row["state"] != "RESERVED":
             raise HTTPException(409,"Rezerwacja została już zakończona.")
+        # Expiry is never automatic approval to open new remote sessions.
+        # An expired reservation requires OWNER reconciliation.
+        from datetime import datetime, timezone
+        if row["expires_at"] <= datetime.now(timezone.utc):
+            raise HTTPException(409,"Rezerwacja wygasła. Wymagana kontrola OWNER.")
         db.execute(text("""
             UPDATE guard.workshop_profile_transitions SET state=:state
             WHERE installation_id=:iid
