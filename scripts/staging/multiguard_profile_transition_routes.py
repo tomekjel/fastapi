@@ -52,8 +52,12 @@ def begin(req: ProfileRequest):
     with wr.engine.begin() as db:
         schema(db)
         # Serialize with other transitions for the same installation.
-        db.execute(text("SELECT installation_id FROM guard.pending_installations WHERE installation_id=:iid FOR UPDATE"),
-                   {"iid":req.installationId}).first()
+        installation = db.execute(text(
+            "SELECT installation_id FROM guard.pending_installations "
+            "WHERE installation_id=:iid FOR UPDATE"
+        ), {"iid":req.installationId}).scalar_one_or_none()
+        if installation is None:
+            raise HTTPException(404, "Instalacja nie istnieje.")
         check(db, req)
         row = db.execute(text("""
             SELECT reservation_id FROM guard.workshop_profile_transitions
