@@ -33,6 +33,22 @@ def check(db, req):
         ), {"iid": iid}).first():
             raise HTTPException(409, "Najpierw zamknij sesję zdalną.")
 
+def refuse_while_transition_reserved(db, installation_id):
+    """Shared guard for BOTH customer Pro and SERVICE session admission.
+
+    Called inside the same transaction, after locking the installation row.
+    A stale/expired reservation is intentionally NOT treated as released:
+    only explicit finish or OWNER recovery can settle it.
+    """
+    row = db.execute(text("""
+        SELECT reservation_id FROM guard.workshop_profile_transitions
+        WHERE installation_id=:iid AND state='RESERVED'
+        LIMIT 1
+    """), {"iid": installation_id}).first()
+    if row:
+        raise HTTPException(409, "Trwa zmiana profilu Windows; połączenie zablokowane.")
+
+
 def schema(db):
     db.execute(text("""
         CREATE TABLE IF NOT EXISTS guard.workshop_profile_transitions (
