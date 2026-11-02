@@ -62,6 +62,13 @@ class WorkshopProfileTransitionFinish(WorkshopAuth):
     succeeded: bool
 
 
+class WorkshopProfileTransitionRecovery(WorkshopAuth):
+    reservationId: uuid.UUID
+    targetMode: Literal["SERVICE_PRO", "CLIENT"]
+    verifiedProfile: Literal["CLIENT_RUNNING", "CLIENT_STOPPED", "SERVICE_PRO_DORMANT"]
+    localConfirmation: Literal[True]
+
+
 class WorkshopStandingAttestation(WorkshopAuth):
     # Only an explicit, interactive GUI action may submit this command.
     # Discovery auth alone can never stand in for OWNER's separate approval.
@@ -202,7 +209,24 @@ def _schema():
                    reservation_id UUID NOT NULL,
                    target_mode TEXT NOT NULL CHECK (target_mode IN (\'SERVICE_PRO\',\'CLIENT\')),
                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                   released_at TIMESTAMPTZ)""",
+                   released_at TIMESTAMPTZ,
+                   recovery_owner_approved_at TIMESTAMPTZ,
+                   recovery_owner_reservation_id UUID,
+                   recovered_profile TEXT)""",
+                """ALTER TABLE guard.workshop_profile_transition_locks
+                   ADD COLUMN IF NOT EXISTS recovery_owner_approved_at TIMESTAMPTZ""",
+                """ALTER TABLE guard.workshop_profile_transition_locks
+                   ADD COLUMN IF NOT EXISTS recovery_owner_reservation_id UUID""",
+                """ALTER TABLE guard.workshop_profile_transition_locks
+                   ADD COLUMN IF NOT EXISTS recovered_profile TEXT""",
+                """CREATE TABLE IF NOT EXISTS guard.workshop_profile_transition_audit (
+                   id BIGSERIAL PRIMARY KEY,
+                   installation_id UUID NOT NULL,
+                   reservation_id UUID NOT NULL,
+                   action TEXT NOT NULL,
+                   verified_profile TEXT,
+                   actor_type TEXT NOT NULL,
+                   created_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
                 """CREATE TABLE IF NOT EXISTS guard.workshop_standing_remote_audit (
                    id BIGSERIAL PRIMARY KEY,
                    installation_id UUID NOT NULL
@@ -872,13 +896,14 @@ def workshop_mesh_provisioning_plan(request: WorkshopAuth):
     }
 
 
-def _validate_transition_locked(db, request):
+def _validate_transition_locked(db, request, *, recovery=False):
     """Hold grant lock while checking all workshop and commercial sessions."""
     db.execute(text("""
         SELECT installation_id FROM guard.workshop_grants
         WHERE installation_id=:iid FOR UPDATE
     """), {"iid": request.installationId}).first()
-    _assert_no_profile_transition(db, request.installationId)
+    if not recovery:
+        _assert_no_profile_transition(db, request.installationId)
     grant = _grant(db, request.installationId)
     if not _eligible(grant):
         raise HTTPException(403, "Zmiana profilu wymaga aktywnego serwisowego Pro.")
@@ -951,7 +976,9 @@ def workshop_profile_transition_begin(request: WorkshopProfileTransitionCheck):
             ON CONFLICT (installation_id) DO UPDATE
             SET reservation_id=EXCLUDED.reservation_id,
                 target_mode=EXCLUDED.target_mode,
-                created_at=now(),released_at=NULL
+                created_at=now(),released_at=NULL,
+                recovery_owner_approved_at=NULL,
+                recovery_owner_reservation_id=NULL,recovered_profile=NULL
             WHERE profile.released_at IS NOT NULL
         """), {"iid": request.installationId,
                 "reservation": reservation, "target": request.targetMode})
