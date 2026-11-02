@@ -57,5 +57,10 @@ jobs:
           grep -Fq '"/multiguard/agent/workshop/profile-transition-check"' embedded-multiguard/install.sh
           grep -Fq '"/multiguard/agent/workshop/profile-transition-begin"' embedded-multiguard/install.sh
           grep -Fq '"/multiguard/agent/workshop/profile-transition-finish"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/agent/workshop/profile-transition-recovery-status"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/agent/workshop/profile-transition-recover"' embedded-multiguard/install.sh
+          grep -Fq '"/multiguard/remote/workshop/transition/{installation_id}/authorize-recovery"' embedded-multiguard/install.sh
+          grep -Fq "def owner_remote_service_authorize_recovery(" embedded-multiguard/app/routers/multiguard_runtime.py
+          grep -Fq "def workshop_profile_transition_recover(" embedded-multiguard/app/routers/multiguard_workshop_remote.py
           grep -Fq "@router.post('/panel/remote/service/" embedded-multiguard/app/routers/multiguard_runtime.py
           grep -Fq "def _owner_service_remote_workspace(" embedded-multiguard/app/routers/multiguard_runtime.py
