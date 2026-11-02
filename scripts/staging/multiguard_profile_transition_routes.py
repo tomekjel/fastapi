@@ -4,13 +4,10 @@ This module is deliberately isolated from payments and license changes.
 The OWNER switch must remain disabled until server-side session admission
 also checks active reservations and a Windows integration test has passed.
 """
-from datetime import timedelta
 from uuid import uuid4, UUID
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import text
 from app.routers import multiguard_workshop_remote as wr
-from app.routers import multiguard_license as license
 
 router = APIRouter(prefix="/multiguard", tags=["service-profile-transition"])
 
@@ -22,7 +19,6 @@ class FinishRequest(ProfileRequest):
     succeeded: bool
 
 def check(db, req):
-    wr._authenticate(req)
     if req.targetMode not in ("SERVICE_PRO", "CLIENT"):
         raise HTTPException(400, "Nieprawidłowy profil Windows.")
     grant = wr._grant(db, req.installationId)
@@ -55,9 +51,10 @@ def begin(req: ProfileRequest):
     wr._authenticate(req)
     with wr.engine.begin() as db:
         schema(db)
+        # Serialize with other transitions for the same installation.
+        db.execute(text("SELECT installation_id FROM guard.pending_installations WHERE installation_id=:iid FOR UPDATE"),
+                   {"iid":req.installationId}).first()
         check(db, req)
-        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:iid))"),
-                   {"iid":str(req.installationId)})
         row = db.execute(text("""
             SELECT reservation_id FROM guard.workshop_profile_transitions
             WHERE installation_id=:iid AND state='RESERVED' FOR UPDATE
