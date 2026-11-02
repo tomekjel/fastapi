@@ -5,7 +5,7 @@ The OWNER switch must remain disabled until server-side session admission
 also checks active reservations and a Windows integration test has passed.
 """
 from datetime import timedelta
-from uuid import uuid4
+from uuid import uuid4, UUID
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -18,7 +18,7 @@ class ProfileRequest(wr.WorkshopAuth):
     targetMode: str
 
 class FinishRequest(ProfileRequest):
-    reservationId: str
+    reservationId: UUID
     succeeded: bool
 
 def check(db, req):
@@ -52,9 +52,10 @@ def schema(db):
 @router.post("/agent/workshop/profile-transition-begin")
 def begin(req: ProfileRequest):
     wr._schema()
+    wr._authenticate(req)
     with wr.engine.begin() as db:
-        check(db, req)
         schema(db)
+        check(db, req)
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:iid))"),
                    {"iid":str(req.installationId)})
         row = db.execute(text("""
@@ -79,15 +80,15 @@ def begin(req: ProfileRequest):
 @router.post("/agent/workshop/profile-transition-finish")
 def finish(req: FinishRequest):
     wr._schema()
+    wr._authenticate(req)
     with wr.engine.begin() as db:
-        wr._authenticate(req)
         schema(db)
         row=db.execute(text("""
             SELECT reservation_id,target_mode,state
             FROM guard.workshop_profile_transitions
             WHERE installation_id=:iid FOR UPDATE
         """),{"iid":req.installationId}).mappings().first()
-        if not row or str(row["reservation_id"]) != req.reservationId or row["target_mode"] != req.targetMode:
+        if not row or row["reservation_id"] != req.reservationId or row["target_mode"] != req.targetMode:
             raise HTTPException(409,"Rezerwacja nie odpowiada instalacji.")
         if row["state"] != "RESERVED":
             raise HTTPException(409,"Rezerwacja została już zakończona.")
@@ -101,7 +102,8 @@ def finish(req: FinishRequest):
 def recovery_status(req: wr.WorkshopAuth):
     wr._schema()
     wr._authenticate(req)
-    with wr.engine.connect() as db:
+    with wr.engine.begin() as db:
+        schema(db)
         row=db.execute(text("""
             SELECT reservation_id,target_mode,created_at,state
             FROM guard.workshop_profile_transitions WHERE installation_id=:iid
@@ -110,3 +112,16 @@ def recovery_status(req: wr.WorkshopAuth):
             "reservationId":str(row["reservation_id"]) if row else None,
             "targetMode":row["target_mode"] if row else None,
             "ownerRecoveryApproved":False}
+
+class RecoverRequest(ProfileRequest):
+    reservationId: UUID
+    verifiedProfile: str
+    localConfirmation: bool
+
+@router.post("/agent/workshop/profile-transition-recover")
+def recover(req: RecoverRequest):
+    # Never trust a local assertion by itself as proof of administrator
+    # authorization. Separate OWNER approval workflow is still required.
+    wr._authenticate(req)
+    raise HTTPException(409, "Odzyskanie wymaga odrębnego zatwierdzenia OWNER.")
+
