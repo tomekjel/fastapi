@@ -277,7 +277,8 @@ def release_manifest(
         candidates.append((version, row))
 
     if not candidates:
-        return Response(status_code=204)
+        # Keep the installation ring visible even when no update is available.
+        return Response(status_code=204, headers={"X-Multi-Guard-Channel": channel})
 
     chosen = max(candidates, key=lambda item: item[0])[1]
     return {
