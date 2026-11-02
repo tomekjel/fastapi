@@ -98,6 +98,10 @@ class FakeEngine:
     def begin(self):
         yield self.db
 
+    @contextmanager
+    def connect(self):
+        yield self.db
+
 
 def request(target):
     return api.WorkshopProfileTransitionCheck(
@@ -269,7 +273,9 @@ class TransitionRecoveryTests(TransitionReservationTests):
         with stack:
             api.approve_transition_recovery_for_owner(req.installationId)
             self.assertIsNone(self.db.reservation["released_at"])
-            api._assert_no_profile_transition(self.db, req.installationId)
+            with self.assertRaises(HTTPException) as error:
+                api._assert_no_profile_transition(self.db, req.installationId)
+            self.assertEqual(error.exception.status_code, 409)
 
     def test_no_owner_approval_keeps_lock(self):
         req, stack = self.make()
