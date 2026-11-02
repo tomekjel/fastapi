@@ -2899,6 +2899,15 @@ def _owner_service_remote_workspace(selected: Optional[uuid.UUID], csrf_token: s
                      'nie wygasa samoczynnie. Nie wolno usuwać jej bez '
                      'lokalnej kontroli stanu usługi Windows i potwierdzenia '
                      'zakończenia operacji przez OWNER.</p>')
+        controls += action(
+            f'/multiguard/panel/remote/service/{selected}/authorize-recovery',
+            'ZEZWÓL NA LOKALNE ODZYSKANIE',
+            '<label><input type="checkbox" name="recovery_ack" value="true" required>'
+            'Potwierdzam, że na tym komputerze zakończyło się okno UAC, '
+            'proces zmiany usługi nie działa, a dalsza kontrola zostanie '
+            'wykonana lokalnie w MultiGuard.</label>')
+        controls += '<p>Zgoda na odzyskanie działa przez 5 minut i nie odblokowuje sesji. '
+        controls += 'Na komputerze uruchom „Sprawdź blokadę” i „Odzyskaj po kontroli Windows”.</p>'
     elif prepared:
         scope = approval["device_scope"]
         controls += '<p>Upoważnienie: ' + _panel_h(scope) + '. '
@@ -3082,6 +3091,23 @@ def _owner_service_remote_redirect(iid: uuid.UUID):
     from fastapi.responses import RedirectResponse
     return RedirectResponse(
         f'/multiguard/panel/remote?service_selected={iid}',status_code=303)
+
+
+@router.post('/panel/remote/service/{installation_id}/authorize-recovery')
+def owner_remote_service_authorize_recovery(
+    installation_id: uuid.UUID,
+    recovery_ack: bool = Form(False),
+    csrf_token: str = Form(...),
+    _: None = Depends(_panel_auth),
+):
+    from app.routers import multiguard_workshop_remote as workshop
+    _owner_remote_actor(csrf_token)
+    if recovery_ack is not True:
+        raise HTTPException(400, "OWNER musi potwierdzić zakończenie UAC.")
+    # This does NOT clear a reservation. Same-device local SHA/MSH SCM check
+    # must follow before any remote session can resume.
+    workshop.approve_transition_recovery_for_owner(installation_id)
+    return _owner_service_remote_redirect(installation_id)
 
 
 @router.post('/panel/remote/service/{installation_id}/prepare')
