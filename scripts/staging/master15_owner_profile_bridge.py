@@ -1,9 +1,8 @@
-"""MASTER 1.5 / 3-of-6: optional bridge for the EXISTING OWNER/WORKSHOP backend.
+"""MASTER 1.5 beta.22: signed OWNER profile transition bridge.
 
-This is NOT a replacement license router. Register beside the currently
-deployed routers only after verifying the live LXC schema. SERVICE grants are
-intentionally unavailable until first-local-consent and OWNER mode handling
-is wired end to end in the Windows broker.
+SERVICE grants may stage a STOPPED/DISABLED agent only. Activating it requires
+the independently authenticated first-local-consent workflow and a separate
+signed service bootstrap ticket. Never treat an OWNER edition as desktop consent.
 """
 from __future__ import annotations
 
@@ -58,8 +57,22 @@ def _authenticated_link(db, req: Identity):
 def _owner_target(db, iid: UUID, link) -> str:
     # Existing production function uses the real owner_entitlement_selections
     # and pending_installations tables (not the heartbeat mirror).
-    if license._owner_effective_entitlement_mode(db,iid) != "CLIENT":
-        raise HTTPException(409, "OWNER nie wybrał trybu klienta.")
+    mode=license._owner_effective_entitlement_mode(db,iid)
+    if mode == "SERVICE":
+        if link.get("rebind_pending"):
+            raise HTTPException(409,"Instalacja Service oczekuje na ponowne powiązanie.")
+        grant=db.execute(text("""
+            SELECT enabled,valid_until FROM guard.workshop_grants
+            WHERE installation_id=:iid FOR UPDATE
+        """),{"iid":iid}).mappings().first()
+        if (not grant or not grant["enabled"] or not grant["valid_until"]
+            or grant["valid_until"]<=_now()):
+            raise HTTPException(409,"OWNER Service nie ma aktywnego upoważnienia czasowego.")
+        # SERVICE means STAGE ONLY in the native signed-owner broker.
+        # It cannot start unattended transport or grant standing consent.
+        return "SERVICE"
+    if mode != "CLIENT":
+        raise HTTPException(409, "OWNER nie wybrał aktywnej edycji.")
     if link["lifecycle"] != "ACTIVE" or link.get("rebind_pending"):
         raise HTTPException(409, "Licencja klienta nie jest aktywna.")
     expires = link.get("valid_until")
@@ -74,8 +87,8 @@ def owner_profile_grant(req:Identity):
     """Single-use signed grant, using existing workshop reservation table."""
     _identity_guard(req)
     workshop._schema()
-    # Commercial KeyGate verification precedes creating a reservation.
-    # No response-supplied target or Windows command is accepted.
+    # Authenticated commercial or workshop OWNER selection precedes a
+    # reservation. No response-supplied target or Windows command is accepted.
     with workshop.engine.begin() as db:
         pending=db.execute(text("""
             SELECT installation_id,status FROM guard.pending_installations
@@ -90,7 +103,8 @@ def owner_profile_grant(req:Identity):
         workshop._service_transition_sessions(db,req.installationId)
         occupied=db.execute(text("""
             SELECT reservation_id FROM guard.workshop_profile_transitions
-            WHERE installation_id=:iid AND state='RESERVED' FOR UPDATE
+            WHERE installation_id=:iid AND state='RESERVED'
+              AND expires_at>now() FOR UPDATE
         """),{"iid":req.installationId}).scalar_one_or_none()
         if occupied:
             raise HTTPException(409,"Poprzednie przełączenie nadal trwa.")
@@ -132,7 +146,7 @@ def _sync_standard_after_verified_ack(iid: UUID) -> None:
 
 @router.post("/owner-profile-report")
 def owner_profile_report(req:TransitionReport, background_tasks: BackgroundTasks):
-    """Release only the matching verified Standard/Pro transition."""
+    """Release only matching signed Standard, Pro or dormant Service SCM receipt."""
     _identity_guard(req)
     workshop._schema()
     with workshop.engine.begin() as db:
@@ -151,7 +165,8 @@ def owner_profile_report(req:TransitionReport, background_tasks: BackgroundTasks
             raise HTTPException(409,"Rezerwacja OWNER jest nieaktualna.")
         if reservation["expires_at"]<=_now():
             raise HTTPException(409,"Rezerwacja OWNER wygasła.")
-        expected={"STANDARD":"ClientDormant","PRO":"ClientRunning"}
+        expected={"STANDARD":"ClientDormant","PRO":"ClientRunning",
+                  "SERVICE":"ServiceDormant"}
         target=str(reservation["target_mode"])
         if not req.succeeded or expected.get(target)!=req.observedProfile:
             raise HTTPException(409,"Windows SCM nie potwierdził profilu OWNER.")
