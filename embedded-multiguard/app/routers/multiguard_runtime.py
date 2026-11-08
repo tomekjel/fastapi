@@ -310,7 +310,6 @@ def _require_agent(
 def heartbeat(body: HeartbeatBody):
     _ensure_schema()
     now = datetime.now(timezone.utc)
-    plan = "PRO" if body.planCode.upper() == "PRO" else "STANDARD"
     health = body.healthLevel.upper()
     if health not in {"GREEN", "YELLOW", "ORANGE", "RED"}:
         health = "GREEN"
@@ -333,11 +332,9 @@ def heartbeat(body: HeartbeatBody):
                 UPDATE guard.installations
                 SET
                     app_version=:app_version,
-                    plan_code=:plan_code,
-                    license_id=COALESCE(:license_id, license_id),
-                    lifecycle=:lifecycle,
-                    accepted_at=COALESCE(:accepted_at, accepted_at),
-                    valid_until=:valid_until,
+                    -- Licensing and OWNER edition are server-authoritative.
+                    -- Heartbeat can report telemetry but must never overwrite
+                    -- plan_code, license_id, lifecycle, accepted_at or valid_until.
                     health_level=:health_level,
                     last_seen_at=:now,
                     updated_at=:now
@@ -346,11 +343,6 @@ def heartbeat(body: HeartbeatBody):
             ),
             {
                 "app_version": body.appVersion,
-                "plan_code": plan,
-                "license_id": body.licenseId,
-                "lifecycle": body.lifecycle,
-                "accepted_at": body.acceptedAt,
-                "valid_until": body.validUntil,
                 "health_level": health,
                 "now": now,
                 "id": row["id"],
@@ -423,7 +415,9 @@ def heartbeat(body: HeartbeatBody):
             },
         )
 
-        if previous_lifecycle != "ACTIVE" and body.lifecycle == "ACTIVE":
+        # Client-reported activation is not an authoritative licence event.
+        # Only OWNER/KeyGate-backed transitions may emit activation notices.
+        if False:  # legacy branch deliberately disabled until server-side event wiring
             connection.execute(
                 text(
                     """
