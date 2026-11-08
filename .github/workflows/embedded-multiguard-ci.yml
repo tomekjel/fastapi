@@ -27,6 +27,7 @@ jobs:
 
       - name: Verify Python syntax
         run: |
+          python3 -m py_compile scripts/staging/master15_owner_profile_bridge.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_license.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_runtime.py
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_remote.py
