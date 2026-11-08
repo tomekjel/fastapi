@@ -15,12 +15,15 @@ from app.routers.multiguard_panel_settings import _token_valid
 from app.routers import master15_owner_mesh_sync_engine as sync
 
 router=APIRouter(tags=["multi-guard-mesh-groups"])
+_SYNC_TASKS: set[asyncio.Task] = set()
 
 def _spawn_sync(iid: UUID) -> None:
     task=asyncio.create_task(asyncio.to_thread(sync.run_pending_installation,engine,iid))
+    _SYNC_TASKS.add(task)
     task.add_done_callback(_task_finished)
 
 def _task_finished(task:asyncio.Task) -> None:
+    _SYNC_TASKS.discard(task)
     # Exceptions never reveal Mesh IDs, credentials, or tokens to the client.
     try:
         task.result()
