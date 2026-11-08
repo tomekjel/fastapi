@@ -51,6 +51,26 @@ class OwnerGrantContractTest(unittest.TestCase):
                 self.assertEqual(payload["issuedAt"], "2026-11-08T12:00:00Z")
                 self.assertEqual(payload["expiresAt"], "2026-11-08T12:02:00Z")
 
+    def test_session_admission_and_grant_use_same_installation_lock(self):
+        base = pathlib.Path(__file__).resolve().parents[2] / "embedded-multiguard" / "app" / "routers"
+        license_source = (base / "multiguard_license.py").read_text(encoding="utf-8")
+        remote_source = (base / "multiguard_remote.py").read_text(encoding="utf-8")
+        grant = license_source.split(
+            '@router.post("/v1/multi-guard/owner-profile-grant")', 1
+        )[1].split('@router.post("/v1/multi-guard/acceptance")', 1)[0]
+        create = remote_source.split(
+            '@router.post("/remote-sessions")', 1
+        )[1].split('return {', 1)[0]
+        self.assertIn("WHERE installation_external_id=:iid FOR UPDATE", grant)
+        self.assertIn("FOR UPDATE OF gi", create)
+        self.assertIn("guard.workshop_profile_transitions", grant)
+        self.assertIn("guard.workshop_profile_transitions", create)
+        self.assertIn("state='RESERVED'", grant)
+        self.assertIn("t.state='RESERVED'", create)
+        self.assertLess(grant.index("FOR UPDATE"), grant.index("INSERT INTO guard.workshop_profile_transitions"))
+        self.assertLess(create.index("FOR UPDATE OF gi"), create.index("INSERT INTO guard.remote_sessions"))
+        self.assertIn("reservationId", grant)
+
     def test_heartbeat_cannot_overwrite_entitlement_fields(self):
         source = (
             pathlib.Path(__file__).resolve().parents[2]
