@@ -56,9 +56,9 @@ def main():
                    t.state AS receipt_state,t.target_mode AS receipt_target
             FROM guard.pending_installations p
             JOIN guard.license_links l ON l.installation_id=p.installation_id
-            JOIN guard.owner_mesh_group_sync s USING(installation_id)
-            JOIN guard.workshop_mesh_nodes n USING(installation_id)
-            JOIN guard.workshop_profile_transitions t USING(installation_id)
+            JOIN guard.owner_mesh_group_sync s ON s.installation_id=p.installation_id
+            JOIN guard.workshop_mesh_nodes n ON n.installation_id=p.installation_id
+            JOIN guard.workshop_profile_transitions t ON t.installation_id=p.installation_id
             WHERE upper(p.hostname)='ROG'
         """)).mappings().all()
         if len(rows)!=1:raise RuntimeError("ROG_OWNER_NOT_UNIQUE")
