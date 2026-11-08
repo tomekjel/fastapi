@@ -91,7 +91,11 @@ def queue_after_owner_save(db, iid: UUID) -> None:
             guard.owner_mesh_group_sync.requested_group=EXCLUDED.requested_group AND
             guard.owner_mesh_group_sync.target_mesh_id IS NOT DISTINCT FROM EXCLUDED.target_mesh_id AND
             guard.owner_mesh_group_sync.status='OK'
-          THEN 'OK' ELSE 'WAITING' END,
+          THEN 'OK' WHEN
+            guard.owner_mesh_group_sync.requested_group=EXCLUDED.requested_group AND
+            guard.owner_mesh_group_sync.target_mesh_id IS NOT DISTINCT FROM EXCLUDED.target_mesh_id AND
+            guard.owner_mesh_group_sync.status='RETRY'
+          THEN 'RETRY' ELSE 'WAITING' END,
           attempts=CASE WHEN
             guard.owner_mesh_group_sync.requested_group=EXCLUDED.requested_group AND
             guard.owner_mesh_group_sync.target_mesh_id IS NOT DISTINCT FROM EXCLUDED.target_mesh_id
@@ -251,4 +255,21 @@ def sync_once(engine,iid:UUID,revision:int)->str:
         # A mismatch is not a failure of the NEW revision.
         _finish(db,iid,revision,current.attempts,seen,ok,issue)
     return "OK" if ok else "RETRY" if current.attempts>=3 else "WAITING"
+
+
+def run_pending_installation(engine, iid: UUID, max_attempts: int = 3) -> str:
+    """Bounded retry runner started after an authenticated, committed OWNER Save.
+
+    No change is attempted if the same edition already reports OK or RETRY.
+    """
+    with engine.connect() as db:
+        row=_fetch_record(db,iid)
+    if not row:
+        return "NO_SYNC_REQUEST"
+    last=row.status
+    for _ in range(min(max_attempts,3)):
+        if last != "WAITING":
+            break
+        last=sync_once(engine,iid,row.revision)
+    return last
 
