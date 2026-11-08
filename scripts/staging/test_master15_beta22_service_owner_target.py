@@ -37,6 +37,7 @@ def load_target(mode):
     code=compile(ast.Module(body=target,type_ignores=[]),str(SRC),"exec")
     namespace={
         "license":License(mode),
+        "UUID":str,
         "text":lambda sql:sql,
         "HTTPException":HttpError,
         "_now":lambda:NOW,
