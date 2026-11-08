@@ -1,6 +1,6 @@
 """MASTER 1.5 — policy & durable states for MeshCentral GROUP synchronization.
 
-Group sync is independent of Windows SCM profile transitions, KeyGate,
+Standard has NO Mesh group and MUST NOT be assigned one.\nGroup sync is independent of Windows SCM profile transitions, KeyGate,
 workshop consent, and remote-session reservations.
 
 This module is staging-only; do not expose "OK" without an independently
@@ -13,7 +13,6 @@ from enum import Enum
 from typing import Mapping
 
 class Group(str, Enum):
-    STANDARD = "STANDARD"
     CLIENT = "CLIENT"
     SERVICE = "SERVICE"
 
@@ -24,7 +23,6 @@ class SyncState(str, Enum):
     RETRY = "RETRY"
 
 DISPLAY_GROUP = {
-    Group.STANDARD: "Standard",
     Group.CLIENT: "Klient",
     Group.SERVICE: "Serwis",
 }
@@ -38,7 +36,6 @@ DISPLAY_STATE = {
 # A separate owner-approved target group for each edition is mandatory.
 # Never silently map STANDARD to CLIENT or SERVICE.
 GROUP_ENV = {
-    Group.STANDARD: "MESH_CENTRAL_STANDARD_MESH_ID",
     Group.CLIENT: "MESH_CENTRAL_SESSION_CONSENT_MESH_ID",
     Group.SERVICE: "MESH_SERVICE_PRO_GROUP_ID",
 }
@@ -48,13 +45,13 @@ class GroupDecision:
     target: Group
     group_id: str
 
-def resolve_edition(owner_mode: str, plan_code: str) -> Group:
+def resolve_edition(owner_mode: str, plan_code: str) -> Group | None:
     if owner_mode == "SERVICE":
         return Group.SERVICE
     if owner_mode != "CLIENT":
         raise ValueError("UNVERIFIED_OWNER_MODE")
     if plan_code == "multi_guard":
-        return Group.STANDARD
+        return None
     if plan_code == "multi_guard_pro":
         return Group.CLIENT
     raise ValueError("UNKNOWN_CLIENT_EDITION")
@@ -89,8 +86,8 @@ def should_retry(attempts: int, requested_by_owner: bool) -> bool:
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS guard.owner_mesh_group_sync (
   installation_id UUID PRIMARY KEY REFERENCES guard.pending_installations(installation_id),
-  requested_group TEXT NOT NULL CHECK(requested_group IN ('STANDARD','CLIENT','SERVICE')),
-  target_mesh_id TEXT NOT NULL,
+  requested_group TEXT NOT NULL CHECK(requested_group IN ('NONE','CLIENT','SERVICE')),
+  target_mesh_id TEXT,
   observed_mesh_id TEXT,
   status TEXT NOT NULL DEFAULT 'WAITING'
     CHECK(status IN ('WAITING','MOVING','OK','RETRY')),
