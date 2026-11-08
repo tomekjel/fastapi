@@ -128,6 +128,24 @@ def request_manual_retry(db, iid: UUID) -> bool:
     """),{"iid":iid})
     return result.rowcount == 1
 
+def get_status(db, iid: UUID) -> tuple[str, str, int]:
+    """Read status without writing. Group is the actual/last confirmed
+    group until OWNER Save creates a new desired sync revision."""
+    row=db.execute(text("""
+        SELECT s.requested_group,s.status,s.attempts,s.observed_mesh_id,
+               s.target_mesh_id
+        FROM guard.owner_mesh_group_sync s
+        WHERE s.installation_id=:iid
+    """),{"iid":iid}).mappings().first()
+    if not row:
+        return "—","Czeka",0
+    state=row["status"]
+    if state not in ("WAITING","MOVING","OK","RETRY"):
+        return "—","Czeka",0
+    display={"NONE":"Brak","CLIENT":"Klient","SERVICE":"Serwis"}
+    status={"WAITING":"Czeka","MOVING":"Przenoszenie…","OK":"OK","RETRY":"Ponów"}
+    return display.get(str(row["requested_group"]),"—"),status[state],int(row["attempts"])
+
 def _list_visible_nodes() -> list[dict]:
     command=mesh._base_command()
     if command.count("DeviceSharing")!=1:
