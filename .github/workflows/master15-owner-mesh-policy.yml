@@ -5,6 +5,7 @@ on:
     paths:
       - 'scripts/staging/master15_owner_mesh_group_policy.py'
       - 'scripts/staging/test_master15_owner_mesh_group_policy.py'
+      - 'scripts/staging/master15_owner_mesh_sync_engine.py'
       - '.github/workflows/master15-owner-mesh-policy.yml'
 permissions:
   contents: read
@@ -14,4 +15,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s scripts/staging -p 'test_master15_owner_mesh_group_policy.py' -v
-      - run: python3 -m py_compile scripts/staging/master15_owner_mesh_group_policy.py
+      - run: python3 -m py_compile scripts/staging/master15_owner_mesh_group_policy.py scripts/staging/master15_owner_mesh_sync_engine.py
