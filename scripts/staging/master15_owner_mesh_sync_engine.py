@@ -146,9 +146,25 @@ def get_status(db, iid: UUID) -> tuple[str, str, int]:
         # Derive only the FIRST line from the SAVED edition, never from
         # an unsubmitted selection and never imply MeshCentral verification.
         try:
-            saved_group, _ = _current_owner_target(db, iid)
-            return {"NONE":"Brak","CLIENT":"Klient","SERVICE":"Serwis"}[saved_group], "Czeka", 0
-        except (MeshSyncError, ValueError, KeyError):
+            # The label is the committed OWNER choice, not proof of current
+            # Mesh membership. Do not gate a display-only label on a live
+            # SERVICE grant or Mesh env availability.
+            from app.routers import multiguard_license as license
+            mode = license._owner_effective_entitlement_mode(db, iid)
+            if mode == "SERVICE":
+                label = "Serwis"
+            elif mode == "CLIENT":
+                plan = db.execute(text("""
+                    SELECT plan_code FROM guard.license_links
+                    WHERE installation_id=:iid ORDER BY updated_at DESC LIMIT 1
+                """),{"iid":iid}).scalar_one_or_none()
+                label = {"multi_guard":"Brak","multi_guard_pro":"Klient"}.get(plan,"—")
+            else:
+                label = "—"
+            return label, "Czeka", 0
+        except Exception:
+            # Never make the whole OWNER table fail because a legacy row
+            # does not have an expected entitlement record yet.
             return "—", "Czeka", 0
     state=row["status"]
     if state not in ("WAITING","MOVING","OK","RETRY"):
