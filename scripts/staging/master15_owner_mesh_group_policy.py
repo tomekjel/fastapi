@@ -1,6 +1,7 @@
 """MASTER 1.5 — policy & durable states for MeshCentral GROUP synchronization.
 
-Standard has NO Mesh group and MUST NOT be assigned one.\nGroup sync is independent of Windows SCM profile transitions, KeyGate,
+Standard has NO Mesh group and MUST NOT be assigned one.
+Group sync is independent of Windows SCM profile transitions, KeyGate,
 workshop consent, and remote-session reservations.
 
 This module is staging-only; do not expose "OK" without an independently
@@ -33,8 +34,8 @@ DISPLAY_STATE = {
     SyncState.RETRY: "Ponów",
 }
 
-# A separate owner-approved target group for each edition is mandatory.
-# Never silently map STANDARD to CLIENT or SERVICE.
+# Only two preapproved remote-access groups exist.
+# Standard has no Mesh node membership or remote access.
 GROUP_ENV = {
     Group.CLIENT: "MESH_CENTRAL_SESSION_CONSENT_MESH_ID",
     Group.SERVICE: "MESH_SERVICE_PRO_GROUP_ID",
@@ -68,9 +69,13 @@ def validate_groups(env: Mapping[str, str]) -> dict[Group,str]:
         raise ValueError("MESH_GROUPS_NOT_DISTINCT")
     return resolved
 
-def status_after_verified_probe(*, target_id: str, observed_group_id: str | None,
-                                attempts: int, move_pending: bool) -> SyncState:
-    if observed_group_id == target_id and not move_pending:
+def status_after_verified_probe(*, target_id: str | None, observed_group_id: str | None,
+                                attempts: int, move_pending: bool, mesh_agent_present: bool = True) -> SyncState:
+    # Standard succeeds only when the trusted agent is absent, not merely
+    # when it was removed from the client/service device group.
+    if target_id is None and not mesh_agent_present and not move_pending:
+        return SyncState.OK
+    if target_id is not None and observed_group_id == target_id and mesh_agent_present and not move_pending:
         return SyncState.OK
     if move_pending:
         return SyncState.MOVING
