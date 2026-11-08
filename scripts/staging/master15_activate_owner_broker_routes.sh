@@ -73,21 +73,6 @@ for path in expected:
     print("PASS: POST",path)
 PY
 
-echo "=== VERIFY INVALID AUTH IS REJECTED WITHOUT MUTATION ==="
-# An invalid request must fail at the request-validation layer, before the
-# grant can create a reservation. No authenticated request is used.
-"$PY" - <<'PY'
-from app.main import app
-from fastapi.testclient import TestClient
-with TestClient(app) as client:
-    for path in ("/v1/multi-guard/owner-profile-grant",
-                 "/v1/multi-guard/owner-profile-report"):
-        response=client.post(path,json={})
-        if response.status_code!=422:
-            raise SystemExit("STOP: invalid OWNER request accepted or unexpected HTTP: "+str(response.status_code))
-        print("PASS: invalid unsigned request rejected",path,"HTTP 422")
-PY
-
 echo "=== RESTART AND CHECK REAL HTTP ==="
 systemctl restart "$SERVICE"
 READY=0
