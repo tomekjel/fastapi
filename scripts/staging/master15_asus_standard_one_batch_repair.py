@@ -34,6 +34,20 @@ def safe_category(exc):
         if re.search(p,s):return label
     return "OTHER"
 
+def safe_mesh_message(exc, node_id, target_id):
+    out=str(exc)
+    values=[node_id,target_id,os.getenv("MESH_SERVICE_PRO_GROUP_ID",""),
+            os.getenv("MESH_CENTRAL_LOGIN_USER",""),
+            os.getenv("MESH_CENTRAL_LOGIN_PASS",""),
+            os.getenv("MESH_CENTRAL_URL",""),
+            os.getenv("MESH_CENTRAL_LOGIN_KEY_FILE","")]
+    for value in sorted({v for v in values if v}, key=len, reverse=True):
+        out=out.replace(value,"[REDACTED]")
+    out=re.sub(r"(?:node|mesh|user)/[^\\s]+","[MESH_ID]",out)
+    out=re.sub(r"https?://[^\\s]+","[URL]",out)
+    out=re.sub(r"[A-Za-z0-9+/_@$-]{48,}","[LONG_VALUE]",out)
+    return " ".join(out.split())[:300]
+
 def read_nodes():
     return sync._list_visible_nodes()
 
@@ -87,6 +101,24 @@ def main():
     print("PASS: signed STANDARD receipt, active Standard OWNER, unique ROG node, unchanged expected group")
     print("ROG_MESH_BEFORE:", "SERWIS" if before==groups[Group.SERVICE] else "STANDARD")
     if before!=target:
+        # MeshCentral does not permit moving devices between different group types.
+        cmd=mesh._base_command()
+        if cmd.count("DeviceSharing")!=1:raise RuntimeError("INVALID_GROUP_CLI")
+        cmd[cmd.index("DeviceSharing")]="ListDeviceGroups"
+        gs=json.loads(mesh._run(cmd+["--json"]))
+        if not isinstance(gs,list):raise RuntimeError("INVALID_GROUP_LIST")
+        found={}
+        for g in gs:
+            if isinstance(g,dict):
+                gid=g.get("_id") or g.get("meshid")
+                if gid in (before,target):
+                    if gid in found:raise RuntimeError("DUPLICATE_GROUP")
+                    found[gid]=g
+        if len(found)!=2:raise RuntimeError("GROUP_NOT_VISIBLE")
+        a,b=found[before],found[target]
+        print("SOURCE_MESH_TYPE",a.get("mtype","UNKNOWN"),"TARGET_MESH_TYPE",b.get("mtype","UNKNOWN"))
+        if a.get("mtype") is not None and b.get("mtype") is not None and a.get("mtype")!=b.get("mtype"):
+            raise RuntimeError("MESH_GROUP_TYPE_MISMATCH_MOVE_NOT_SUPPORTED")
         # Perform exactly one official MeshCtrl move. The group/node are read
         # from verified OWNER and MeshCentral, never from user text.
         try:
@@ -94,6 +126,7 @@ def main():
             print("MESH_MOVE_COMMAND: SUCCESS")
         except Exception as e:
             print("MESH_MOVE_COMMAND:",type(e).__name__,"CATEGORY:",safe_category(e))
+            print("MESH_MOVE_REDACTED_REASON:",safe_mesh_message(e,r["mesh_node_id"],target))
             # MeshCentral could have completed the move despite an ambiguous
             # acknowledgement. Always read back before deciding whether to fail.
     nodes_after=read_nodes()
