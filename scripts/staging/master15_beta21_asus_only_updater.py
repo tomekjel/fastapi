@@ -174,7 +174,7 @@ def main() -> None:
         if len(signature)<80:
             raise RuntimeError("PRIVATE_UPDATER_SIGNATURE_MISSING")
 
-        release_dir=ROOT/"releases"/"multiguard"/VERSION/channel
+        release_dir=Path(current_updates._RELEASE_ROOT)/VERSION/channel
         release_dir.mkdir(parents=True,exist_ok=True)
         target=release_dir/EXE
         if target.exists():
