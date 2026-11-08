@@ -6,6 +6,7 @@ on:
       - 'scripts/staging/master15_owner_profile_bridge.py'
       - 'scripts/staging/master15_beta22_service_target_constraint_migration.py'
       - 'scripts/staging/master15_beta22_service_bridge_deploy.sh'
+      - 'scripts/staging/master15_beta22_asus_only_updater.py'
       - 'scripts/staging/test_master15_beta22_service_owner_target.py'
       - '.github/workflows/master15-beta22-service-offline.yml'
 permissions:
@@ -18,6 +19,6 @@ jobs:
       - name: Offline Service OWNER entitlement and report tests
         run: |
           python3 -m unittest discover -s scripts/staging -p 'test_master15_beta22_service_owner_target.py' -v
-          python3 -m py_compile scripts/staging/master15_owner_profile_bridge.py scripts/staging/master15_beta22_service_target_constraint_migration.py
+          python3 -m py_compile scripts/staging/master15_owner_profile_bridge.py scripts/staging/master15_beta22_service_target_constraint_migration.py scripts/staging/master15_beta22_asus_only_updater.py
           bash -n scripts/staging/master15_beta22_service_bridge_deploy.sh
           echo MASTER15_BETA22_SERVICE_BACKEND_CONTRACT_PASS
