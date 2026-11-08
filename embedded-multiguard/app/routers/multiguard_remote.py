@@ -65,6 +65,16 @@ def _ensure_schema() -> None:
 
     statements = [
         """
+        CREATE TABLE IF NOT EXISTS guard.workshop_profile_transitions (
+            installation_id UUID PRIMARY KEY,
+            reservation_id UUID NOT NULL UNIQUE,
+            target_mode TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            expires_at TIMESTAMPTZ NOT NULL,
+            state TEXT NOT NULL DEFAULT 'RESERVED'
+        )
+        """,
+        """
         ALTER TABLE guard.installations
         ADD COLUMN IF NOT EXISTS mesh_node_id TEXT
         """,
