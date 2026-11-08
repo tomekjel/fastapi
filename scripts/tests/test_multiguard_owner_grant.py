@@ -64,9 +64,12 @@ class OwnerGrantContractTest(unittest.TestCase):
         self.assertIn('"reservationId": str(reservation_id)', grant)
         self.assertIn("WHERE installation_external_id=:iid AND is_current=TRUE FOR UPDATE", report)
         self.assertIn("reservation_id=:rid AND state='RESERVED'", report)
-        self.assertIn('"admissionBlocked": True', report)
-        self.assertIn('"ownerVerificationRequired": True', report)
-        self.assertNotIn("state='COMPLETED'", report)
+        self.assertIn('"admissionBlocked": not req.succeeded', report)
+        self.assertIn('"ownerVerificationRequired": not req.succeeded', report)
+        self.assertIn("state=CASE WHEN :succeeded THEN 'COMPLETED' ELSE 'RESERVED' END", report)
+        self.assertIn('"STANDARD": "ClientDormant"', report)
+        self.assertIn('"PRO": "ClientRunning"', report)
+        self.assertIn("OWNER zmienił edycję w trakcie operacji", report)
         self.assertNotIn("state='ABORTED'", report)
 
     def test_session_admission_and_grant_use_same_installation_lock(self):
