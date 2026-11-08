@@ -36,7 +36,7 @@ def apply():
         db.execute(text("ALTER TABLE guard.workshop_profile_transitions ADD CONSTRAINT "+CHECK+" CHECK ("+updated+")"))
         after=db.execute(text("""
             SELECT convalidated,pg_get_expr(conbin,conrelid) AS predicate
-            FROM pg_constraint WHERE conname=:name AND conrelid=:tbl::regclass
+            FROM pg_constraint WHERE conname=:name AND conrelid=CAST(:tbl AS regclass)
         """),{"name":CHECK,"tbl":TABLE}).mappings().one()
         assert after["convalidated"] and "'SERVICE'" in after["predicate"]
     print("MASTER15_BETA22_SIGNED_SERVICE_TARGET_CHECK_PASS")
