@@ -1,0 +1,55 @@
+name: MASTER 1.5 production OWNER contract read-only
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/master15-owner-contract-read.yml']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure existing backend SSH access
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+          SSH_KEY: ${{ secrets.MULTISERVIS_BACKEND_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?missing host}" "${SSH_USER:?missing user}" "${SSH_KEY:?missing key}"
+          mkdir -p ~/.ssh; chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/multiservis_backend
+          chmod 600 ~/.ssh/multiservis_backend
+          ssh-keyscan -T 10 -p "${SSH_PORT:-22}" "$SSH_HOST" >> ~/.ssh/known_hosts
+      - name: Read only route and state schema facts
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.MULTISERVIS_BACKEND_HOST }}
+          SSH_PORT: ${{ secrets.MULTISERVIS_BACKEND_PORT }}
+          SSH_USER: ${{ secrets.MULTISERVIS_BACKEND_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/multiservis_backend -p "${SSH_PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" \
+            'python3 -' <<'PY'
+          from pathlib import Path
+          root=Path('/opt/multiservis/app/routers')
+          for p in sorted(root.glob('multiguard*.py')):
+              s=p.read_text(encoding='utf-8')
+              if not any(q in s for q in ('owner_mode','profile-transition','service_mode','owner-profile-grant')):
+                  continue
+              print('FILE', p.name)
+              for i,line in enumerate(s.splitlines(),1):
+                  line=line.strip()
+                  if any(q in line.lower() for q in (
+                      'owner_mode','profile-transition','service_mode','paid-renewals',
+                      'service_pro', 'owner-profile-grant'
+                  )):
+                      if len(line)<180 and not any(q in line.lower() for q in ('password','secret','credential','token','key')):
+                          print(i, line[:160])
+          print('READ_ONLY_OWNER_CONTRACT_COMPLETE')
+          PY
