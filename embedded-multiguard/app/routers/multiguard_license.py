@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.database import engine
+from app.routers.multiguard_owner_profile_grant import (create_profile_transition_grant, resolve_owner_target)
 from app.security import CurrentUser, require_owner, require_staff
 
 
@@ -1372,6 +1373,104 @@ def refresh(req: RefreshRequest):
         "requestId": req.request_id,
         "signedLicense": _signed_envelope(link),
         "requiredDocuments": documents,
+    }
+
+
+@router.post("/v1/multi-guard/owner-profile-grant")
+def owner_profile_grant(req: RefreshRequest):
+    """Device poll: sign only the server-authoritative OWNER edition.
+
+    No 'target' field is accepted. This endpoint intentionally refuses
+    SERVICE until its OWNER assignment is available in the authoritative
+    database contract. An absent session/reservation table fails closed.
+    """
+    from datetime import timedelta
+
+    # Authenticate the exact installation against the same credential as
+    # license refresh, never the untrusted heartbeat planCode.
+    _authenticate_installation(req)
+    now = _utcnow()
+    try:
+        sent = datetime.fromisoformat(req.sent_at.replace("Z", "+00:00"))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(401, "Nieprawidłowy czas żądania.") from exc
+    if sent.tzinfo is None or abs((now - sent.astimezone(timezone.utc)).total_seconds()) > 120:
+        raise HTTPException(401, "Nieaktualne żądanie zmiany profilu.")
+
+    # A revoked commercial licence must never yield a fresh PRO grant.
+    # The same principle currently applies to STANDARD, conservatively.
+    with engine.begin() as db:
+        row = db.execute(text("""
+            SELECT * FROM guard.license_links
+            WHERE installation_id=:iid AND device_id=:did FOR UPDATE
+        """), {"iid": uuid.UUID(req.installation_id), "did": req.device_id}).mappings().first()
+        if not row or not row["credential_sha256"] or not secrets.compare_digest(
+            str(row["credential_sha256"]), _hash(req.installation_credential)
+        ):
+            raise HTTPException(401, "Instalacja nie jest autoryzowana.")
+        installation = db.execute(text("""
+            SELECT id, is_current FROM guard.installations
+            WHERE installation_external_id=:iid FOR UPDATE
+        """), {"iid": uuid.UUID(req.installation_id)}).mappings().first()
+        if not installation or not installation["is_current"]:
+            raise HTTPException(409, "Komputer nie jest aktywną instalacją OWNER.")
+
+        # Both kinds of remote sessions and transition reservations block
+        # profile changes; missing relations raise an error, never approval.
+        customer_busy = db.execute(text("""
+            SELECT EXISTS (
+                SELECT 1 FROM guard.remote_sessions
+                WHERE installation_id=:gid
+                  AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            )
+        """), {"gid": installation["id"]}).scalar_one()
+        workshop_busy = db.execute(text("""
+            SELECT EXISTS (
+                SELECT 1 FROM guard.workshop_remote_sessions
+                WHERE installation_id=:iid
+                  AND status IN ('REQUESTED','CONSENTED','CONNECT_READY','ACTIVE')
+            )
+        """), {"iid": uuid.UUID(req.installation_id)}).scalar_one()
+        reserved = db.execute(text("""
+            SELECT EXISTS (
+                SELECT 1 FROM guard.workshop_profile_transitions
+                WHERE installation_id=:iid AND state='RESERVED'
+            )
+        """), {"iid": uuid.UUID(req.installation_id)}).scalar_one()
+
+        valid_until = row.get("valid_until")
+        valid = bool(valid_until and valid_until > now and row.get("accepted_at"))
+        try:
+            target = resolve_owner_target(
+                # Legacy license links store CLIENT editions only.
+                # SERVICE requires separate authoritative OWNER mode.
+                owner_mode="CLIENT",
+                plan_code=str(row["plan_code"]),
+                lifecycle=str(row["lifecycle"]),
+                license_valid=valid,
+                installation_active=not bool(row.get("rebind_pending")),
+                customer_session_active=bool(customer_busy),
+                workshop_session_active=bool(workshop_busy),
+                transition_reserved=bool(reserved),
+            )
+        except ValueError as exc:
+            raise HTTPException(409, "Brak zatwierdzonej zmiany profilu OWNER.") from exc
+        # Recheck KeyGate externally in a separate validation step before
+        # enabling an unattended operation. This endpoint yields a signed
+        # CLIENT edition only, never permission for remote desktop.
+        keygate_license_id = str(row["keygate_license_id"])
+
+    keygate = _keygate_license(keygate_license_id)
+    if str(keygate.get("status", "")).strip().lower() not in {"active"}:
+        raise HTTPException(409, "KeyGate nie potwierdził aktywnej licencji.")
+    return {
+        "requestId": req.request_id,
+        "grant": create_profile_transition_grant(
+            installation_id=uuid.UUID(req.installation_id),
+            device_id=req.device_id,
+            target=target,
+            signing_key=_signing_key(),
+        ),
     }
 
 
