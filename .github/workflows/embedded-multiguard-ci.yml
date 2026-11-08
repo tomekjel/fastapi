@@ -20,6 +20,11 @@ jobs:
       - name: Verify shell
         run: bash -n embedded-multiguard/install.sh
 
+      - name: Verify signed OWNER profile grant contract (no deployment)
+        run: |
+          python3 -m pip install --quiet 'cryptography>=43,<47'
+          python3 -m unittest discover -s scripts/tests -p 'test_multiguard_owner_grant.py'
+
       - name: Verify Python syntax
         run: |
           python3 -m py_compile embedded-multiguard/app/routers/multiguard_license.py
