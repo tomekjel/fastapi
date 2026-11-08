@@ -36,12 +36,25 @@ then
     exit 1
 fi
 systemctl restart multiservis-api.service
-systemctl is-active --quiet multiservis-api.service
-if ! curl -fsS --max-time 10 -o /dev/null "http://127.0.0.1:8000/openapi.json"; then
+echo "=== CHECK SERVICE READINESS ==="
+ready=0
+for attempt in $(seq 1 30); do
+    if systemctl is-active --quiet multiservis-api.service &&
+       curl -fsS --max-time 2 -o /dev/null "http://127.0.0.1:8000/openapi.json"; then
+        ready=1
+        break
+    fi
+    sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+    echo "=== SERVICE STATE (NO SECRETS) ===" >&2
+    systemctl is-active multiservis-api.service || true
+    systemctl show multiservis-api.service -p ExecMainStatus -p ActiveState -p SubState --no-pager || true
     cp -a "$BACKUP" "$P"
-    systemctl restart multiservis-api.service
-    echo "ROLLBACK: API verification failed" >&2
+    systemctl restart multiservis-api.service || true
+    echo "ROLLBACK: no verified API readiness after retry" >&2
     exit 1
 fi
+echo "PASS: FastAPI ready after restart"
 echo "OWNER_INITIAL_GROUP_STATUS_PATCH_PASS"
 echo "BACKUP=$BACKUP"
