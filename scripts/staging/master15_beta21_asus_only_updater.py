@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MASTER 1.5: one-ASUS-only beta.21 updater staging and SemVer repair.
+"""MASTER 1.5: one-ASUS-only beta.21 updater staging on LIVE Beta/Stable contract.
 
 Run from LXC 103 as root, with GH_CONFIG_DIR for tomekjel.
 NO Windows/SCM action. NO Mesh move. NO Lenovo/STABLE release.
@@ -57,62 +57,25 @@ def read_manifest(iid: str) -> tuple[int,dict]:
         return code,json.loads(response.read()) if code==200 else {}
 
 def patch_router(original: str) -> str:
-    if "_mg15_semver_key" in original or "MG15_BETA21_ASUS_INSTALLATION" in original:
-        raise RuntimeError("PILOT_ALREADY_PATCHED_STOP")
-    needle="    return tuple(int(part) for part in match.groups())"
-    if original.count(needle)!=1:
-        raise RuntimeError("UNEXPECTED_PRODUCTION_SEMVER_BODY")
-    helper='''
-# MG15_BETA21_SEMVER: real SemVer ordering, including beta.20 < beta.21
-# and all prereleases < their stable release. Pure function; no I/O.
-def _mg15_semver_key(raw: str):
-    m=re.fullmatch(
-        r"v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?",
-        (raw or "").strip(),
-    )
-    if m is None:
-        raise ValueError("INVALID_SEMVER")
-    core=tuple(int(m.group(i)) for i in (1,2,3))
-    prerelease=m.group(4)
-    if prerelease is None:
-        return core+(1,())
-    items=tuple(
-        (0,int(p)) if p.isascii() and p.isdigit() else (1,p)
-        for p in prerelease.split(".")
-    )
-    return core+(0,items)
+    """The live server ALREADY has correct Beta.N SemVer and PILOT->BETA.
 
-'''
-    anchor="def _semver(value: str)"
-    if original.count(anchor)!=1:
-        raise RuntimeError("UNEXPECTED_PRODUCTION_SEMVER_FUNCTION")
-    patched=original.replace(anchor,helper+anchor,1).replace(
-        needle,"    return _mg15_semver_key(value)",1
-    )
+    Install only the one-device manifest guard. Refuse older/stale code,
+    preventing accidental downgrade or a new global update policy.
+    """
+    if "MG15_BETA21_ASUS_INSTALLATION" in original:
+        raise RuntimeError("PILOT_ALREADY_PATCHED_STOP")
     match='        if version <= current:\n'
-    if patched.count(match)!=1:
+    if original.count(match)!=1:
         raise RuntimeError("UNEXPECTED_PRODUCTION_RELEASE_LOOP")
-    check='''        # MG15_ASUS_BETA21_PILOT: exact one-device allowlist.
-        # All other releases retain existing rollout semantics.
+    check='''        # MG15_ASUS_BETA21_PILOT: restrict this private version to the
+        # exact OWNER installation. Other Stable/Beta updates are unaffected.
         if str(row["version"]) == "0.3.46-beta.21":
             allowed=os.environ.get("MG15_BETA21_ASUS_INSTALLATION","")
             if installation_uuid is None or str(installation_uuid)!=allowed:
                 continue
 '''
-    patched=patched.replace(match,check+match,1)
+    patched=original.replace(match,check+match,1)
     compile(patched,str(ROUTER),"exec")
-    tree=ast.parse(patched)
-    fun=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=="_mg15_semver_key")
-    compiled=compile(ast.Module(body=[fun],type_ignores=[]),"<semver-pilot>","exec")
-    ns={"re":re}
-    exec(compiled,ns)
-    key=ns["_mg15_semver_key"]
-    assert key("0.3.46-beta.20")<key("0.3.46-beta.21")<key("0.3.46")
-    assert key("0.3.45")<key("0.3.46-beta.20")
-    assert key("0.3.46-beta.2")<key("0.3.46-beta.10")
-    assert key("0.3.46-beta.21+build.7")==key("0.3.46-beta.21")
-    assert key("0.3.46")<key("0.3.47-alpha.1")
-    print("PASS: semantic version ordering and scoped ASUS filter")
     return patched
 
 def main() -> None:
@@ -135,9 +98,9 @@ def main() -> None:
             raise RuntimeError("ASUS_NOT_UNIQUE")
         iid=candidates[0]
         channel,_=current_updates._resolve_channel(db,str(iid))
-        if channel not in ("TEST","LICENSE_TEST"):
-            raise RuntimeError("ASUS_NOT_IN_PRIVATE_UPDATE_CHANNEL")
-        existing=db.execute(text("""
+        if channel != "BETA":
+            raise RuntimeError("ASUS_NOT_BETA_IN_LIVE_UPDATER")
+        # Production source of truth: OWNER PILOT is represented as BETA by\n        # the live updater. Never mutate edition or the selected channel.\n        if not (current_updates._semver("0.3.46-beta.20")\n                < current_updates._semver("0.3.46-beta.21")\n                < current_updates._semver("0.3.46")):\n            raise RuntimeError("LIVE_SEMVER_NOT_CORRECT")\n        print("PASS: live Beta.N SemVer and OWNER->BETA routing")\n        existing=db.execute(text("""
           SELECT id FROM guard.release_versions WHERE channel=:channel AND version=:version
         """),{"channel":channel,"version":VERSION}).scalar_one_or_none()
         if existing is not None:
@@ -148,7 +111,7 @@ def main() -> None:
     except Exception as exc:
         raise RuntimeError("CURRENT_UPDATER_NOT_AVAILABLE") from exc
 
-    original=ROUTER.read_text(encoding="utf-8")
+    original=ROUTER.read_text(encoding="utf-8")\n    if "return (\"BETA\" if channel == \"PILOT\" else channel)" not in original:\n        raise RuntimeError("LIVE_BETA_MAPPING_CHANGED")
     patched=patch_router(original)
     BACKUP.mkdir(parents=True,exist_ok=False)
     shutil.copy2(ROUTER,BACKUP/"multiguard_updates.py")
