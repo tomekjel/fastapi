@@ -12,6 +12,7 @@ RAW_BASE="https://raw.githubusercontent.com/$REPO/$REF/embedded-multiguard"
 APP_ROOT="/opt/multiservis"
 ROUTER_DIR="$APP_ROOT/app/routers"
 LICENSE_ROUTER_FILE="$ROUTER_DIR/multiguard_license.py"
+OWNER_GRANT_FILE="$ROUTER_DIR/multiguard_owner_profile_grant.py"
 RUNTIME_ROUTER_FILE="$ROUTER_DIR/multiguard_runtime.py"
 REMOTE_ROUTER_FILE="$ROUTER_DIR/multiguard_remote.py"
 MESH_ADAPTER_FILE="$ROUTER_DIR/multiguard_meshcentral.py"
@@ -25,6 +26,7 @@ BACKUP_DIR="$APP_ROOT/backups/multiguard-backend-$(date +%Y%m%d-%H%M%S)"
 OPENAPI_TMP="$(mktemp)"
 DEPLOY_STARTED=0
 HAD_LICENSE=0
+HAD_OWNER_GRANT=0
 HAD_RUNTIME=0
 HAD_REMOTE=0
 HAD_MESH=0
@@ -45,6 +47,11 @@ rollback() {
       cp -a "$BACKUP_DIR/multiguard_license.py" "$LICENSE_ROUTER_FILE"
     else
       rm -f "$LICENSE_ROUTER_FILE"
+    fi
+    if [ "$HAD_OWNER_GRANT" -eq 1 ]; then
+      cp -a "$BACKUP_DIR/multiguard_owner_profile_grant.py" "$OWNER_GRANT_FILE"
+    else
+      rm -f "$OWNER_GRANT_FILE"
     fi
     if [ "$HAD_RUNTIME" -eq 1 ]; then
       cp -a "$BACKUP_DIR/multiguard_runtime.py" "$RUNTIME_ROUTER_FILE"
@@ -95,6 +102,10 @@ if [ -f "$LICENSE_ROUTER_FILE" ]; then
   HAD_LICENSE=1
   cp -a "$LICENSE_ROUTER_FILE" "$BACKUP_DIR/multiguard_license.py"
 fi
+if [ -f "$OWNER_GRANT_FILE" ]; then
+  HAD_OWNER_GRANT=1
+  cp -a "$OWNER_GRANT_FILE" "$BACKUP_DIR/multiguard_owner_profile_grant.py"
+fi
 if [ -f "$RUNTIME_ROUTER_FILE" ]; then
   HAD_RUNTIME=1
   cp -a "$RUNTIME_ROUTER_FILE" "$BACKUP_DIR/multiguard_runtime.py"
@@ -114,13 +125,14 @@ fi
 
 DEPLOY_STARTED=1
 
+curl -fsSL "$RAW_BASE/app/routers/multiguard_owner_profile_grant.py" -o "$OWNER_GRANT_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_license.py" -o "$LICENSE_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_runtime.py" -o "$RUNTIME_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_remote.py" -o "$REMOTE_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_meshcentral.py" -o "$MESH_ADAPTER_FILE"
 curl -fsSL "$RAW_BASE/app/routers/multiguard_updates.py" -o "$UPDATES_ROUTER_FILE"
 curl -fsSL "$RAW_BASE/scripts/sync_multiguard_releases.py" -o "$SYNC_SCRIPT_FILE"
-chmod 0644 "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE"
+chmod 0644 "$OWNER_GRANT_FILE" "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE"
 chmod 0755 "$SYNC_SCRIPT_FILE"
 
 PYTHON="$APP_ROOT/.venv/bin/python"
@@ -177,7 +189,7 @@ for include_line in include_lines:
 path.write_text(source, encoding="utf-8")
 PY
 
-"$PYTHON" -m py_compile "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SYNC_SCRIPT_FILE" "$MAIN_FILE"
+"$PYTHON" -m py_compile "$OWNER_GRANT_FILE" "$LICENSE_ROUTER_FILE" "$RUNTIME_ROUTER_FILE" "$REMOTE_ROUTER_FILE" "$MESH_ADAPTER_FILE" "$UPDATES_ROUTER_FILE" "$SYNC_SCRIPT_FILE" "$MAIN_FILE"
 
 cat > /etc/systemd/system/multiservis-multiguard-release-sync.service <<EOF
 [Unit]
