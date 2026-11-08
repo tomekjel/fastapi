@@ -12,7 +12,7 @@ import hmac
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -115,8 +115,23 @@ def owner_profile_grant(req:Identity):
         )
     return {"requestId":req.requestId,"reservationId":str(rid),"grant":grant}
 
+def _sync_standard_after_verified_ack(iid: UUID) -> None:
+    """Run only after the signed Windows receipt was accepted and committed."""
+    import logging
+    from app.routers import master15_owner_mesh_sync_engine as sync
+    try:
+        with workshop.engine.begin() as db:
+            sync.queue_after_owner_save(db, iid)
+            # A prior failed Standard attempt is automatically requeued.
+            sync.request_manual_retry(db, iid)
+        sync.run_pending_installation(workshop.engine, iid)
+    except Exception:
+        logging.getLogger("multiguard.owner.mesh").exception(
+            "Standard group sync after verified Windows receipt failed")
+
+
 @router.post("/owner-profile-report")
-def owner_profile_report(req:TransitionReport):
+def owner_profile_report(req:TransitionReport, background_tasks: BackgroundTasks):
     """Release only the matching verified Standard/Pro transition."""
     _identity_guard(req)
     workshop._schema()
@@ -146,5 +161,7 @@ def owner_profile_report(req:TransitionReport):
             UPDATE guard.workshop_profile_transitions SET state='COMPLETED'
             WHERE installation_id=:iid AND reservation_id=:rid AND state='RESERVED'
         """),{"iid":req.installationId,"rid":req.reservationId})
+    if target == "STANDARD":
+        background_tasks.add_task(_sync_standard_after_verified_ack, req.installationId)
     return {"requestId":req.requestId,"reservationId":str(req.reservationId),
             "state":"COMPLETED","admissionBlocked":False}
