@@ -1392,7 +1392,13 @@ def owner_profile_grant(req: RefreshRequest):
 
     # Authenticate the exact installation against the same credential as
     # license refresh, never the untrusted heartbeat planCode.
-    _authenticate_installation(req)
+    verified_installation = _authenticate_installation(req)
+    # External KeyGate status is checked before reserving a device. The
+    # authoritative OWNER row is independently rechecked under DB lock.
+    keygate = _keygate_license(str(verified_installation["keygate_license_id"]))
+    if str(keygate.get("status", "")).strip().lower() != "active":
+        raise HTTPException(409, "KeyGate nie potwierdził aktywnej licencji.")
+    from datetime import timedelta
     now = _utcnow()
     try:
         sent = datetime.fromisoformat(req.sent_at.replace("Z", "+00:00"))
@@ -1459,22 +1465,36 @@ def owner_profile_grant(req: RefreshRequest):
             )
         except ValueError as exc:
             raise HTTPException(409, "Brak zatwierdzonej zmiany profilu OWNER.") from exc
-        # Recheck KeyGate externally in a separate validation step before
-        # enabling an unattended operation. This endpoint yields a signed
-        # CLIENT edition only, never permission for remote desktop.
-        keygate_license_id = str(row["keygate_license_id"])
-
-    keygate = _keygate_license(keygate_license_id)
-    if str(keygate.get("status", "")).strip().lower() not in {"active"}:
-        raise HTTPException(409, "KeyGate nie potwierdził aktywnej licencji.")
-    return {
-        "requestId": req.request_id,
-        "grant": create_profile_transition_grant(
+        # Reserve under the SAME installation-row lock used by remote
+        # session admission. The reservation survives expiry until a
+        # separately authorized completion/recovery flow settles it.
+        reservation_id = uuid.uuid4()
+        db.execute(text("""
+            INSERT INTO guard.workshop_profile_transitions
+                (installation_id,reservation_id,target_mode,expires_at,state)
+            VALUES (:iid,:rid,:target,:expires,'RESERVED')
+            ON CONFLICT (installation_id) DO UPDATE SET
+                reservation_id=EXCLUDED.reservation_id,
+                target_mode=EXCLUDED.target_mode,
+                created_at=now(),
+                expires_at=EXCLUDED.expires_at,
+                state='RESERVED'
+        """), {
+            "iid": uuid.UUID(req.installation_id),
+            "rid": reservation_id,
+            "target": target,
+            "expires": now + timedelta(minutes=10),
+        })
+        signed = create_profile_transition_grant(
             installation_id=uuid.UUID(req.installation_id),
             device_id=req.device_id,
             target=target,
             signing_key=_signing_key(),
-        ),
+        )
+    return {
+        "requestId": req.request_id,
+        "reservationId": str(reservation_id),
+        "grant": signed,
     }
 
 
