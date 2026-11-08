@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # MASTER 1.5: correct ONLY mislabelled V4.4 grid headers.
 set -Eeuo pipefail
+cd /opt/multiservis
 P=/opt/multiservis/app/routers/multiguard_license.py
 PY=/opt/multiservis/.venv/bin/python
 test -f "$P"; test -x "$PY"
