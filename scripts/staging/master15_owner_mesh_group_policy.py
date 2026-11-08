@@ -83,6 +83,27 @@ def status_after_verified_probe(*, target_id: str | None, observed_group_id: str
         return SyncState.RETRY
     return SyncState.WAITING
 
+def observed_group_for_node(records: object, node_id: str) -> tuple[bool, str | None]:
+    """Read actual ListDevices _id/meshid; absent node is NOT proof of uninstall.
+
+    Returns (visible,group). The caller must distinguish invisible/unreachable
+    from a verified agent removal before declaring Standard OK.
+    """
+    if not isinstance(records, list):
+        raise ValueError("MESH_DEVICES_RESPONSE_INVALID")
+    matched = []
+    for item in records:
+        if not isinstance(item, dict):
+            raise ValueError("MESH_DEVICE_RECORD_INVALID")
+        if item.get("_id") == node_id:
+            meshid = item.get("meshid")
+            if not isinstance(meshid, str) or not meshid:
+                raise ValueError("MESH_DEVICE_GROUP_UNKNOWN")
+            matched.append(meshid)
+    if len(matched) > 1:
+        raise ValueError("DUPLICATE_MESH_DEVICE")
+    return (True, matched[0]) if matched else (False, None)
+
 def should_retry(attempts: int, requested_by_owner: bool) -> bool:
     return 0 <= attempts < 3 or requested_by_owner
 
