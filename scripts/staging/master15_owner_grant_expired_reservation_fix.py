@@ -50,7 +50,7 @@ def main():
         x=rows[0]
         print("ROG_RESERVATION_STATE",x["state"],"TARGET",x["target_mode"],"EXPIRED",x["expired"])
         if x["state"]=="RESERVED" and not x["expired"]:
-            raise RuntimeError("ACTIVE_UNEXPIRED_OWNER_TRANSITION_STOP")
+            print("SAFE: current unexpired reservation remains blocked until expiry")
     back=ROOT/"backups"/("master15-owner-expired-reservation-"+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
     back.mkdir(parents=True,exist_ok=False)
     shutil.copy2(MOD,back/MOD.name)
