@@ -174,7 +174,10 @@ def get_status(db, iid: UUID) -> tuple[str, str, int]:
         return "—","Czeka",0
     display={"NONE":"Standard","CLIENT":"Klient","SERVICE":"Serwis"}
     status={"WAITING":"Czeka","MOVING":"Przenoszenie…","OK":"OK","RETRY":"Ponów"}
-    return display.get(str(row["requested_group"]),"—"),status[state],int(row["attempts"])
+    label=display.get(str(row["requested_group"]),"—")
+    state_label=("Brak zdalnego" if state=="OK" and str(row["requested_group"])=="NONE"
+                 else status[state])
+    return label,state_label,int(row["attempts"])
 
 def _list_visible_nodes() -> list[dict]:
     command=mesh._base_command()
