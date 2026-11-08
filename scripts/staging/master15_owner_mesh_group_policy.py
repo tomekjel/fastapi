@@ -1,6 +1,6 @@
 """MASTER 1.5 — policy & durable states for MeshCentral GROUP synchronization.
 
-Standard has NO Mesh group and MUST NOT be assigned one.
+Standard uses an isolated MeshCentral group, but may never enable remote access.
 Group sync is independent of Windows SCM profile transitions, KeyGate,
 workshop consent, and remote-session reservations.
 
@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Mapping
 
 class Group(str, Enum):
+    STANDARD = "STANDARD"
     CLIENT = "CLIENT"
     SERVICE = "SERVICE"
 
@@ -24,6 +25,7 @@ class SyncState(str, Enum):
     RETRY = "RETRY"
 
 DISPLAY_GROUP = {
+    Group.STANDARD: "Standard",
     Group.CLIENT: "Klient",
     Group.SERVICE: "Serwis",
 }
@@ -34,9 +36,9 @@ DISPLAY_STATE = {
     SyncState.RETRY: "Ponów",
 }
 
-# Only two preapproved remote-access groups exist.
-# Standard has no Mesh node membership or remote access.
+# Three preapproved groups; STANDARD has no remote-access entitlement.
 GROUP_ENV = {
+    Group.STANDARD: "MESH_STANDARD_GROUP_ID",
     Group.CLIENT: "MESH_CENTRAL_SESSION_CONSENT_MESH_ID",
     Group.SERVICE: "MESH_SERVICE_PRO_GROUP_ID",
 }
@@ -52,7 +54,7 @@ def resolve_edition(owner_mode: str, plan_code: str) -> Group | None:
     if owner_mode != "CLIENT":
         raise ValueError("UNVERIFIED_OWNER_MODE")
     if plan_code == "multi_guard":
-        return None
+        return Group.STANDARD
     if plan_code == "multi_guard_pro":
         return Group.CLIENT
     raise ValueError("UNKNOWN_CLIENT_EDITION")
@@ -71,11 +73,11 @@ def validate_groups(env: Mapping[str, str]) -> dict[Group,str]:
 
 def status_after_verified_probe(*, target_id: str | None, observed_group_id: str | None,
                                 attempts: int, move_pending: bool, mesh_agent_present: bool = True) -> SyncState:
-    # Standard succeeds only when the trusted agent is absent, not merely
-    # when it was removed from the client/service device group.
-    if target_id is None and not mesh_agent_present and not move_pending:
-        return SyncState.OK
-    if target_id is not None and observed_group_id == target_id and mesh_agent_present and not move_pending:
+    # Standard requires independently verified Windows disablement and an
+    # exact isolated MeshCentral group match. A group match alone is unsafe.
+    if target_id is not None and observed_group_id == target_id and not move_pending:
+        if mesh_agent_present:
+            return SyncState.WAITING
         return SyncState.OK
     if move_pending:
         return SyncState.MOVING
