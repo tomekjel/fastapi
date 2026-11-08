@@ -1,0 +1,21 @@
+name: MASTER 1.5 beta22 signed Service bridge contract (offline)
+on:
+  push:
+    branches: [mg/master15-beta22-service-bridge]
+    paths:
+      - 'scripts/staging/master15_owner_profile_bridge.py'
+      - 'scripts/staging/master15_beta22_service_target_constraint_migration.py'
+      - 'scripts/staging/test_master15_beta22_service_owner_target.py'
+      - '.github/workflows/master15-beta22-service-offline.yml'
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Offline Service OWNER entitlement and report tests
+        run: |
+          python3 -m unittest discover -s scripts/staging -p 'test_master15_beta22_service_owner_target.py' -v
+          python3 -m py_compile scripts/staging/master15_owner_profile_bridge.py scripts/staging/master15_beta22_service_target_constraint_migration.py
+          echo MASTER15_BETA22_SERVICE_BACKEND_CONTRACT_PASS
