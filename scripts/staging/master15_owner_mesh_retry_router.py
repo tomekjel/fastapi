@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from app.database import engine
 from app.routers import multiguard_license as license
+from app.routers.multiguard_panel_settings import _token_valid
 from app.routers import master15_owner_mesh_sync_engine as sync
 
 router=APIRouter(tags=["multi-guard-mesh-groups"])
@@ -33,7 +34,7 @@ async def retry_group_sync(
     csrf_token:str=Form(...),
     _:None=Depends(license._panel_auth),
 ):
-    if not license._token_valid(csrf_token):
+    if not _token_valid(csrf_token):
         raise HTTPException(403,"Wygasły formularz OWNER.")
     with engine.begin() as db:
         row=db.execute(text("""
