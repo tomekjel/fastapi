@@ -536,6 +536,7 @@ def create_remote_session(
                 FROM guard.support_requests sr
                 JOIN guard.installations gi ON gi.id=sr.installation_id
                 WHERE sr.id=:support_request_id
+                FOR UPDATE OF gi
                 """
             ),
             {"support_request_id": body.supportRequestId},
@@ -550,6 +551,25 @@ def create_remote_session(
                 409,
                 "Urządzenie nie ma jeszcze powiązanego węzła zdalnej pomocy.",
             )
+
+        # Same installation-row lock as the OWNER profile-grant endpoint.
+        # A transition reservation must block new session admission even
+        # when its nominal deadline has elapsed; recovery is explicit.
+        # A missing reservation table fails closed rather than allowing a
+        # race with Windows SCM profile switching.
+        reserved = connection.execute(
+            text("""
+                SELECT 1
+                FROM guard.workshop_profile_transitions t
+                JOIN guard.installations gi
+                  ON gi.installation_external_id=t.installation_id
+                WHERE gi.id=:installation_id AND t.state='RESERVED'
+                LIMIT 1
+            """),
+            {"installation_id": support["installation_id"]},
+        ).first()
+        if reserved:
+            raise HTTPException(409, "Trwa przełączanie profilu OWNER — połączenie zablokowane.")
 
         existing = _expire_and_find_open(
             connection,
