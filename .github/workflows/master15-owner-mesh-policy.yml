@@ -15,6 +15,7 @@ on:
       - 'scripts/staging/master15_beta21_asus_only_updater.py'
       - 'scripts/staging/master15_beta21_resume_paused_asus_only.py'
       - 'scripts/staging/master15_owner_profile_target_mode_constraint_fix.py'
+      - 'scripts/staging/master15_owner_grant_expired_reservation_fix.py'
       - '.github/workflows/master15-owner-mesh-policy.yml'
 permissions:
   contents: read
@@ -25,5 +26,5 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s scripts/staging -p 'test_master15_owner_mesh_group_policy.py' -v
       - run: python3 -m py_compile scripts/staging/master15_owner_mesh_group_policy.py scripts/staging/master15_owner_mesh_sync_engine.py scripts/staging/master15_owner_mesh_retry_router.py scripts/staging/master15_owner_profile_bridge.py
-      - run: python3 -m py_compile scripts/staging/master15_beta21_asus_only_updater.py scripts/staging/master15_beta21_resume_paused_asus_only.py scripts/staging/master15_owner_profile_target_mode_constraint_fix.py
+      - run: python3 -m py_compile scripts/staging/master15_beta21_asus_only_updater.py scripts/staging/master15_beta21_resume_paused_asus_only.py scripts/staging/master15_owner_profile_target_mode_constraint_fix.py scripts/staging/master15_owner_grant_expired_reservation_fix.py
       - run: bash -n scripts/staging/master15_owner_mesh_v44_deploy.sh scripts/staging/master15_asus_mesh_service_reconcile.sh scripts/staging/master15_activate_owner_broker_routes.sh scripts/staging/master15_deploy_standard_group.sh
