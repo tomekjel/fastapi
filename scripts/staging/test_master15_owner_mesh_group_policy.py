@@ -38,6 +38,17 @@ class Policy(unittest.TestCase):
         self.assertEqual(len(module.validate_groups(env)),2)
         env["MESH_SERVICE_PRO_GROUP_ID"]=env["MESH_CENTRAL_SESSION_CONSENT_MESH_ID"]
         with self.assertRaises(ValueError):module.validate_groups(env)
+    def test_live_mesh_device_list_fields(self):
+        node="node//"+"a"*64
+        group="mesh//"+"b"*64
+        self.assertEqual(module.observed_group_for_node([
+            {"_id":node, "meshid":group, "groupname":"Klient"}],node),(True,group))
+        self.assertEqual(module.observed_group_for_node([],node),(False,None))
+        with self.assertRaises(ValueError):
+            module.observed_group_for_node([{"_id":node,"meshid":group},
+                                            {"_id":node,"meshid":group}],node)
+        with self.assertRaises(ValueError):
+            module.observed_group_for_node([{"_id":node,"groupname":"Klient"}],node)
     def test_retry_limit(self):
         self.assertTrue(module.should_retry(2,False))
         self.assertFalse(module.should_retry(3,False))
