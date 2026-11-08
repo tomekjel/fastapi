@@ -1,9 +1,8 @@
 """OWNER MeshCentral sync engine — staged, disabled until live integration.
 
 Only ASUS is used during pilot, but all operations are installation-scoped.
-No Windows SCM/profile operation is performed here. Standard is never
-assigned a MeshCentral group. The remote-agent disablement must be verified
-by the independent native Windows component before Standard becomes OK.
+No Windows SCM/profile operation is performed here. Standard is assigned the isolated MeshCentral group only after a completed
+signed Windows profile transition report confirms the agent was disabled.
 """
 from __future__ import annotations
 
@@ -63,10 +62,10 @@ def _current_owner_target(db, iid: UUID) -> tuple[str, str | None]:
         choice=resolve_edition("CLIENT",str(link["plan_code"]))
     else:
         raise MeshSyncError("OWNER_MODE_NOT_VERIFIED")
-    if choice is None:
-        return "NONE",None
     config=validate_groups(os.environ)
-    return choice.value,config[choice]
+    # Keep existing DB CHECK enum ('NONE','CLIENT','SERVICE') stable:
+    # internal NONE represents the isolated STANDARD Mesh group, not deletion.
+    return ("NONE" if choice == Group.STANDARD else choice.value),config[choice]
 
 def queue_after_owner_save(db, iid: UUID) -> None:
     """Call INSIDE OWNER save transaction once the new edition is committed.
@@ -111,6 +110,10 @@ def queue_after_owner_save(db, iid: UUID) -> None:
             guard.owner_mesh_group_sync.target_mesh_id IS NOT DISTINCT FROM EXCLUDED.target_mesh_id AND
             guard.owner_mesh_group_sync.status='OK'
           THEN guard.owner_mesh_group_sync.confirmed_at ELSE NULL END,
+          requested_at=CASE WHEN
+            guard.owner_mesh_group_sync.requested_group IS DISTINCT FROM EXCLUDED.requested_group OR
+            guard.owner_mesh_group_sync.target_mesh_id IS DISTINCT FROM EXCLUDED.target_mesh_id
+          THEN now() ELSE guard.owner_mesh_group_sync.requested_at END,
           last_error=NULL,
           updated_at=now()
     """),{"iid":iid,"g":group,"target":target})
@@ -158,7 +161,7 @@ def get_status(db, iid: UUID) -> tuple[str, str, int]:
                     SELECT plan_code FROM guard.license_links
                     WHERE installation_id=:iid ORDER BY updated_at DESC LIMIT 1
                 """),{"iid":iid}).scalar_one_or_none()
-                label = {"multi_guard":"Brak","multi_guard_pro":"Klient"}.get(plan,"—")
+                label = {"multi_guard":"Standard","multi_guard_pro":"Klient"}.get(plan,"—")
             else:
                 label = "—"
             return label, "Czeka", 0
@@ -169,7 +172,7 @@ def get_status(db, iid: UUID) -> tuple[str, str, int]:
     state=row["status"]
     if state not in ("WAITING","MOVING","OK","RETRY"):
         return "—","Czeka",0
-    display={"NONE":"Brak","CLIENT":"Klient","SERVICE":"Serwis"}
+    display={"NONE":"Standard","CLIENT":"Klient","SERVICE":"Serwis"}
     status={"WAITING":"Czeka","MOVING":"Przenoszenie…","OK":"OK","RETRY":"Ponów"}
     return display.get(str(row["requested_group"]),"—"),status[state],int(row["attempts"])
 
@@ -230,6 +233,29 @@ def _finish(db,iid:UUID,revision:int,attempts:int,
         "success":success,"error":error[:180] if error else None,
     })
 
+def _verified_standard_shutdown(db, iid: UUID) -> bool:
+    """Proof from the signed broker report, not from a browser or Mesh status.
+
+    The privileged manager must first verify Stopped/Disabled via its native
+    SCM adapter, then FastAPI marks the matching reservation COMPLETED.
+    A receipt from an older edition cannot authorize this transition.
+    """
+    row=db.execute(text("""
+        SELECT t.state, t.target_mode, t.created_at,
+               l.updated_at AS license_updated
+        FROM guard.workshop_profile_transitions t
+        JOIN guard.license_links l ON l.installation_id=t.installation_id
+        WHERE t.installation_id=:iid
+    """),{"iid":iid}).mappings().first()
+    return bool(
+        row and row["state"] == "COMPLETED"
+        and row["target_mode"] == "STANDARD"
+        and row["created_at"] is not None
+        and row["license_updated"] is not None
+        and row["created_at"] >= row["license_updated"]
+    )
+
+
 def sync_once(engine,iid:UUID,revision:int)->str:
     """Exactly one bounded attempt, with read-back verification.
 
@@ -244,22 +270,20 @@ def sync_once(engine,iid:UUID,revision:int)->str:
     ok=False
     issue=""
     try:
+        if current.requested_group == "NONE":
+            # Do not move an ACTIVE agent into the restricted group, or
+            # advertise Standard/OK from a mere user-visible license choice.
+            with engine.connect() as gate_db:
+                if not _verified_standard_shutdown(gate_db, iid):
+                    raise MeshSyncError("STANDARD_AWAITING_VERIFIED_WINDOWS_DISABLE")
         if not current.mesh_node_id:
-            if current.requested_group == "NONE":
-                # No Mesh association is not sufficient to claim Windows is
-                # disabled; keep this pending until a verified native ack.
-                raise MeshSyncError("STANDARD_AWAITING_VERIFIED_WINDOWS_DISABLE")
             raise MeshSyncError("MESH_NODE_ID_NOT_LINKED")
         mesh._auto_mesh_identifier(current.mesh_node_id,"node")
         records=_list_visible_nodes()
         visible,seen=observed_group_for_node(records,current.mesh_node_id)
         if not visible:
             raise MeshSyncError("MESH_NODE_NOT_VISIBLE")
-        if current.requested_group == "NONE":
-            # Deletion from Mesh is not proof that Windows agent is disabled.
-            # A separate signed SCM ack is required before removing any node.
-            raise MeshSyncError("STANDARD_AWAITING_VERIFIED_WINDOWS_DISABLE")
-        elif seen != current.target_mesh_id:
+        if seen != current.target_mesh_id:
             mesh.move_registered_node_to_group(current.mesh_node_id,current.target_mesh_id)
             visible,seen=observed_group_for_node(_list_visible_nodes(),current.mesh_node_id)
             if not visible:
@@ -275,6 +299,10 @@ def sync_once(engine,iid:UUID,revision:int)->str:
             SELECT installation_id FROM guard.pending_installations
             WHERE installation_id=:iid FOR UPDATE
         """),{"iid":iid}).one()
+        # Windows state is independently rechecked before a green Standard.
+        if current.requested_group == "NONE" and ok and not _verified_standard_shutdown(db,iid):
+            ok=False
+            issue="STANDARD_ACK_NO_LONGER_VALID"
         # A mismatch is not a failure of the NEW revision.
         _finish(db,iid,revision,current.attempts,seen,ok,issue)
     return "OK" if ok else "RETRY" if current.attempts>=3 else "WAITING"
