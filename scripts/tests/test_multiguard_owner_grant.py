@@ -51,6 +51,24 @@ class OwnerGrantContractTest(unittest.TestCase):
                 self.assertEqual(payload["issuedAt"], "2026-11-08T12:00:00Z")
                 self.assertEqual(payload["expiresAt"], "2026-11-08T12:02:00Z")
 
+    def test_signed_ticket_is_bound_to_reservation_and_report_keeps_lock(self):
+        base = pathlib.Path(__file__).resolve().parents[2] / "embedded-multiguard" / "app" / "routers"
+        src = (base / "multiguard_license.py").read_text(encoding="utf-8")
+        grant = src.split('@router.post("/v1/multi-guard/owner-profile-grant")',1)[1].split(
+            '@router.post("/v1/multi-guard/owner-profile-report")',1
+        )[0]
+        report = src.split('@router.post("/v1/multi-guard/owner-profile-report")',1)[1].split(
+            '@router.post("/v1/multi-guard/acceptance")',1
+        )[0]
+        self.assertIn("request_id=reservation_id", grant)
+        self.assertIn('"reservationId": str(reservation_id)', grant)
+        self.assertIn("WHERE installation_external_id=:iid AND is_current=TRUE FOR UPDATE", report)
+        self.assertIn("reservation_id=:rid AND state='RESERVED'", report)
+        self.assertIn('"admissionBlocked": True', report)
+        self.assertIn('"ownerVerificationRequired": True', report)
+        self.assertNotIn("state='COMPLETED'", report)
+        self.assertNotIn("state='ABORTED'", report)
+
     def test_session_admission_and_grant_use_same_installation_lock(self):
         base = pathlib.Path(__file__).resolve().parents[2] / "embedded-multiguard" / "app" / "routers"
         license_source = (base / "multiguard_license.py").read_text(encoding="utf-8")
