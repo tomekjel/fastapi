@@ -22,7 +22,7 @@ class DB:
     def __init__(self,grant):self.grant=grant;self.calls=0
     def execute(self,sql,args):
         assert "guard.workshop_grants" in str(sql)
-        assert "installation_id" in args
+        assert "iid" in args
         self.calls+=1
         return Result(self.grant)
 
