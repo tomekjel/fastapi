@@ -51,6 +51,26 @@ class OwnerGrantContractTest(unittest.TestCase):
                 self.assertEqual(payload["issuedAt"], "2026-11-08T12:00:00Z")
                 self.assertEqual(payload["expiresAt"], "2026-11-08T12:02:00Z")
 
+    def test_heartbeat_cannot_overwrite_entitlement_fields(self):
+        source = (
+            pathlib.Path(__file__).resolve().parents[2]
+            / "embedded-multiguard" / "app" / "routers"
+            / "multiguard_runtime.py"
+        ).read_text(encoding="utf-8")
+        heartbeat = source.split('def heartbeat(body: HeartbeatBody):', 1)[1].split(
+            '@router.post("/agent/event")', 1
+        )[0]
+        # This SQL was previously client-controlled and must not return.
+        update = heartbeat.split("UPDATE guard.installations", 1)[1].split(
+            'WHERE id=:id', 1
+        )[0]
+        for forbidden in (
+            "plan_code=:plan_code", "license_id=COALESCE",
+            "lifecycle=:lifecycle", "accepted_at=COALESCE",
+            "valid_until=:valid_until",
+        ):
+            self.assertNotIn(forbidden, update)
+
     def test_owner_edition_is_resolved_from_verified_state(self):
         base = dict(
             owner_mode="CLIENT", plan_code="multi_guard_pro", lifecycle="ACTIVE",
