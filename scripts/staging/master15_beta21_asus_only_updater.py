@@ -67,7 +67,7 @@ def patch_router(original: str) -> str:
 # and all prereleases < their stable release. Pure function; no I/O.
 def _mg15_semver_key(raw: str):
     m=re.fullmatch(
-        r"v?(\\d+)\\.(\\d+)\\.(\\d+)(?:-([0-9A-Za-z.-]+))?(?:\\+[0-9A-Za-z.-]+)?",
+        r"v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?",
         (raw or "").strip(),
     )
     if m is None:
