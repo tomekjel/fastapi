@@ -339,9 +339,23 @@ def run_pending_installation(engine, iid: UUID, max_attempts: int = 3) -> str:
                     break
             remaining=deadline-time.monotonic()
             if remaining<=0:
-                # Still waiting for Windows. Do not call Mesh or count this as
-                # a Mesh failure. Its signed report schedules another worker.
-                return "AWAITING_SIGNED_WINDOWS_ACK"
+                # A signed Windows receipt never arrived. This is an actual
+                # timeout, not a MeshCentral failed attempt. Finish this
+                # revision explicitly, without claiming that Windows stopped.
+                # The later signed receipt handler can requeue the retry.
+                with engine.begin() as db:
+                    db.execute(text("""
+                        SELECT installation_id FROM guard.pending_installations
+                        WHERE installation_id=:iid FOR UPDATE
+                    """),{"iid":iid}).one()
+                    updated=db.execute(text("""
+                        UPDATE guard.owner_mesh_group_sync
+                        SET status='RETRY',last_error='WINDOWS_CONFIRMATION_TIMEOUT',
+                            updated_at=now()
+                        WHERE installation_id=:iid AND revision=:revision
+                          AND requested_group='NONE' AND status='WAITING'
+                    """),{"iid":iid,"revision":row.revision})
+                return "WINDOWS_CONFIRMATION_TIMEOUT" if updated.rowcount else "STALE_OR_REPLACED"
             time.sleep(min(2.0,remaining))
 
     # Three REAL Mesh operations, with backoff. A successful read-back ends
