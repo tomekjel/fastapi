@@ -97,8 +97,16 @@ def queue_after_owner_save(db, iid: UUID) -> None:
             guard.owner_mesh_group_sync.target_mesh_id IS NOT DISTINCT FROM EXCLUDED.target_mesh_id
           THEN guard.owner_mesh_group_sync.attempts ELSE 0 END,
           revision=guard.owner_mesh_group_sync.revision+1,
-          observed_mesh_id=NULL,
-          confirmed_at=NULL,
+          observed_mesh_id=CASE WHEN
+            guard.owner_mesh_group_sync.requested_group=EXCLUDED.requested_group AND
+            guard.owner_mesh_group_sync.target_mesh_id IS NOT DISTINCT FROM EXCLUDED.target_mesh_id AND
+            guard.owner_mesh_group_sync.status='OK'
+          THEN guard.owner_mesh_group_sync.observed_mesh_id ELSE NULL END,
+          confirmed_at=CASE WHEN
+            guard.owner_mesh_group_sync.requested_group=EXCLUDED.requested_group AND
+            guard.owner_mesh_group_sync.target_mesh_id IS NOT DISTINCT FROM EXCLUDED.target_mesh_id AND
+            guard.owner_mesh_group_sync.status='OK'
+          THEN guard.owner_mesh_group_sync.confirmed_at ELSE NULL END,
           last_error=NULL,
           updated_at=now()
     """),{"iid":iid,"g":group,"target":target})
@@ -121,7 +129,7 @@ def request_manual_retry(db, iid: UUID) -> bool:
     return result.rowcount == 1
 
 def _list_visible_nodes() -> list[dict]:
-    command=mesh._auto_mesh_command("ListDevices") if False else mesh._base_command()
+    command=mesh._base_command()
     if command.count("DeviceSharing")!=1:
         raise MeshSyncError("INVALID_MESH_LIST_COMMAND")
     command[command.index("DeviceSharing")]="ListDevices"
@@ -192,6 +200,10 @@ def sync_once(engine,iid:UUID,revision:int)->str:
     issue=""
     try:
         if not current.mesh_node_id:
+            if current.requested_group == "NONE":
+                # No Mesh association is not sufficient to claim Windows is
+                # disabled; keep this pending until a verified native ack.
+                raise MeshSyncError("STANDARD_AWAITING_VERIFIED_WINDOWS_DISABLE")
             raise MeshSyncError("MESH_NODE_ID_NOT_LINKED")
         mesh._auto_mesh_identifier(current.mesh_node_id,"node")
         records=_list_visible_nodes()
