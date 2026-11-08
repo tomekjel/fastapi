@@ -245,17 +245,18 @@ def _verified_standard_shutdown(db, iid: UUID) -> bool:
     """
     row=db.execute(text("""
         SELECT t.state, t.target_mode, t.created_at,
-               l.updated_at AS license_updated
+               s.requested_group, s.requested_at
         FROM guard.workshop_profile_transitions t
-        JOIN guard.license_links l ON l.installation_id=t.installation_id
+        JOIN guard.owner_mesh_group_sync s ON s.installation_id=t.installation_id
         WHERE t.installation_id=:iid
     """),{"iid":iid}).mappings().first()
     return bool(
         row and row["state"] == "COMPLETED"
         and row["target_mode"] == "STANDARD"
+        and row["requested_group"] == "NONE"
         and row["created_at"] is not None
-        and row["license_updated"] is not None
-        and row["created_at"] >= row["license_updated"]
+        and row["requested_at"] is not None
+        and row["created_at"] >= row["requested_at"]
     )
 
 
