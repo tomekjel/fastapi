@@ -61,14 +61,20 @@ PY
 echo "=== VALIDATE FULL APP IMPORT WITHOUT RESTART ==="
 "$PY" - <<'PY'
 from app.main import app
-paths={getattr(r,"path",None) for r in app.routes}
+from app.routers import master15_owner_profile_bridge as bridge
+# Production may use _IncludedRouter wrappers without .path; inspect
+# the same OpenAPI paths served to clients, not raw app.routes.
+bridge_paths={r.path for r in bridge.router.routes if hasattr(r,"path")}
+published=app.openapi().get("paths",{})
 for expected in (
     "/v1/multi-guard/owner-profile-grant",
     "/v1/multi-guard/owner-profile-report",
 ):
-    if expected not in paths:
-        raise SystemExit("MISSING_ROUTE:"+expected)
-print("PASS: both routes loaded in app.main")
+    if expected not in bridge_paths:
+        raise SystemExit("MISSING_BRIDGE_ROUTE:"+expected)
+    if expected not in published:
+        raise SystemExit("MISSING_OPENAPI_ROUTE:"+expected)
+print("PASS: both routes published in app.openapi()")
 PY
 
 echo "=== RESTART AND VERIFY LOCAL API ==="
