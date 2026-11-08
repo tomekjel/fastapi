@@ -71,8 +71,23 @@ def _ensure_schema() -> None:
             target_mode TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             expires_at TIMESTAMPTZ NOT NULL,
-            state TEXT NOT NULL DEFAULT 'RESERVED'
+            state TEXT NOT NULL DEFAULT 'RESERVED',
+            reported_succeeded BOOLEAN,
+            reported_profile TEXT,
+            reported_at TIMESTAMPTZ
         )
+        """,
+        """
+        ALTER TABLE guard.workshop_profile_transitions
+        ADD COLUMN IF NOT EXISTS reported_succeeded BOOLEAN
+        """,
+        """
+        ALTER TABLE guard.workshop_profile_transitions
+        ADD COLUMN IF NOT EXISTS reported_profile TEXT
+        """,
+        """
+        ALTER TABLE guard.workshop_profile_transitions
+        ADD COLUMN IF NOT EXISTS reported_at TIMESTAMPTZ
         """,
         """
         ALTER TABLE guard.installations
