@@ -1507,11 +1507,11 @@ def owner_profile_grant(req: RefreshRequest):
 
 @router.post("/v1/multi-guard/owner-profile-report")
 def owner_profile_report(req: OwnerProfileReportRequest):
-    """Record an outcome WITHOUT unlocking remote session admission.
+    """Settle a Standard/Pro transition after local broker confirmation.
 
-    A device report, even authenticated, is not independent proof that the
-    privileged Windows SCM has reached the intended verified state. Keep the
-    reservation RESERVED until a separately verified OWNER completion.
+    The client reports the exact profile independently observed by its
+    privileged broker. Errors remain RESERVED for explicit OWNER recovery.
+    This endpoint never authorizes a Service profile or a desktop session.
     """
     if str(_setting("MULTIGUARD_OWNER_PROFILE_GRANTS_ENABLED", "false")).lower() != "true":
         raise HTTPException(503, "Automatyczne przełączanie OWNER oczekuje na weryfikację etapu 3/6.")
@@ -1537,11 +1537,30 @@ def owner_profile_report(req: OwnerProfileReportRequest):
             raise HTTPException(409, "Rezerwacja nie jest aktualna.")
         if row["reported_at"] is not None:
             raise HTTPException(409, "Wynik tej rezerwacji został już zarejestrowany.")
+        # Never clear a reservation unless the independent SCM adapter
+        # reported the exact expected Standard/Pro Windows service profile.
+        expected = {"STANDARD": "ClientDormant", "PRO": "ClientRunning"}
+        target = str(row["target_mode"])
+        if req.succeeded and (target not in expected or
+                              req.observed_profile != expected[target]):
+            raise HTTPException(409, "Potwierdzony stan SCM nie odpowiada edycji OWNER.")
+        # Confirm that OWNER still holds the same paid entitlement.
+        if req.succeeded:
+            link = db.execute(text("""
+                SELECT plan_code,lifecycle FROM guard.license_links
+                WHERE installation_id=:iid FOR UPDATE
+            """), {"iid": uuid.UUID(req.installation_id)}).mappings().first()
+            if not link or str(link["lifecycle"]) != "ACTIVE" or (
+                "PRO" if link["plan_code"] == "multi_guard_pro" else
+                "STANDARD" if link["plan_code"] == "multi_guard" else ""
+            ) != target:
+                raise HTTPException(409, "OWNER zmienił edycję w trakcie operacji.")
         db.execute(text("""
             UPDATE guard.workshop_profile_transitions SET
               reported_succeeded=:succeeded,
               reported_profile=:profile,
-              reported_at=now()
+              reported_at=now(),
+              state=CASE WHEN :succeeded THEN 'COMPLETED' ELSE 'RESERVED' END
             WHERE installation_id=:iid AND reservation_id=:rid AND state='RESERVED'
         """), {
             "succeeded": req.succeeded,
@@ -1553,9 +1572,9 @@ def owner_profile_report(req: OwnerProfileReportRequest):
         "requestId": req.request_id,
         "reservationId": str(req.reservation_id),
         "recorded": True,
-        "admissionBlocked": True,
-        "state": "RESERVED",
-        "ownerVerificationRequired": True,
+        "admissionBlocked": not req.succeeded,
+        "state": "COMPLETED" if req.succeeded else "RESERVED",
+        "ownerVerificationRequired": not req.succeeded,
     }
 
 
