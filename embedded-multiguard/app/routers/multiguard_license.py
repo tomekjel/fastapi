@@ -1490,6 +1490,7 @@ def owner_profile_grant(req: RefreshRequest):
             device_id=req.device_id,
             target=target,
             signing_key=_signing_key(),
+            request_id=reservation_id,
         )
     return {
         "requestId": req.request_id,
