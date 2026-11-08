@@ -1,0 +1,17 @@
+name: MASTER 1.5 owner Mesh group policy checks
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/staging/master15_owner_mesh_group_policy.py'
+      - 'scripts/staging/test_master15_owner_mesh_group_policy.py'
+      - '.github/workflows/master15-owner-mesh-policy.yml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s scripts/staging -p 'test_master15_owner_mesh_group_policy.py' -v
+      - run: python3 -m py_compile scripts/staging/master15_owner_mesh_group_policy.py
