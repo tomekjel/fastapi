@@ -1384,7 +1384,11 @@ def owner_profile_grant(req: RefreshRequest):
     SERVICE until its OWNER assignment is available in the authoritative
     database contract. An absent session/reservation table fails closed.
     """
-    from datetime import timedelta
+    # Explicit opt-in only after server admission/reservation locking,
+    # trusted Service OWNER mode and Windows integration tests are complete.
+    # No default runtime grant can be issued from partial backend wiring.
+    if str(_setting("MULTIGUARD_OWNER_PROFILE_GRANTS_ENABLED", "false")).lower() != "true":
+        raise HTTPException(503, "Automatyczne przełączanie OWNER oczekuje na weryfikację etapu 3/6.")
 
     # Authenticate the exact installation against the same credential as
     # license refresh, never the untrusted heartbeat planCode.
