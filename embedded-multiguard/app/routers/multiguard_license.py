@@ -101,6 +101,12 @@ class RefreshRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class OwnerProfileReportRequest(RefreshRequest):
+    reservation_id: uuid.UUID = Field(alias="reservationId")
+    succeeded: bool
+    observed_profile: str = Field(alias="observedProfile", max_length=32)
+
+
 class AcceptedDocument(BaseModel):
     kind: str
     version: str
@@ -1496,6 +1502,60 @@ def owner_profile_grant(req: RefreshRequest):
         "requestId": req.request_id,
         "reservationId": str(reservation_id),
         "grant": signed,
+    }
+
+
+@router.post("/v1/multi-guard/owner-profile-report")
+def owner_profile_report(req: OwnerProfileReportRequest):
+    """Record an outcome WITHOUT unlocking remote session admission.
+
+    A device report, even authenticated, is not independent proof that the
+    privileged Windows SCM has reached the intended verified state. Keep the
+    reservation RESERVED until a separately verified OWNER completion.
+    """
+    if str(_setting("MULTIGUARD_OWNER_PROFILE_GRANTS_ENABLED", "false")).lower() != "true":
+        raise HTTPException(503, "Automatyczne przełączanie OWNER oczekuje na weryfikację etapu 3/6.")
+    _authenticate_installation(req)
+    if req.observed_profile not in {
+        "ClientRunning", "ClientStopped", "ClientDormant",
+        "ServiceRunning", "ServiceDormant", "Unknown"
+    }:
+        raise HTTPException(400, "Nieprawidłowy zgłoszony profil usługi.")
+    with engine.begin() as db:
+        installation = db.execute(text("""
+            SELECT id FROM guard.installations
+            WHERE installation_external_id=:iid AND is_current=TRUE FOR UPDATE
+        """), {"iid": uuid.UUID(req.installation_id)}).mappings().first()
+        if not installation:
+            raise HTTPException(409, "Instalacja OWNER nie jest aktywna.")
+        row = db.execute(text("""
+            SELECT reservation_id, target_mode, state, reported_at
+            FROM guard.workshop_profile_transitions
+            WHERE installation_id=:iid FOR UPDATE
+        """), {"iid": uuid.UUID(req.installation_id)}).mappings().first()
+        if not row or row["reservation_id"] != req.reservation_id or row["state"] != "RESERVED":
+            raise HTTPException(409, "Rezerwacja nie jest aktualna.")
+        if row["reported_at"] is not None:
+            raise HTTPException(409, "Wynik tej rezerwacji został już zarejestrowany.")
+        db.execute(text("""
+            UPDATE guard.workshop_profile_transitions SET
+              reported_succeeded=:succeeded,
+              reported_profile=:profile,
+              reported_at=now()
+            WHERE installation_id=:iid AND reservation_id=:rid AND state='RESERVED'
+        """), {
+            "succeeded": req.succeeded,
+            "profile": req.observed_profile,
+            "iid": uuid.UUID(req.installation_id),
+            "rid": req.reservation_id,
+        })
+    return {
+        "requestId": req.request_id,
+        "reservationId": str(req.reservation_id),
+        "recorded": True,
+        "admissionBlocked": True,
+        "state": "RESERVED",
+        "ownerVerificationRequired": True,
     }
 
 
