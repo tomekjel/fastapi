@@ -100,7 +100,14 @@ def main() -> None:
         channel,_=current_updates._resolve_channel(db,str(iid))
         if channel != "BETA":
             raise RuntimeError("ASUS_NOT_BETA_IN_LIVE_UPDATER")
-        # Production source of truth: OWNER PILOT is represented as BETA by\n        # the live updater. Never mutate edition or the selected channel.\n        if not (current_updates._semver("0.3.46-beta.20")\n                < current_updates._semver("0.3.46-beta.21")\n                < current_updates._semver("0.3.46")):\n            raise RuntimeError("LIVE_SEMVER_NOT_CORRECT")\n        print("PASS: live Beta.N SemVer and OWNER->BETA routing")\n        existing=db.execute(text("""
+        # Production source of truth: OWNER PILOT is represented as BETA by
+        # the live updater. Never mutate edition or the selected channel.
+        if not (current_updates._semver("0.3.46-beta.20")
+                < current_updates._semver("0.3.46-beta.21")
+                < current_updates._semver("0.3.46")):
+            raise RuntimeError("LIVE_SEMVER_NOT_CORRECT")
+        print("PASS: live Beta.N SemVer and OWNER->BETA routing")
+        existing=db.execute(text("""
           SELECT id FROM guard.release_versions WHERE channel=:channel AND version=:version
         """),{"channel":channel,"version":VERSION}).scalar_one_or_none()
         if existing is not None:
@@ -111,7 +118,9 @@ def main() -> None:
     except Exception as exc:
         raise RuntimeError("CURRENT_UPDATER_NOT_AVAILABLE") from exc
 
-    original=ROUTER.read_text(encoding="utf-8")\n    if "return (\"BETA\" if channel == \"PILOT\" else channel)" not in original:\n        raise RuntimeError("LIVE_BETA_MAPPING_CHANGED")
+    original=ROUTER.read_text(encoding="utf-8")
+    if "return (\"BETA\" if channel == \"PILOT\" else channel)" not in original:
+        raise RuntimeError("LIVE_BETA_MAPPING_CHANGED")
     patched=patch_router(original)
     BACKUP.mkdir(parents=True,exist_ok=False)
     shutil.copy2(ROUTER,BACKUP/"multiguard_updates.py")
