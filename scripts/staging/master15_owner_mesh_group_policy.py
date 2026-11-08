@@ -72,15 +72,16 @@ def validate_groups(env: Mapping[str, str]) -> dict[Group,str]:
     return resolved
 
 def status_after_verified_probe(*, target_id: str | None, observed_group_id: str | None,
-                                attempts: int, move_pending: bool, mesh_agent_present: bool = True) -> SyncState:
-    # Standard requires independently verified Windows disablement and an
-    # exact isolated MeshCentral group match. A group match alone is unsafe.
-    if target_id is not None and observed_group_id == target_id and not move_pending:
-        if mesh_agent_present:
-            return SyncState.WAITING
-        return SyncState.OK
+                                attempts: int, move_pending: bool, mesh_agent_present: bool = True,
+                                standard_target: bool = False, windows_disabled_verified: bool = False) -> SyncState:
+    # Mesh group membership alone must NEVER mean Standard is safe.
     if move_pending:
         return SyncState.MOVING
+    if target_id is not None and observed_group_id == target_id:
+        if standard_target and not windows_disabled_verified:
+            return SyncState.WAITING if attempts < 3 else SyncState.RETRY
+        if standard_target or mesh_agent_present:
+            return SyncState.OK
     if attempts >= 3:
         return SyncState.RETRY
     return SyncState.WAITING
