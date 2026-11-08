@@ -142,7 +142,14 @@ def get_status(db, iid: UUID) -> tuple[str, str, int]:
         WHERE s.installation_id=:iid
     """),{"iid":iid}).mappings().first()
     if not row:
-        return "—","Czeka",0
+        # Existing OWNER installations predate the new sync table.
+        # Derive only the FIRST line from the SAVED edition, never from
+        # an unsubmitted selection and never imply MeshCentral verification.
+        try:
+            saved_group, _ = _current_owner_target(db, iid)
+            return {"NONE":"Brak","CLIENT":"Klient","SERVICE":"Serwis"}[saved_group], "Czeka", 0
+        except (MeshSyncError, ValueError, KeyError):
+            return "—", "Czeka", 0
     state=row["status"]
     if state not in ("WAITING","MOVING","OK","RETRY"):
         return "—","Czeka",0
