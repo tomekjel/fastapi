@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
@@ -173,7 +174,7 @@ def get_status(db, iid: UUID) -> tuple[str, str, int]:
     if state not in ("WAITING","MOVING","OK","RETRY"):
         return "—","Czeka",0
     display={"NONE":"Standard","CLIENT":"Klient","SERVICE":"Serwis"}
-    status={"WAITING":"Czeka","MOVING":"Przenoszenie…","OK":"OK","RETRY":"Ponów"}
+    status={"WAITING":"Przełączanie…","MOVING":"Przełączanie…","OK":"OK","RETRY":"Ponów"}
     label=display.get(str(row["requested_group"]),"—")
     state_label=("Brak zdalnego" if state=="OK" and str(row["requested_group"])=="NONE"
                  else status[state])
@@ -322,9 +323,41 @@ def run_pending_installation(engine, iid: UUID, max_attempts: int = 3) -> str:
     if not row:
         return "NO_SYNC_REQUEST"
     last=row.status
-    for _ in range(min(max_attempts,3)):
+    # Wait for the signed Windows broker acknowledgement BEFORE consuming
+    # any of the three MeshCtrl attempts. This runs in a background worker,
+    # never in the OWNER HTTP request thread or a SQL transaction.
+    if row.requested_group == "NONE" and last == "WAITING":
+        deadline=time.monotonic()+60.0
+        while True:
+            with engine.connect() as db:
+                fresh=_fetch_record(db,iid)
+                if fresh is None or fresh.revision!=row.revision:
+                    return "STALE_OR_REPLACED"
+                if fresh.status!="WAITING":
+                    return fresh.status
+                if _verified_standard_shutdown(db,iid):
+                    break
+            remaining=deadline-time.monotonic()
+            if remaining<=0:
+                # Still waiting for Windows. Do not call Mesh or count this as
+                # a Mesh failure. Its signed report schedules another worker.
+                return "AWAITING_SIGNED_WINDOWS_ACK"
+            time.sleep(min(2.0,remaining))
+
+    # Three REAL Mesh operations, with backoff. A successful read-back ends
+    # the loop immediately; no artificial one-minute delay on success.
+    retry_delays=(10.0,20.0)
+    for attempt_index in range(min(max_attempts,3)):
         if last != "WAITING":
             break
+        if attempt_index:
+            time.sleep(retry_delays[min(attempt_index-1,len(retry_delays)-1)])
+        with engine.connect() as db:
+            fresh=_fetch_record(db,iid)
+            if fresh is None or fresh.revision!=row.revision:
+                return "STALE_OR_REPLACED"
+            if fresh.status!="WAITING":
+                return fresh.status
         last=sync_once(engine,iid,row.revision)
     return last
 
