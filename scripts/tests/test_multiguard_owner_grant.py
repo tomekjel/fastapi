@@ -51,6 +51,39 @@ class OwnerGrantContractTest(unittest.TestCase):
                 self.assertEqual(payload["issuedAt"], "2026-11-08T12:00:00Z")
                 self.assertEqual(payload["expiresAt"], "2026-11-08T12:02:00Z")
 
+    def test_owner_edition_is_resolved_from_verified_state(self):
+        base = dict(
+            owner_mode="CLIENT", plan_code="multi_guard_pro", lifecycle="ACTIVE",
+            license_valid=True, installation_active=True,
+            customer_session_active=False, workshop_session_active=False,
+            transition_reserved=False,
+        )
+        self.assertEqual(MODULE.resolve_owner_target(**base), "PRO")
+        self.assertEqual(MODULE.resolve_owner_target(**{**base, "plan_code":"multi_guard"}), "STANDARD")
+        self.assertEqual(MODULE.resolve_owner_target(**{
+            **base, "owner_mode":"SERVICE", "lifecycle":"WORKSHOP"
+        }), "SERVICE")
+
+    def test_owner_resolution_denies_mismatches_sessions_and_expiry(self):
+        base = dict(
+            owner_mode="CLIENT", plan_code="PRO", lifecycle="ACTIVE",
+            license_valid=True, installation_active=True,
+            customer_session_active=False, workshop_session_active=False,
+            transition_reserved=False,
+        )
+        for changed in [
+            {"customer_session_active":True},
+            {"workshop_session_active":True},
+            {"transition_reserved":True},
+            {"license_valid":False},
+            {"installation_active":False},
+            {"owner_mode":"SERVICE"},
+            {"lifecycle":"EXPIRED"},
+            {"plan_code":"unknown"},
+        ]:
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                MODULE.resolve_owner_target(**{**base, **changed})
+
     def test_tampering_breaks_signature(self):
         signed = self.grant("STANDARD")
         with self.assertRaises(Exception):
