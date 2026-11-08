@@ -324,8 +324,6 @@ def heartbeat(body: HeartbeatBody):
         if body.serviceDeviceId and body.serviceDeviceId != row["service_device_id"]:
             raise HTTPException(409, "service_device_id nie pasuje do powiązania instalacji.")
 
-        previous_lifecycle = row["lifecycle"]
-
         connection.execute(
             text(
                 """
@@ -415,33 +413,6 @@ def heartbeat(body: HeartbeatBody):
             },
         )
 
-        # Client-reported activation is not an authoritative licence event.
-        # Only OWNER/KeyGate-backed transitions may emit activation notices.
-        if False:  # legacy branch deliberately disabled until server-side event wiring
-            connection.execute(
-                text(
-                    """
-                    INSERT INTO guard.notifications(
-                        service_device_id,installation_id,kind,severity,
-                        title,message,dedup_key,payload
-                    )
-                    VALUES(
-                        :device_id,:installation_id,'LICENSE_ACTIVATED','INFO',
-                        'Multi-Guard aktywowany',
-                        'Licencja Multi-Guard została aktywowana na urządzeniu.',
-                        :dedup_key,
-                        CAST(:payload AS jsonb)
-                    )
-                    ON CONFLICT DO NOTHING
-                    """
-                ),
-                {
-                    "device_id": row["service_device_id"],
-                    "installation_id": row["id"],
-                    "dedup_key": f"activation:{row['id']}:{body.validUntil}",
-                    "payload": _json({"source": "heartbeat"}),
-                },
-            )
 
     return {
         "requestId": body.requestId,
