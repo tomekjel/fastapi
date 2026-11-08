@@ -11,11 +11,41 @@ import base64
 import json
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
-from typing import Callable
 
 PURPOSE = "MULTIGUARD_OWNER_PROFILE_TRANSITION_V1"
 TARGETS = frozenset({"STANDARD", "PRO", "SERVICE"})
 MAX_GRANT_SECONDS = 120
+
+
+def resolve_owner_target(
+    *,
+    owner_mode: str,
+    plan_code: str,
+    lifecycle: str,
+    license_valid: bool,
+    installation_active: bool,
+    customer_session_active: bool,
+    workshop_session_active: bool,
+    transition_reserved: bool,
+) -> str:
+    """Fail-closed mapping from authenticated OWNER database state.
+
+    Values MUST come from independently verified current database rows,
+    never a request field, UI cache, or unsigned licence snapshot. Caller
+    must lock installation/session admission consistently in one transaction.
+    """
+    if not installation_active:
+        raise ValueError("INSTALLATION_NOT_ACTIVE")
+    if customer_session_active or workshop_session_active or transition_reserved:
+        raise ValueError("ACTIVE_SESSION_OR_TRANSITION")
+    if owner_mode == "SERVICE" and lifecycle == "WORKSHOP":
+        return "SERVICE"
+    if owner_mode == "CLIENT" and lifecycle == "ACTIVE" and license_valid:
+        if plan_code in ("multi_guard_pro", "PRO"):
+            return "PRO"
+        if plan_code in ("multi_guard", "STANDARD"):
+            return "STANDARD"
+    raise ValueError("OWNER_EDITION_NOT_VERIFIED")
 
 
 def create_profile_transition_grant(
