@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.database import engine
+from app.routers.multiguard_semver import semver_key
 from app.security import CurrentUser, require_owner
 
 
@@ -23,7 +24,6 @@ _SCHEMA_READY = False
 _RELEASE_ROOT = Path(
     os.getenv("MULTI_GUARD_RELEASE_ROOT", "/opt/multiservis/releases/multiguard")
 ).resolve()
-_SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9._-]+$")
 _VALID_CHANNELS = {"TEST", "LICENSE_TEST", "PILOT", "STABLE"}
 
@@ -150,11 +150,11 @@ def _ensure_schema() -> None:
         _SCHEMA_READY = True
 
 
-def _semver(value: str) -> tuple[int, int, int]:
-    match = _SEMVER.match((value or "").strip())
-    if not match:
-        raise HTTPException(400, f"Nieprawidłowa wersja SemVer: {value}")
-    return tuple(int(part) for part in match.groups())
+def _semver(value: str) -> tuple:
+    try:
+        return semver_key(value)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def _rollout_bucket(installation_id: uuid.UUID, release_id: uuid.UUID) -> int:
