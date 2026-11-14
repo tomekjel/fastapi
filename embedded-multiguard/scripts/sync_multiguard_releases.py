@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +19,7 @@ if str(APP_ROOT) not in sys.path:
 
 from app.database import engine
 from app.routers.multiguard_updates import _ensure_schema
+from app.routers.multiguard_semver import TAG_RE, semver_key, is_windows_x64_nsis
 
 REPO = os.getenv("MULTI_GUARD_GITHUB_REPO", "tomekjel/multi-guard")
 RELEASE_ROOT = Path(
@@ -28,12 +28,6 @@ RELEASE_ROOT = Path(
 PUBLIC_BASE = os.getenv(
     "MULTI_GUARD_PUBLIC_BASE_URL", "https://api.multi-servis.pl"
 ).rstrip("/")
-TAG_RE = re.compile(
-    r"^v(?P<version>\d+\.\d+\.\d+)-(?P<channel>TEST(?:-preview)?|LICENSE_TEST|PILOT|STABLE)$",
-    re.IGNORECASE,
-)
-
-
 def run(*args: str, capture: bool = True) -> str:
     result = subprocess.run(
         list(args),
@@ -52,10 +46,6 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def semver_key(value: str) -> tuple[int, int, int]:
-    return tuple(int(part) for part in value.split("."))
 
 
 def release_channel(raw: str) -> str:
@@ -77,7 +67,7 @@ def choose_assets(release: dict) -> tuple[dict, dict] | None:
         (
             asset
             for asset in assets
-            if str(asset.get("name") or "").lower().endswith("_x64-setup.exe")
+            if is_windows_x64_nsis(str(asset.get("name") or ""))
         ),
         None,
     )
@@ -215,7 +205,7 @@ def main() -> int:
 
     RELEASE_ROOT.mkdir(parents=True, exist_ok=True)
     releases = load_releases()
-    candidates: list[tuple[tuple[int, int, int], dict, str, str, dict, dict]] = []
+    candidates: list[tuple[tuple, dict, str, str, dict, dict]] = []
 
     for release in releases:
         if release.get("draft"):
