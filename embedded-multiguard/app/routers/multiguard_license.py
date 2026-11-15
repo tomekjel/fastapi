@@ -1472,6 +1472,9 @@ def provision(req: ProvisionRequest):
             # Reconcile a confirmed KeyGate activation if the subsequent SQL
             # mutation fails. Keep the PostgreSQL row lock until compensation
             # finishes, so another recovery attempt cannot race the rollback.
+            # The response flag is only set for a fresh installation
+            # explicitly linked to an existing paid license by OWNER.
+            recovery_approved = bool(link.get("rebind_pending"))
             activation_confirmed = False
             try:
                 activated = _keygate_activate(
@@ -1573,6 +1576,7 @@ def provision(req: ProvisionRequest):
         "requestId": req.request_id,
         "signedLicense": _signed_envelope(link),
         "installationCredential": credential,
+        "recoveryApproved": recovery_approved,
         "requiredDocuments": [],
     }
 
