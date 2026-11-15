@@ -1,4 +1,4 @@
-name: MASTER110 OWNER recovery preview contract
+name: MASTER110 OWNER recovery integration contract
 on:
   push:
     branches: [mg/master110-recovery-preview-20261115]
