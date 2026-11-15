@@ -76,7 +76,7 @@ jobs:
           assert 'valid_until=:valid_until' not in provision_body
           print("PASS: OWNER_APPROVAL_REQUIRED_BEFORE_RECOVERED_KEYGATE_ACTIVATION")
           print("PASS: RECOVERY_PRESERVES_PAID_VALID_UNTIL")
-          tx = next(n for n in provision.body if isinstance(n, ast.With)
+          tx = next(n for n in ast.walk(provision) if isinstance(n, ast.With)
                     and any(isinstance(i.context_expr,ast.Call)
                             and isinstance(i.context_expr.func,ast.Attribute)
                             and i.context_expr.func.attr == "begin" for i in n.items))
