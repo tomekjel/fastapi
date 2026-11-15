@@ -1328,6 +1328,17 @@ def provision(req: ProvisionRequest):
     # SELECT FOR UPDATE is held until the license and pending installation
     # commits; a losing contender must never activate KeyGate first.
     with engine.begin() as connection:
+        # OWNER approval uses pending -> license lock order. Follow the
+        # identical order to avoid deadlock under simultaneous requests.
+        locked_pending = None
+        if link.get("rebind_pending"):
+            locked_pending = connection.execute(
+                text("""
+                    SELECT * FROM guard.pending_installations
+                    WHERE installation_id=:installation_id FOR UPDATE
+                """),
+                {"installation_id": installation_id},
+            ).mappings().first()
         current = connection.execute(
             text("""
                 SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE
@@ -1347,13 +1358,6 @@ def provision(req: ProvisionRequest):
         if link.get("rebind_pending"):
             # Recheck approval inside the same locked transaction: both
             # possession of discovery secret and an OWNER assignment matter.
-            locked_pending = connection.execute(
-                text("""
-                    SELECT * FROM guard.pending_installations
-                    WHERE installation_id=:installation_id FOR UPDATE
-                """),
-                {"installation_id": installation_id},
-            ).mappings().first()
             discovery_secret = (req.discovery_credential or "").strip()
             if (not locked_pending
                 or not discovery_secret
