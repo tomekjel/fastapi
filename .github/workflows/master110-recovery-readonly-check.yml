@@ -1,0 +1,29 @@
+name: MASTER110 OWNER recovery preview contract
+on:
+  push:
+    branches: [mg/master110-recovery-preview-20261115]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile backend and guard recovery preview contract
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          p=Path("embedded-multiguard/app/routers/multiguard_license.py")
+          content=p.read_text(encoding="utf-8")
+          module=ast.parse(content)
+          function=next(n for n in module.body if isinstance(n,ast.FunctionDef) and n.name=="owner_recovery_preview")
+          body=ast.get_source_segment(content,function)
+          assert 'Depends(require_owner)' in body
+          assert 'requiresOwnerApproval' in body and 'automaticallyAuthorized' in body
+          assert 'mutated' in body
+          assert not any(x in body for x in ['_keygate_deactivate(', '_keygate_activate(', 'connection.execute(text("UPDATE', 'DELETE FROM', 'UPDATE guard.', 'mesh_ctrl'])
+          print("PASS: PYTHON_PARSE")
+          print("PASS: OWNER_AUTHENTICATED_READONLY_RECOVERY")
+          print("PASS: NO_LICENSE_OR_MESH_MUTATION")
+          PY
