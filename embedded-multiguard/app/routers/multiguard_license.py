@@ -162,6 +162,13 @@ class DiscoveryAssignmentRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class RecordKeygateReviewRequest(BaseModel):
+    finding: str = Field(min_length=3, max_length=32)
+    note: str = Field(min_length=12, max_length=1000)
+    expected_state: str = Field(alias="expectedState")
+    model_config = {"populate_by_name": True}
+
+
 class ApproveRecoveryRequest(BaseModel):
     reception_id: str = Field(alias="receptionId")
     expected_license_id: str = Field(alias="expectedLicenseId", min_length=1)
@@ -560,6 +567,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_guard_keygate_provision_unresolved
     WHERE state IN ('INTENT','NEEDS_REVIEW');
 CREATE INDEX IF NOT EXISTS idx_guard_keygate_provision_review
     ON guard.keygate_provision_attempts(state, created_at DESC);
+
+-- Append-only OWNER review history. Never use a review note as proof
+-- that a remote KeyGate activation was reversed or committed.
+CREATE TABLE IF NOT EXISTS guard.keygate_provision_reviews (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    attempt_id UUID NOT NULL REFERENCES guard.keygate_provision_attempts(id)
+        ON DELETE RESTRICT,
+    finding TEXT NOT NULL CHECK (
+        finding IN ('KEYGATE_ACTIVE','KEYGATE_INACTIVE','UNKNOWN','ESCALATED')),
+    note TEXT NOT NULL CHECK (length(note) BETWEEN 12 AND 1000),
+    observed_attempt_state TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guard_keygate_reviews_attempt
+    ON guard.keygate_provision_reviews(attempt_id,created_at DESC);
 
 CREATE TABLE IF NOT EXISTS guard.activation_events (
     id BIGSERIAL PRIMARY KEY,
@@ -2295,6 +2317,91 @@ def owner_keygate_reconciliation_diagnostics(
             "ktore urzadzenie posiada aktywacje. "
             "Przed odblokowaniem sprawdz aktywacje urzadzen w KeyGate."
         ),
+    }
+
+
+@router.post("/multiguard/keygate/reconciliation/{attempt_id}/review")
+def owner_record_keygate_reconciliation_review(
+    attempt_id: str,
+    body: RecordKeygateReviewRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    """Record verified OWNER observations without unlocking retries.
+
+    The KeyGate license status endpoint does NOT prove a device's activation,
+    so approving a note must NEVER clear the unresolved attempt.
+    """
+    _ensure_schema()
+    try:
+        aid = uuid.UUID(attempt_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidlowy identyfikator proby.") from exc
+    finding = body.finding.strip().upper()
+    expected = body.expected_state.strip().upper()
+    if finding not in {"KEYGATE_ACTIVE", "KEYGATE_INACTIVE", "UNKNOWN", "ESCALATED"}:
+        raise HTTPException(400, "Nieznany wynik weryfikacji KeyGate.")
+    if expected not in {"INTENT", "NEEDS_REVIEW"}:
+        raise HTTPException(409, "Mozna dokumentowac tylko nierozwiazane aktywacje.")
+    with engine.begin() as connection:
+        attempt = connection.execute(
+            text("""
+                SELECT id, state FROM guard.keygate_provision_attempts
+                WHERE id=:id FOR UPDATE
+            """), {"id": aid},
+        ).mappings().first()
+        if not attempt:
+            raise HTTPException(404, "Nie znaleziono proby aktywacji.")
+        if attempt["state"] != expected:
+            raise HTTPException(409, "Stan proby zmienil sie od odczytu w OWNER.")
+        review_id = connection.execute(
+            text("""
+                INSERT INTO guard.keygate_provision_reviews
+                    (attempt_id, finding, note, observed_attempt_state)
+                VALUES (:attempt_id, :finding, :note, :expected)
+                RETURNING id
+            """), {
+                "attempt_id": aid, "finding": finding,
+                "note": body.note.strip(), "expected": expected,
+            },
+        ).scalar_one()
+    return {
+        "attemptId": str(aid),
+        "reviewId": str(review_id),
+        "finding": finding,
+        "attemptState": expected,
+        "stillBlocked": True,
+        "automaticallyRetried": False,
+        "warning": "Zapisano wynik kontroli. Odblokowanie wymaga odrebnej bezpiecznej procedury.",
+    }
+
+
+@router.get("/multiguard/keygate/reconciliation/{attempt_id}/reviews")
+def owner_keygate_reconciliation_reviews(
+    attempt_id: str, user: CurrentUser = Depends(require_owner)
+):
+    _ensure_schema()
+    try:
+        aid = uuid.UUID(attempt_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidlowy identyfikator proby.") from exc
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text("""
+                SELECT id, finding, note, observed_attempt_state, created_at
+                FROM guard.keygate_provision_reviews
+                WHERE attempt_id=:attempt_id
+                ORDER BY created_at DESC LIMIT 100
+            """), {"attempt_id": aid},
+        ).mappings().all()
+    return {
+        "attemptId": str(aid),
+        "reviews": [{
+            "reviewId": str(row["id"]),
+            "finding": row["finding"],
+            "note": row["note"],
+            "observedAttemptState": row["observed_attempt_state"],
+            "createdAt": _iso(row["created_at"]),
+        } for row in rows],
     }
 
 
