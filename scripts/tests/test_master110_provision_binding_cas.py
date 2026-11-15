@@ -17,7 +17,7 @@ TX = next(n for n in PROVISION.body if isinstance(n, ast.With) and
               isinstance(item.context_expr.func, ast.Attribute) and
               item.context_expr.func.attr=="begin" for item in n.items))
 UPDATE = next(
-    n for n in TX.body if isinstance(n, ast.Assign)
+    n for n in ast.walk(TX) if isinstance(n, ast.Assign)
     and any(isinstance(t, ast.Name) and t.id == "row" for t in n.targets)
 )
 assert isinstance(UPDATE, ast.Assign)
