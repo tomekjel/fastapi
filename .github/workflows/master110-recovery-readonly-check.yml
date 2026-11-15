@@ -145,3 +145,30 @@ jobs:
 
 
           PY
+  postgres-journal-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: master110
+          POSTGRES_PASSWORD: test_only_not_production
+          POSTGRES_DB: master110_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U master110 -d master110_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MASTER110_TEST_POSTGRES: postgresql://master110:test_only_not_production@127.0.0.1:5432/master110_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated test driver
+        run: python -m pip install 'psycopg[binary]==3.2.12'
+      - name: Real PostgreSQL journal and concurrency tests
+        run: python -m unittest scripts/tests/test_master110_postgres_integration.py -v
