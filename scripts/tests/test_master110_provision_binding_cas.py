@@ -12,7 +12,7 @@ import uuid
 SOURCE = Path("embedded-multiguard/app/routers/multiguard_license.py").read_text(encoding="utf-8")
 AST = ast.parse(SOURCE)
 PROVISION = next(n for n in AST.body if isinstance(n, ast.FunctionDef) and n.name=="provision")
-TX = next(n for n in PROVISION.body if isinstance(n, ast.With) and
+TX = next(n for n in ast.walk(PROVISION) if isinstance(n, ast.With) and
           any(isinstance(item.context_expr, ast.Call) and
               isinstance(item.context_expr.func, ast.Attribute) and
               item.context_expr.func.attr=="begin" for item in n.items))
