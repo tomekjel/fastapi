@@ -5,7 +5,7 @@ import unittest
 
 s=Path("embedded-multiguard/app/routers/multiguard_license.py").read_text(encoding="utf-8")
 p=next(n for n in ast.parse(s).body if isinstance(n,ast.FunctionDef) and n.name=="provision")
-tx=next(n for n in p.body if isinstance(n,ast.With))
+tx=next(n for n in ast.walk(p) if isinstance(n,ast.With) and 'SELECT * FROM guard.license_links' in (ast.get_source_segment(s,n) or ''))
 recovery=next(n for n in tx.body if isinstance(n,ast.Try) and n.handlers)
 handler=recovery.handlers[0]
 assert handler.name=="provision_error"
