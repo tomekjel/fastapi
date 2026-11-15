@@ -1339,16 +1339,24 @@ def _begin_keygate_provision_attempt(link: dict[str, Any], installation_id: uuid
             raise HTTPException(
                 409, "RECOVERY_RECONCILIATION_REQUIRED: Niedokonczona aktywacja KeyGate wymaga kontroli OWNER.",
             )
-        connection.execute(
+        inserted = connection.execute(
             text("""
                 INSERT INTO guard.keygate_provision_attempts
                     (id,keygate_license_id,installation_id,device_id,state)
                 VALUES (:id,:license_id,:installation_id,:device_id,'INTENT')
+                ON CONFLICT (keygate_license_id)
+                    WHERE state IN ('INTENT','NEEDS_REVIEW')
+                DO NOTHING
+                RETURNING id
             """), {
                 "id": attempt_id, "license_id": link["keygate_license_id"],
                 "installation_id": installation_id, "device_id": device_id,
             },
-        )
+        ).first()
+        if not inserted:
+            raise HTTPException(
+                409, "RECOVERY_RECONCILIATION_REQUIRED: Niedokonczona aktywacja KeyGate wymaga kontroli OWNER.",
+            )
     return attempt_id
 
 
