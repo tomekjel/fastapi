@@ -1324,22 +1324,64 @@ def provision(req: ProvisionRequest):
                 409, "RECOVERY_REQUIRED: Odzyskanie starej licencji wymaga aktualnego zatwierdzenia w OWNER.",
             )
 
-    activated = _keygate_activate(
-        license_key, req.device_id, str(installation_id)
-    )
-    returned_license_id = str(activated.get("license_id", "")).strip()
-    if returned_license_id and returned_license_id != link["keygate_license_id"]:
-        raise HTTPException(409, "KeyGate zwrócił inną licencję.")
-
-    credential = secrets.token_urlsafe(48)
-    credential_hash = _hash(credential)
-    lifecycle = (
-        link["lifecycle"]
-        if link.get("rebind_pending") and link["lifecycle"] != "UNASSIGNED"
-        else "SERVICE_TEST"
-    )
-
+    # Serialize contenders on the same paid license before contacting KeyGate.
+    # SELECT FOR UPDATE is held until the license and pending installation
+    # commits; a losing contender must never activate KeyGate first.
     with engine.begin() as connection:
+        current = connection.execute(
+            text("""
+                SELECT * FROM guard.license_links WHERE id=:id FOR UPDATE
+            """),
+            {"id": link["id"]},
+        ).mappings().first()
+        if not current:
+            raise HTTPException(409, "Licencja została usunięta z OWNER.")
+        link = _normalize_link(dict(current))
+        if (link.get("installation_id") is not None
+                or link.get("device_id") is not None
+                or link.get("credential_sha256") is not None
+                or link["lifecycle"] in {"EXPIRED", "REVOKED"}
+                or (link.get("valid_until") is not None
+                    and link["valid_until"] <= _utcnow())):
+            raise HTTPException(409, "Licencja nie jest dostępna do ponownej aktywacji.")
+        if link.get("rebind_pending"):
+            # Recheck approval inside the same locked transaction: both
+            # possession of discovery secret and an OWNER assignment matter.
+            locked_pending = connection.execute(
+                text("""
+                    SELECT * FROM guard.pending_installations
+                    WHERE installation_id=:installation_id FOR UPDATE
+                """),
+                {"installation_id": installation_id},
+            ).mappings().first()
+            discovery_secret = (req.discovery_credential or "").strip()
+            if (not locked_pending
+                or not discovery_secret
+                or not secrets.compare_digest(
+                    str(locked_pending.get("discovery_credential_sha256") or ""),
+                    _hash(discovery_secret))
+                or locked_pending.get("status") != "ASSIGNED"
+                or locked_pending.get("assigned_reception_id") != link["reception_id"]
+                or str(locked_pending.get("assigned_license_id") or "") != str(link["keygate_license_id"])
+                or locked_pending.get("device_id") != req.device_id
+                or locked_pending.get("last_seen_at") is None
+                or (_utcnow() - locked_pending["last_seen_at"]).total_seconds() > 300):
+                raise HTTPException(409, "RECOVERY_REQUIRED: Zatwierdzenie OWNER wygasło lub zmieniło się.")
+
+        activated = _keygate_activate(
+            license_key, req.device_id, str(installation_id)
+        )
+        returned_license_id = str(activated.get("license_id", "")).strip()
+        if returned_license_id and returned_license_id != link["keygate_license_id"]:
+            raise HTTPException(409, "KeyGate zwrócił inną licencję.")
+
+        credential = secrets.token_urlsafe(48)
+        credential_hash = _hash(credential)
+        lifecycle = (
+            link["lifecycle"]
+            if link.get("rebind_pending") and link["lifecycle"] != "UNASSIGNED"
+            else "SERVICE_TEST"
+        )
         row = connection.execute(
             text(
                 """
