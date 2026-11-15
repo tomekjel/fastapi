@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test KeyGate compensation after failed PostgreSQL write
+        run: python -m unittest scripts/tests/test_master110_keygate_compensation.py -v
       - name: Test atomic license binding competing installs
         run: python -m unittest scripts/tests/test_master110_provision_binding_cas.py -v
       - name: Test OWNER approval with transactional fake database
