@@ -97,7 +97,7 @@ jobs:
                        and n.name=="owner_keygate_reconciliation")
           listing_src=ast.get_source_segment(content,listing)
           assert 'Depends(require_owner)' in listing_src
-          assert "'automaticallyRetried': False" in listing_src
+          assert '"automaticallyRetried": False' in listing_src
           assert "state IN ('INTENT','NEEDS_REVIEW')" in listing_src
           assert 'UPDATE guard.' not in listing_src
           assert 'CREATE UNIQUE INDEX IF NOT EXISTS idx_guard_keygate_provision_unresolved' in content
