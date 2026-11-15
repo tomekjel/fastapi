@@ -157,6 +157,12 @@ class DiscoveryAssignmentRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ApproveRecoveryRequest(BaseModel):
+    reception_id: str = Field(alias="receptionId")
+    expected_license_id: str = Field(alias="expectedLicenseId", min_length=1)
+    model_config = {"populate_by_name": True}
+
+
 class AssignPendingInstallationRequest(BaseModel):
     reception_id: str = Field(alias="receptionId")
     edition: str
@@ -1880,6 +1886,94 @@ def owner_recovery_preview(
         "requiresOwnerApproval": True,
         "automaticallyAuthorized": False,
         "mutated": False,
+    }
+
+
+@router.post("/multiguard/pending-installations/{installation_id}/approve-recovery")
+def approve_pending_recovery(
+    installation_id: str,
+    body: ApproveRecoveryRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    """Explicit OWNER-only binding of a *previously released* existing license.
+
+    This does NOT deactivate KeyGate, mint a license, change paid dates, or touch
+    MeshCentral. The existing /rebind operation must already have been approved
+    and completed by OWNER; recovery approval only links that released license
+    to one authenticated, newly registered pending installation.
+    """
+    _ensure_schema()
+    try:
+        iid = uuid.UUID(installation_id)
+        rid = uuid.UUID(body.reception_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowy identyfikator.") from exc
+
+    with engine.begin() as connection:
+        pending = connection.execute(
+            text("""SELECT * FROM guard.pending_installations
+                    WHERE installation_id=:iid FOR UPDATE"""),
+            {"iid": iid},
+        ).mappings().first()
+        if not pending:
+            raise HTTPException(404, "Instalacja oczekująca nie istnieje.")
+        if pending["status"] != "WAITING":
+            raise HTTPException(409, "Instalacja nie oczekuje na powiazanie.")
+        if not pending.get("discovery_credential_sha256"):
+            raise HTTPException(409, "Instalacja nie posiada poświadczenia discovery.")
+
+        link = connection.execute(
+            text("""SELECT * FROM guard.license_links
+                    WHERE reception_id=:rid FOR UPDATE"""),
+            {"rid": rid},
+        ).mappings().first()
+        if not link:
+            raise HTTPException(404, "Brak licencji zlecenia.")
+        if not secrets.compare_digest(
+            str(link["keygate_license_id"]), body.expected_license_id.strip()
+        ):
+            raise HTTPException(409, "Licencja zmienila sie od potwierdzenia OWNER.")
+        if not link["rebind_pending"] or link["installation_id"] is not None:
+            raise HTTPException(409, "Najpierw zwolnij poprzednia instalacje przez OWNER.")
+        if link["lifecycle"] in {"UNASSIGNED", "EXPIRED", "REVOKED"}:
+            raise HTTPException(409, "Nie mozna odzyskac nieaktywnej licencji.")
+        if link["valid_until"] is not None and link["valid_until"] <= _utcnow():
+            raise HTTPException(409, "Termin licencji uplynal.")
+        if pending["assigned_reception_id"] is not None:
+            raise HTTPException(409, "Instalacja ma juz inne przypisanie.")
+        # Prevent two license rows from claiming the same target device or
+        # colliding with an existing provisioned installation.
+        claimed = connection.execute(
+            text("""SELECT id FROM guard.license_links
+                    WHERE device_id=:device_id AND id<>:link_id
+                      AND installation_id IS NOT NULL LIMIT 1"""),
+            {"device_id": str(pending["device_id"]), "link_id": link["id"]},
+        ).first()
+        if claimed:
+            raise HTTPException(409, "Urzadzenie jest juz zwiazane z inna licencja.")
+
+        updated = connection.execute(
+            text("""UPDATE guard.pending_installations
+                    SET status='ASSIGNED',
+                        assigned_reception_id=:rid,
+                        assigned_license_id=:keygate_id,
+                        assigned_at=now(), updated_at=now()
+                    WHERE installation_id=:iid AND status='WAITING'
+                    RETURNING installation_id"""),
+            {"rid": rid, "keygate_id": link["keygate_license_id"], "iid": iid},
+        ).first()
+        if not updated:
+            raise HTTPException(409, "Zmienil sie stan oczekujacej instalacji.")
+
+    return {
+        "installationId": str(iid),
+        "receptionId": str(rid),
+        "licenseId": body.expected_license_id.strip(),
+        "status": "ASSIGNED",
+        "createdNewLicense": False,
+        "changedLicenseValidity": False,
+        "meshChanged": False,
+        "pendingClientProvision": True,
     }
 
 
