@@ -101,10 +101,10 @@ class Contract(unittest.TestCase):
         self.assertEqual(err.exception.status_code,502)
     def test_bad_response_without_license_id_must_not_be_accepted(self):
         self.server.behavior="bad-body"
-        response=self.env["_keygate_activate"]("TEST-KEY","device-A","installation-A")
-        # Current transport accepts arbitrary dictionaries; expose gap rather
-        # than claiming proof of activation. Require license_id upstream.
-        self.assertNotIn("license_id",response)
+        with self.assertRaises(HTTPException) as err:
+            self.env["_keygate_activate"]("TEST-KEY","device-A","installation-A")
+        self.assertEqual(err.exception.status_code,502)
+        self.assertIn("RECOVERY_RECONCILIATION_REQUIRED",str(err.exception))
 
 if __name__=="__main__":
     unittest.main()
