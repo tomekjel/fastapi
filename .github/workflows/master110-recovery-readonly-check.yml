@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test durable KeyGate activation attempt journal
+        run: python -m unittest scripts/tests/test_master110_durable_journal.py -v
       - name: Test KeyGate compensation after failed PostgreSQL write
         run: python -m unittest scripts/tests/test_master110_keygate_compensation.py -v
       - name: Test atomic license binding competing installs
