@@ -53,6 +53,12 @@ jobs:
           provision=next(n for n in module.body if isinstance(n,ast.FunctionDef) and n.name=="provision")
           provision_body=ast.get_source_segment(content,provision)
           assert 'if link.get("rebind_pending"):' in provision_body
+          assert 'discovery_secret = (req.discovery_credential or "").strip()' in provision_body
+          assert '"discovery_credential_sha256"' in provision_body
+          assert '_hash(discovery_secret)' in provision_body
+          assert provision_body.index('discovery_secret = ') < provision_body.index('activated = _keygate_activate(')
+          assert 'default=None, alias="discoveryCredential"' in content
+          print("PASS: RECOVERY_REQUIRES_NEW_INSTALLATION_DISCOVERY_CREDENTIAL")
           assert 'pending.get("status") != "ASSIGNED"' in provision_body
           assert 'pending.get("assigned_reception_id") != link["reception_id"]' in provision_body
           assert 'secrets.compare_digest(str(pending.get("device_id") or ""), req.device_id)' in provision_body
