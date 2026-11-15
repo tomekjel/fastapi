@@ -30,11 +30,11 @@ class Connection:
         if "INSERT INTO guard.keygate_provision_attempts" in sql:
             if any(v["license"]==params["license_id"] and
                    v["state"] in ("INTENT","NEEDS_REVIEW") for v in self.data.values()):
-                raise HTTPException(409,"conflicting unresolved keygate call")
+                return Result(None)  # ON CONFLICT ... DO NOTHING RETURNING id
             self.data[params["id"]]={"license":params["license_id"],
                 "installation":params["installation_id"],
                 "device":params["device_id"],"state":"INTENT"}
-            return Result()
+            return Result({"id":params["id"]})
         if "UPDATE guard.keygate_provision_attempts" in sql:
             row=self.data.get(params["id"])
             if row and row["state"]=="INTENT":row["state"]=params["state"]
