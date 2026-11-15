@@ -126,6 +126,7 @@ class Flow(unittest.TestCase):
     def test_success_preserves_validity_and_provisions_once(self):
         response=self.provision(self.req)
         self.assertEqual(response["signedLicense"]["testLicenseId"],"KG-TEST-ID")
+        self.assertTrue(response["recoveryApproved"])
         link=self.fetch_link()
         self.assertEqual(link["installation_id"],self.iid)
         self.assertEqual(link["device_id"],self.device_id)
