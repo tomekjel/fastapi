@@ -50,5 +50,18 @@ jobs:
           assert 'stored and received and stored != received' in register_body
           assert 'hostname' not in register_body.split('# MASTER110:')[1].split('row = connection.execute(')[0].split('for field')[1]
           print("PASS: DUPLICATED_INSTALLATION_CANNOT_OVERWRITE_HARDWARE_RECORD")
+          provision=next(n for n in module.body if isinstance(n,ast.FunctionDef) and n.name=="provision")
+          provision_body=ast.get_source_segment(content,provision)
+          assert 'if link.get("rebind_pending"):' in provision_body
+          assert 'pending.get("status") != "ASSIGNED"' in provision_body
+          assert 'pending.get("assigned_reception_id") != link["reception_id"]' in provision_body
+          assert 'secrets.compare_digest(str(pending.get("device_id") or ""), req.device_id)' in provision_body
+          assert '(_utcnow() - pending["last_seen_at"]).total_seconds() > 300' in provision_body
+          assert provision_body.index('if link.get("rebind_pending"):') < provision_body.index('activated = _keygate_activate(')
+          assert 'lifecycle = (' in provision_body and 'if link.get("rebind_pending")' in provision_body
+          assert 'valid_until=:valid_until' not in provision_body
+          print("PASS: OWNER_APPROVAL_REQUIRED_BEFORE_RECOVERED_KEYGATE_ACTIVATION")
+          print("PASS: RECOVERY_PRESERVES_PAID_VALID_UNTIL")
+
 
           PY
