@@ -367,6 +367,12 @@ def _keygate_activate(
     )
     if not isinstance(result, dict):
         raise HTTPException(502, "KeyGate zwrócił nieprawidłową aktywację.")
+    # A transport-level 200 alone is not proof that the requested licence
+    # activated. Never proceed to PostgreSQL when KeyGate omits its license ID.
+    if not str(result.get("license_id") or "").strip():
+        raise HTTPException(
+            502, "RECOVERY_RECONCILIATION_REQUIRED: KeyGate nie potwierdzil ID aktywowanej licencji.",
+        )
     return result
 
 
