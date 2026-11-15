@@ -26,4 +26,16 @@ jobs:
           print("PASS: PYTHON_PARSE")
           print("PASS: OWNER_AUTHENTICATED_READONLY_RECOVERY")
           print("PASS: NO_LICENSE_OR_MESH_MUTATION")
+          approval=next(n for n in module.body if isinstance(n,ast.FunctionDef) and n.name=="approve_pending_recovery")
+          approval_body=ast.get_source_segment(content,approval)
+          assert 'Depends(require_owner)' in approval_body
+          assert 'status=\'ASSIGNED\'' in approval_body
+          assert 'FOR UPDATE' in approval_body
+          assert 'rebind_pending' in approval_body
+          assert 'expected_license_id' in approval_body
+          assert 'valid_until' in approval_body
+          assert "'pendingClientProvision': True" not in approval_body or 'pendingClientProvision' in approval_body
+          assert not any(term in approval_body for term in ['_keygate_activate(', '_keygate_deactivate(', 'mesh_ctrl', '_generate_license_link(', 'UPDATE guard.license_links'])
+          print("PASS: EXPLICIT_OWNER_RECOVERY_APPROVAL_REUSES_EXISTING_LICENSE")
+          print("PASS: RECOVERY_NO_NEW_LICENSE_NO_MESH_CHANGE")
           PY
