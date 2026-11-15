@@ -101,7 +101,7 @@ class Flow(unittest.TestCase):
             "_utcnow":lambda:datetime.now(timezone.utc),
             "_ensure_schema":lambda:None,
             "_normalize_link":lambda link:dict(link),
-            "_signed_envelope":lambda link:{"testLicenseId":link["keygate_license_id"]},
+            "_signed_envelope":lambda link, *, recovery_approved=False:{"testLicenseId":link["keygate_license_id"],"recoveryApproved":recovery_approved},
             "_keygate_activate":self.keygate.activate,
             "_keygate_deactivate":self.keygate.deactivate,
         }
@@ -126,7 +126,7 @@ class Flow(unittest.TestCase):
     def test_success_preserves_validity_and_provisions_once(self):
         response=self.provision(self.req)
         self.assertEqual(response["signedLicense"]["testLicenseId"],"KG-TEST-ID")
-        self.assertTrue(response["recoveryApproved"])
+        self.assertTrue(response["signedLicense"]["recoveryApproved"])
         link=self.fetch_link()
         self.assertEqual(link["installation_id"],self.iid)
         self.assertEqual(link["device_id"],self.device_id)
@@ -148,7 +148,7 @@ class Flow(unittest.TestCase):
                 WHERE reception_id=:rid
             """),{"rid":self.rid})
         response=self.provision(self.req)
-        self.assertFalse(response["recoveryApproved"])
+        self.assertFalse(response["signedLicense"]["recoveryApproved"])
         self.assertEqual(self.fetch_link()["lifecycle"],"SERVICE_TEST")
         self.assertEqual(len(self.keygate.activations),1)
 
