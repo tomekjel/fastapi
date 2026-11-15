@@ -16,7 +16,10 @@ TX = next(n for n in PROVISION.body if isinstance(n, ast.With) and
           any(isinstance(item.context_expr, ast.Call) and
               isinstance(item.context_expr.func, ast.Attribute) and
               item.context_expr.func.attr=="begin" for item in n.items))
-UPDATE = TX.body[0]
+UPDATE = next(
+    n for n in TX.body if isinstance(n, ast.Assign)
+    and any(isinstance(t, ast.Name) and t.id == "row" for t in n.targets)
+)
 assert isinstance(UPDATE, ast.Assign)
 # Execute exactly the real code assigning row from the SQL update.
 FN = ast.FunctionDef(name="bind_once",args=ast.arguments(posonlyargs=[],args=[
