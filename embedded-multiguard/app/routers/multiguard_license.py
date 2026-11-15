@@ -1111,6 +1111,25 @@ def discovery_register(req: DiscoveryRegisterRequest):
                     "Nieprawidłowe poświadczenie wykrywania instalacji.",
                 )
 
+            # MASTER110: even copied installation.json plus discovery data
+            # must not silently overwrite the registered hardware record.
+            # A motherboard/BIOS replacement is an OWNER recovery operation.
+            # Hostname deliberately excluded: legitimate Windows renames
+            # must never invalidate a commercial subscription.
+            for field, presented in (
+                ("manufacturer", req.manufacturer),
+                ("model", req.model),
+                ("serial_number", req.serial_number),
+            ):
+                stored = str(existing.get(field) or "").strip().casefold()
+                received = str(presented or "").strip().casefold()
+                if stored and received and stored != received:
+                    raise HTTPException(
+                        409,
+                        "RECOVERY_REQUIRED: Zmiana danych sprzetu dla "
+                        "istniejacego identyfikatora instalacji; "
+                        "wymagane zatwierdzenie w OWNER.",
+                    )
             row = connection.execute(
                 text(
                     """
