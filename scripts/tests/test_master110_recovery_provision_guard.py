@@ -17,15 +17,21 @@ SOURCE = pathlib.Path("embedded-multiguard/app/routers/multiguard_license.py").r
 MODULE = ast.parse(SOURCE)
 FUNCTION = next(n for n in MODULE.body if isinstance(n, ast.FunctionDef) and n.name == "provision")
 # The code-under-test is extracted from the actual module, not reimplemented.
+# KeyGate now executes inside the transaction. Extract the actual preflight
+# statements preceding that transaction; the transaction and its KeyGate
+# operation have separate integration/locking contract tests.
 BEFORE_ACTIVATION = []
 for stmt in FUNCTION.body:
-    if isinstance(stmt, ast.Assign) and any(
-        isinstance(target, ast.Name) and target.id == "activated" for target in stmt.targets
+    if isinstance(stmt, ast.With) and any(
+        isinstance(item.context_expr, ast.Call)
+        and isinstance(item.context_expr.func, ast.Attribute)
+        and item.context_expr.func.attr == "begin"
+        for item in stmt.items
     ):
         break
     BEFORE_ACTIVATION.append(stmt)
 else:
-    raise AssertionError("Cannot locate KeyGate activation boundary")
+    raise AssertionError("Cannot locate serialized activation transaction")
 PRECHECK = ast.FunctionDef(name="precheck", args=FUNCTION.args, body=BEFORE_ACTIVATION + [ast.Return(value=ast.Constant(value=True))], decorator_list=[], returns=None, type_comment=None)
 PRECHECK_AST = ast.fix_missing_locations(ast.Module(body=[PRECHECK], type_ignores=[]))
 IID = str(uuid.uuid4())
