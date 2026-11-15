@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test actual KeyGate HTTP contract against localhost stub
+        run: python -m unittest scripts/tests/test_master110_keygate_http_contract.py -v
       - name: Test OWNER KeyGate reconciliation diagnostics without side effects
         run: python -m unittest scripts/tests/test_master110_owner_keygate_diagnostics.py -v
       - name: Test durable KeyGate activation attempt journal
