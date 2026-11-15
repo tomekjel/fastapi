@@ -19,7 +19,8 @@ SOURCE = next(n for n in TREE.body if isinstance(n, ast.FunctionDef) and n.name 
 # Strip the FastAPI decorator; exercise body as authored.
 STUB = ast.FunctionDef(name="approve", args=SOURCE.args, body=SOURCE.body,
                        decorator_list=[], returns=None, type_comment=None)
-COMPILED = compile(ast.fix_missing_locations(ast.Module(body=[STUB], type_ignores=[])), "<actual-owner-approve>", "exec")
+FUTURE = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
+COMPILED = compile(ast.fix_missing_locations(ast.Module(body=[FUTURE, STUB], type_ignores=[])), "<actual-owner-approve>", "exec")
 NOW = datetime.now(timezone.utc)
 RID = uuid.uuid4()
 IID = uuid.uuid4()
@@ -88,6 +89,7 @@ class Tests(unittest.TestCase):
         }
         env = {
             "uuid": uuid, "HTTPException": HTTPException, "secrets": secrets,
+            "Depends": lambda x: None, "require_owner": object(),
             "engine": FakeEngine(self.data), "text": lambda sql: sql,
             "_ensure_schema": lambda: None, "_utcnow": lambda: NOW,
         }
