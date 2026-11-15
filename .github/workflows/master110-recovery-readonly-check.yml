@@ -34,6 +34,10 @@ jobs:
           assert 'rebind_pending' in approval_body
           assert 'expected_license_id' in approval_body
           assert 'valid_until' in approval_body
+          assert 'last_seen_at' in approval_body
+          assert 'total_seconds() > 300' in approval_body
+          assert 'guard.installations' in approval_body
+          assert 'is_current=TRUE' in approval_body
           assert "'pendingClientProvision': True" not in approval_body or 'pendingClientProvision' in approval_body
           assert not any(term in approval_body for term in ['_keygate_activate(', '_keygate_deactivate(', 'mesh_ctrl', '_generate_license_link(', 'UPDATE guard.license_links'])
           print("PASS: EXPLICIT_OWNER_RECOVERY_APPROVAL_REUSES_EXISTING_LICENSE")
