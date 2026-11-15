@@ -1818,6 +1818,71 @@ def _generate_license_link(
 
 
 
+@router.get("/multiguard/pending-installations/{installation_id}/recovery-preview")
+def owner_recovery_preview(
+    installation_id: str,
+    reception_id: str,
+    user: CurrentUser = Depends(require_owner),
+):
+    """Read-only diagnostics for OWNER-approved license recovery.
+
+    Hardware similarities are hints only and must NEVER grant entitlements,
+    rotate credentials, move a Mesh node or extend the paid period.
+    """
+    _ensure_schema()
+    try:
+        iid = uuid.UUID(installation_id)
+        rid = uuid.UUID(reception_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowy identyfikator.") from exc
+
+    pending = _pending_installation(iid)
+    if not pending:
+        raise HTTPException(404, "Nie znaleziono nowej instalacji.")
+    link = _link_by_reception_id(rid)
+    if not link:
+        raise HTTPException(404, "Nie znaleziono licencji tego zlecenia.")
+    link = _normalize_link(link)
+
+    with engine.connect() as connection:
+        target = connection.execute(
+            text("""
+                SELECT d.manufacturer,d.model,d.serial_number
+                FROM service.service_orders so
+                LEFT JOIN core.devices d ON d.id=so.device_id
+                WHERE so.id=:reception_id LIMIT 1
+            """),
+            {"reception_id": rid},
+        ).mappings().first()
+
+    def same_nonempty(a: Any, b: Any) -> bool:
+        left = str(a or "").strip().casefold()
+        right = str(b or "").strip().casefold()
+        return bool(left and right and left == right)
+
+    matches = {
+        "manufacturer": same_nonempty(pending.get("manufacturer"), (target or {}).get("manufacturer")),
+        "model": same_nonempty(pending.get("model"), (target or {}).get("model")),
+        "serialNumber": same_nonempty(pending.get("serial_number"), (target or {}).get("serial_number")),
+    }
+    paid_status = str(link.get("lifecycle") or "").upper()
+    is_valid = paid_status not in {"EXPIRED", "REVOKED", "UNASSIGNED"}
+    same_install = str(link.get("installation_id") or "") == str(iid)
+    return {
+        "installationId": str(iid),
+        "receptionId": str(rid),
+        "licensePresent": True,
+        "licenseLifecycle": paid_status,
+        "eligibleForOwnerReview": is_valid,
+        "alreadyBoundToThisInstallation": same_install,
+        "matches": matches,
+        "warning": "Dopasowanie sprzetowe jest wskazowka, nie autoryzacja przeniesienia licencji.",
+        "requiresOwnerApproval": True,
+        "automaticallyAuthorized": False,
+        "mutated": False,
+    }
+
+
 @router.get("/multiguard/pending-installations")
 def pending_installations(
     reception_id: str = "",
