@@ -1292,6 +1292,23 @@ def provision(req: ProvisionRequest):
     if link["lifecycle"] in {"EXPIRED", "REVOKED"}:
         raise HTTPException(409, f"Licencja ma stan {link['lifecycle']}.")
 
+    # MASTER110: a previously paid, OWNER-released license must not be
+    # reactivated by an unauthorised copied token. Only the exact recently
+    # registered installation explicitly approved in OWNER may provision it.
+    # Ordinary first-time unassigned provisioning keeps its existing flow.
+    if link.get("rebind_pending"):
+        pending = _pending_installation(installation_id)
+        if (not pending
+            or pending.get("status") != "ASSIGNED"
+            or pending.get("assigned_reception_id") != link["reception_id"]
+            or str(pending.get("assigned_license_id") or "") != str(link["keygate_license_id"])
+            or not secrets.compare_digest(str(pending.get("device_id") or ""), req.device_id)
+            or pending.get("last_seen_at") is None
+            or (_utcnow() - pending["last_seen_at"]).total_seconds() > 300):
+            raise HTTPException(
+                409, "RECOVERY_REQUIRED: Odzyskanie starej licencji wymaga aktualnego zatwierdzenia w OWNER.",
+            )
+
     activated = _keygate_activate(
         license_key, req.device_id, str(installation_id)
     )
