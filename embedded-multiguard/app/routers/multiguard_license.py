@@ -2199,6 +2199,35 @@ def approve_pending_recovery(
     }
 
 
+@router.get("/multiguard/keygate/reconciliation")
+def owner_keygate_reconciliation(user: CurrentUser = Depends(require_owner)):
+    """Read-only unresolved attempts. Do not auto-retry KeyGate side effects."""
+    _ensure_schema()
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text("""
+                SELECT id, keygate_license_id, installation_id, device_id,
+                       state, created_at, updated_at
+                FROM guard.keygate_provision_attempts
+                WHERE state IN ('INTENT','NEEDS_REVIEW')
+                ORDER BY created_at DESC LIMIT 100
+            """)
+        ).mappings().all()
+    return {
+        "requiresOwnerReview": bool(rows),
+        "automaticallyRetried": False,
+        "attempts": [{
+            "attemptId": str(row["id"]),
+            "licenseId": str(row["keygate_license_id"]),
+            "installationId": str(row["installation_id"]),
+            "deviceId": str(row["device_id"]),
+            "status": str(row["state"]),
+            "createdAt": _iso(row["created_at"]),
+            "updatedAt": _iso(row["updated_at"]),
+        } for row in rows],
+    }
+
+
 @router.get("/multiguard/pending-installations")
 def pending_installations(
     reception_id: str = "",
