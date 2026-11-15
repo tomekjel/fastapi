@@ -1353,6 +1353,9 @@ def provision(req: ProvisionRequest):
                     rebind_pending=FALSE,
                     updated_at=now()
                 WHERE id=:id
+                  AND (installation_id IS NULL OR installation_id=:installation_id)
+                  AND rebind_pending=:expected_rebind_pending
+                  AND lifecycle NOT IN ('EXPIRED','REVOKED')
                 RETURNING *
                 """
             ),
@@ -1362,9 +1365,17 @@ def provision(req: ProvisionRequest):
                 "credential_sha256": credential_hash,
                 "app_version": req.app_version,
                 "lifecycle": lifecycle,
+                "expected_rebind_pending": bool(link.get("rebind_pending")),
                 "id": link["id"],
             },
-        ).mappings().one()
+        ).mappings().first()
+        if row is None:
+            # The licence may have been revoked, rebound or provisioned by
+            # another request between preflight and KeyGate activation.
+            # Crucially, never overwrite the winner's credential or owner.
+            raise HTTPException(
+                409, "Stan licencji zmienil sie podczas aktywacji. Wymagana ponowna weryfikacja OWNER.",
+            )
         link = _normalize_link(dict(row))
         _update_installation_mirror(connection, link)
         connection.execute(
