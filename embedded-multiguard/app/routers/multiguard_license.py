@@ -2228,6 +2228,76 @@ def owner_keygate_reconciliation(user: CurrentUser = Depends(require_owner)):
     }
 
 
+@router.get("/multiguard/keygate/reconciliation/{attempt_id}/diagnostics")
+def owner_keygate_reconciliation_diagnostics(
+    attempt_id: str, user: CurrentUser = Depends(require_owner)
+):
+    """Read-only independent comparison; NEVER assume KeyGate and DB agree."""
+    _ensure_schema()
+    try:
+        aid = uuid.UUID(attempt_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidlowy identyfikator proby.") from exc
+
+    with engine.connect() as connection:
+        attempt = connection.execute(
+            text("""
+                SELECT id, keygate_license_id, installation_id, device_id,
+                       state, created_at, updated_at
+                FROM guard.keygate_provision_attempts
+                WHERE id=:id
+            """), {"id": aid},
+        ).mappings().first()
+        if not attempt:
+            raise HTTPException(404, "Nie znaleziono proby aktywacji.")
+        link = connection.execute(
+            text("""
+                SELECT id, lifecycle, installation_id, device_id,
+                       rebind_pending, valid_until
+                FROM guard.license_links
+                WHERE keygate_license_id=:license_id
+            """), {"license_id": attempt["keygate_license_id"]},
+        ).mappings().first()
+
+    # KeyGate is outside the PostgreSQL transaction. Return only its coarse
+    # status: never expose returned license keys, customer data or secrets.
+    keygate_status = "UNKNOWN"
+    keygate_available = False
+    try:
+        remote = _keygate_license(str(attempt["keygate_license_id"]))
+        keygate_status = str(remote.get("status") or "UNKNOWN").upper()
+        keygate_available = True
+    except Exception:
+        pass
+
+    database_matches = bool(
+        link
+        and link["installation_id"] == attempt["installation_id"]
+        and link["device_id"] == attempt["device_id"]
+        and not link["rebind_pending"]
+        and link["lifecycle"] not in {"REVOKED", "EXPIRED"}
+    )
+    unresolved = str(attempt["state"]) in {"INTENT", "NEEDS_REVIEW"}
+    return {
+        "attemptId": str(aid),
+        "attemptState": attempt["state"],
+        "licensePresentInOwner": link is not None,
+        "databaseMatchesAttempt": database_matches,
+        "databaseLifecycle": link["lifecycle"] if link else None,
+        "validUntil": _iso(link["valid_until"]) if link else None,
+        "keygateReachable": keygate_available,
+        "keygateLicenseStatus": keygate_status,
+        "requiresOwnerReview": unresolved,
+        "mayAutomaticallyRetry": False,
+        "safeToResolveAutomatically": False,
+        "warning": (
+            "Sam status licencji w KeyGate nie potwierdza, "
+            "ktore urzadzenie posiada aktywacje. "
+            "Przed odblokowaniem sprawdz aktywacje urzadzen w KeyGate."
+        ),
+    }
+
+
 @router.get("/multiguard/pending-installations")
 def pending_installations(
     reception_id: str = "",
