@@ -22,16 +22,13 @@ FUNCTION = next(n for n in MODULE.body if isinstance(n, ast.FunctionDef) and n.n
 # operation have separate integration/locking contract tests.
 BEFORE_ACTIVATION = []
 for stmt in FUNCTION.body:
-    if isinstance(stmt, ast.With) and any(
-        isinstance(item.context_expr, ast.Call)
-        and isinstance(item.context_expr.func, ast.Attribute)
-        and item.context_expr.func.attr == "begin"
-        for item in stmt.items
+    if isinstance(stmt, ast.Assign) and any(
+        isinstance(t, ast.Name) and t.id == "attempt_id" for t in stmt.targets
     ):
         break
     BEFORE_ACTIVATION.append(stmt)
 else:
-    raise AssertionError("Cannot locate serialized activation transaction")
+    raise AssertionError("Cannot locate durable activation intent boundary")
 PRECHECK = ast.FunctionDef(name="precheck", args=FUNCTION.args, body=BEFORE_ACTIVATION + [ast.Return(value=ast.Constant(value=True))], decorator_list=[], returns=None, type_comment=None)
 PRECHECK_AST = ast.fix_missing_locations(ast.Module(body=[PRECHECK], type_ignores=[]))
 IID = str(uuid.uuid4())
