@@ -126,6 +126,22 @@ jobs:
           assert '_keygate_deactivate(' not in diag_src
           assert '_keygate_activate(' not in diag_src
           print("PASS: OWNER_READONLY_CROSS_SYSTEM_RECONCILIATION_DIAGNOSTICS")
+          review=next(n for n in module.body if isinstance(n,ast.FunctionDef)
+                      and n.name=="owner_record_keygate_reconciliation_review")
+          review_src=ast.get_source_segment(content,review)
+          assert 'Depends(require_owner)' in review_src
+          assert 'FOR UPDATE' in review_src
+          assert 'attempt["state"] != expected' in review_src
+          assert 'INSERT INTO guard.keygate_provision_reviews' in review_src
+          assert '"stillBlocked": True' in review_src
+          assert 'UPDATE guard.keygate_provision_attempts' not in review_src
+          assert '_keygate_activate(' not in review_src
+          assert '_keygate_deactivate(' not in review_src
+          assert 'CREATE TABLE IF NOT EXISTS guard.keygate_provision_reviews' in content
+          history=next(n for n in module.body if isinstance(n,ast.FunctionDef)
+                       and n.name=="owner_keygate_reconciliation_reviews")
+          assert 'Depends(require_owner)' in ast.get_source_segment(content,history)
+          print("PASS: OWNER_REVIEW_HISTORY_PRESERVES_RECONCILIATION_BLOCK")
 
 
           PY
