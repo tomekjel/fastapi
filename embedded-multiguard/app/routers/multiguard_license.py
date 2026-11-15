@@ -1372,78 +1372,98 @@ def provision(req: ProvisionRequest):
                 or (_utcnow() - locked_pending["last_seen_at"]).total_seconds() > 300):
                 raise HTTPException(409, "RECOVERY_REQUIRED: Zatwierdzenie OWNER wygasło lub zmieniło się.")
 
-        activated = _keygate_activate(
-            license_key, req.device_id, str(installation_id)
-        )
-        returned_license_id = str(activated.get("license_id", "")).strip()
-        if returned_license_id and returned_license_id != link["keygate_license_id"]:
-            raise HTTPException(409, "KeyGate zwrócił inną licencję.")
-
-        credential = secrets.token_urlsafe(48)
-        credential_hash = _hash(credential)
-        lifecycle = (
-            link["lifecycle"]
-            if link.get("rebind_pending") and link["lifecycle"] != "UNASSIGNED"
-            else "SERVICE_TEST"
-        )
-        row = connection.execute(
-            text(
-                """
-                UPDATE guard.license_links
-                SET installation_id=:installation_id,
-                    device_id=:device_id,
-                    credential_sha256=:credential_sha256,
-                    app_version=:app_version,
-                    lifecycle=:lifecycle,
-                    provisioned_at=COALESCE(provisioned_at,now()),
-                    rebind_pending=FALSE,
-                    updated_at=now()
-                WHERE id=:id
-                  AND (installation_id IS NULL OR installation_id=:installation_id)
-                  AND rebind_pending=:expected_rebind_pending
-                  AND lifecycle NOT IN ('EXPIRED','REVOKED')
-                RETURNING *
-                """
-            ),
-            {
-                "installation_id": installation_id,
-                "device_id": req.device_id,
-                "credential_sha256": credential_hash,
-                "app_version": req.app_version,
-                "lifecycle": lifecycle,
-                "expected_rebind_pending": bool(link.get("rebind_pending")),
-                "id": link["id"],
-            },
-        ).mappings().first()
-        if row is None:
-            # The licence may have been revoked, rebound or provisioned by
-            # another request between preflight and KeyGate activation.
-            # Crucially, never overwrite the winner's credential or owner.
-            raise HTTPException(
-                409, "Stan licencji zmienil sie podczas aktywacji. Wymagana ponowna weryfikacja OWNER.",
+        # Reconcile a confirmed KeyGate activation if the subsequent SQL
+        # mutation fails. Keep the PostgreSQL row lock until compensation
+        # finishes, so another recovery attempt cannot race the rollback.
+        activation_confirmed = False
+        try:
+            activated = _keygate_activate(
+                license_key, req.device_id, str(installation_id)
             )
-        link = _normalize_link(dict(row))
-        _update_installation_mirror(connection, link)
-        connection.execute(
-            text(
-                """
-                UPDATE guard.pending_installations
-                SET
-                    status='PROVISIONED',
-                    assigned_reception_id=:reception_id,
-                    assigned_license_id=:license_id,
-                    provisioned_at=COALESCE(provisioned_at,now()),
-                    last_seen_at=now(),
-                    updated_at=now()
-                WHERE installation_id=:installation_id
-                """
-            ),
-            {
-                "reception_id": link["reception_id"],
-                "license_id": link["keygate_license_id"],
-                "installation_id": installation_id,
-            },
-        )
+            activation_confirmed = True
+            returned_license_id = str(activated.get("license_id", "")).strip()
+            if returned_license_id and returned_license_id != link["keygate_license_id"]:
+                raise HTTPException(409, "KeyGate zwrócił inną licencję.")
+
+            credential = secrets.token_urlsafe(48)
+            credential_hash = _hash(credential)
+            lifecycle = (
+                link["lifecycle"]
+                if link.get("rebind_pending") and link["lifecycle"] != "UNASSIGNED"
+                else "SERVICE_TEST"
+            )
+            row = connection.execute(
+                text(
+                    """
+                    UPDATE guard.license_links
+                    SET installation_id=:installation_id,
+                        device_id=:device_id,
+                        credential_sha256=:credential_sha256,
+                        app_version=:app_version,
+                        lifecycle=:lifecycle,
+                        provisioned_at=COALESCE(provisioned_at,now()),
+                        rebind_pending=FALSE,
+                        updated_at=now()
+                    WHERE id=:id
+                      AND (installation_id IS NULL OR installation_id=:installation_id)
+                      AND rebind_pending=:expected_rebind_pending
+                      AND lifecycle NOT IN ('EXPIRED','REVOKED')
+                    RETURNING *
+                    """
+                ),
+                {
+                    "installation_id": installation_id,
+                    "device_id": req.device_id,
+                    "credential_sha256": credential_hash,
+                    "app_version": req.app_version,
+                    "lifecycle": lifecycle,
+                    "expected_rebind_pending": bool(link.get("rebind_pending")),
+                    "id": link["id"],
+                },
+            ).mappings().first()
+            if row is None:
+                # The licence may have been revoked, rebound or provisioned by
+                # another request between preflight and KeyGate activation.
+                # Crucially, never overwrite the winner's credential or owner.
+                raise HTTPException(
+                    409, "Stan licencji zmienil sie podczas aktywacji. Wymagana ponowna weryfikacja OWNER.",
+                )
+            link = _normalize_link(dict(row))
+            _update_installation_mirror(connection, link)
+            connection.execute(
+                text(
+                    """
+                    UPDATE guard.pending_installations
+                    SET
+                        status='PROVISIONED',
+                        assigned_reception_id=:reception_id,
+                        assigned_license_id=:license_id,
+                        provisioned_at=COALESCE(provisioned_at,now()),
+                        last_seen_at=now(),
+                        updated_at=now()
+                    WHERE installation_id=:installation_id
+                    """
+                ),
+                {
+                    "reception_id": link["reception_id"],
+                    "license_id": link["keygate_license_id"],
+                    "installation_id": installation_id,
+                },
+            )
+
+        except Exception as provision_error:
+            if activation_confirmed:
+                try:
+                    _keygate_deactivate(license_key, req.device_id)
+                except Exception as compensation_error:
+                    # Fail closed. OWNER must reconcile KeyGate vs PostgreSQL.
+                    raise HTTPException(
+                        503,
+                        "RECOVERY_RECONCILIATION_REQUIRED: Aktywacja KeyGate "
+                        "mogla pozostac po bledzie zapisu. Zablokowano "
+                        "dalsze automatyczne odzyskiwanie; sprawdz OWNER i KeyGate.",
+                    ) from compensation_error
+            raise
 
     return {
         "requestId": req.request_id,
