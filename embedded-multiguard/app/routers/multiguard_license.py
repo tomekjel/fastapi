@@ -80,6 +80,11 @@ class ProvisionRequest(BaseModel):
     nonce: str
     sent_at: str = Field(alias="sentAt")
     provisioning_token: str = Field(alias="provisioningToken")
+    # For OWNER-approved recovery the installation must prove possession of
+    # the secret established during discovery; a KeyGate token is not enough.
+    discovery_credential: str | None = Field(
+        default=None, alias="discoveryCredential", min_length=32, max_length=512
+    )
     installation_id: str = Field(alias="installationId")
     device_id: str = Field(alias="deviceId", min_length=16, max_length=128)
     app_version: str = Field(alias="appVersion")
@@ -1298,6 +1303,16 @@ def provision(req: ProvisionRequest):
     # Ordinary first-time unassigned provisioning keeps its existing flow.
     if link.get("rebind_pending"):
         pending = _pending_installation(installation_id)
+        discovery_secret = (req.discovery_credential or "").strip()
+        if (not discovery_secret
+            or not pending
+            or not secrets.compare_digest(
+                str(pending.get("discovery_credential_sha256") or ""),
+                _hash(discovery_secret),
+            )):
+            raise HTTPException(
+                403, "RECOVERY_REQUIRED: Brak poprawnego poświadczenia nowej instalacji.",
+            )
         if (not pending
             or pending.get("status") != "ASSIGNED"
             or pending.get("assigned_reception_id") != link["reception_id"]
