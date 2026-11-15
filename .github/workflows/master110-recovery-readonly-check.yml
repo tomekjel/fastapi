@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Execute provision recovery guards against actual backend code
+        run: python -m unittest scripts/tests/test_master110_recovery_provision_guard.py -v
       - name: Compile backend and guard recovery preview contract
         run: |
           python - <<'PY'
