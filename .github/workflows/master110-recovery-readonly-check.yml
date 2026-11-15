@@ -89,6 +89,24 @@ jobs:
           assert 'RECOVERY_REQUIRED: Zatwierdzenie OWNER wygasło lub zmieniło się.' in tx_source
           print("PASS: KEYGATE_ACTIVATION_SERIALIZED_AFTER_DB_LICENSE_ROW_LOCK")
           print("PASS: CONSISTENT_PENDING_THEN_LICENSE_LOCK_ORDER")
+          journal=next(n for n in module.body if isinstance(n,ast.FunctionDef)
+                       and n.name=="_begin_keygate_provision_attempt")
+          finish=next(n for n in module.body if isinstance(n,ast.FunctionDef)
+                      and n.name=="_finish_keygate_provision_attempt")
+          listing=next(n for n in module.body if isinstance(n,ast.FunctionDef)
+                       and n.name=="owner_keygate_reconciliation")
+          listing_src=ast.get_source_segment(content,listing)
+          assert 'Depends(require_owner)' in listing_src
+          assert "'automaticallyRetried': False" in listing_src
+          assert "state IN ('INTENT','NEEDS_REVIEW')" in listing_src
+          assert 'UPDATE guard.' not in listing_src
+          assert 'CREATE UNIQUE INDEX IF NOT EXISTS idx_guard_keygate_provision_unresolved' in content
+          provision_src=ast.get_source_segment(content,provision)
+          assert provision_src.index('_begin_keygate_provision_attempt(') < provision_src.index('_keygate_activate(')
+          assert '_finish_keygate_provision_attempt(attempt_id, committed=False)' in provision_src
+          assert '_finish_keygate_provision_attempt(attempt_id, committed=True)' in provision_src
+          assert "WHERE id=:id AND state='INTENT'" in ast.get_source_segment(content,finish)
+          print("PASS: DURABLE_KEYGATE_INTENT_AND_OWNER_RECONCILIATION")
 
 
           PY
