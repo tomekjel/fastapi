@@ -437,9 +437,12 @@ def _public_key_b64() -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
-def _signed_envelope(link: dict[str, Any]) -> dict[str, str]:
+def _signed_envelope(
+    link: dict[str, Any], *, recovery_approved: bool = False
+) -> dict[str, str]:
     payload_obj = {
         "schemaVersion": 1,
+        "recoveryApproved": bool(recovery_approved),
         "licenseId": link["keygate_license_id"],
         "serviceDeviceId": str(link["service_device_id"]),
         "installationId": str(link["installation_id"] or ""),
@@ -1574,9 +1577,8 @@ def provision(req: ProvisionRequest):
 
     return {
         "requestId": req.request_id,
-        "signedLicense": _signed_envelope(link),
+        "signedLicense": _signed_envelope(link, recovery_approved=recovery_approved),
         "installationCredential": credential,
-        "recoveryApproved": recovery_approved,
         "requiredDocuments": [],
     }
 
