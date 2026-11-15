@@ -109,6 +109,21 @@ jobs:
           assert '_finish_keygate_provision_attempt(attempt_id, committed=True)' in provision_src
           assert "WHERE id=:id AND state='INTENT'" in ast.get_source_segment(content,finish)
           print("PASS: DURABLE_KEYGATE_INTENT_AND_OWNER_RECONCILIATION")
+          diagnostics=next(n for n in module.body if isinstance(n,ast.FunctionDef)
+                           and n.name=="owner_keygate_reconciliation_diagnostics")
+          diag_src=ast.get_source_segment(content,diagnostics)
+          assert 'Depends(require_owner)' in diag_src
+          assert '_keygate_license(' in diag_src
+          assert "keygateLicenseStatus" in diag_src
+          assert "databaseMatchesAttempt" in diag_src
+          assert "safeToResolveAutomatically" in diag_src
+          assert '"safeToResolveAutomatically": False' in diag_src
+          assert '"mayAutomaticallyRetry": False' in diag_src
+          assert 'UPDATE guard.' not in diag_src
+          assert 'DELETE FROM' not in diag_src
+          assert '_keygate_deactivate(' not in diag_src
+          assert '_keygate_activate(' not in diag_src
+          print("PASS: OWNER_READONLY_CROSS_SYSTEM_RECONCILIATION_DIAGNOSTICS")
 
 
           PY
