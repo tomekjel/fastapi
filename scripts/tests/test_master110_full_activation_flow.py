@@ -140,6 +140,18 @@ class Flow(unittest.TestCase):
             mirror=con.execute(text("SELECT * FROM guard.installations WHERE installation_external_id=:iid"),{"iid":self.iid}).mappings().one()
         self.assertTrue(mirror["is_current"])
         self.assertEqual(mirror["license_id"],"KG-TEST-ID")
+    def test_new_first_time_assignment_is_not_mislabelled_as_recovery(self):
+        with engine.begin() as con:
+            con.execute(text("""
+                UPDATE guard.license_links
+                SET rebind_pending=FALSE,lifecycle='UNASSIGNED'
+                WHERE reception_id=:rid
+            """),{"rid":self.rid})
+        response=self.provision(self.req)
+        self.assertFalse(response["recoveryApproved"])
+        self.assertEqual(self.fetch_link()["lifecycle"],"SERVICE_TEST")
+        self.assertEqual(len(self.keygate.activations),1)
+
     def test_keygate_reject_blocks_and_keeps_existing_term(self):
         self.keygate.mode="rejected"
         with self.assertRaises(HTTPException):self.provision(self.req)
