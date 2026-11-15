@@ -1940,6 +1940,14 @@ def approve_pending_recovery(
             raise HTTPException(409, "Instalacja nie oczekuje na powiazanie.")
         if not pending.get("discovery_credential_sha256"):
             raise HTTPException(409, "Instalacja nie posiada poświadczenia discovery.")
+        # Rebinding a long-abandoned discovery record risks assigning a paid
+        # license to an installation that is no longer under OWNER control.
+        # Require the client to register again immediately before approval.
+        last_seen = pending.get("last_seen_at")
+        if last_seen is None or (_utcnow() - last_seen).total_seconds() > 300:
+            raise HTTPException(
+                409, "Instalacja nie jest aktualnie aktywna. Uruchom ponownie Multi-Guard.",
+            )
 
         link = connection.execute(
             text("""SELECT * FROM guard.license_links
@@ -1954,6 +1962,16 @@ def approve_pending_recovery(
             raise HTTPException(409, "Licencja zmienila sie od potwierdzenia OWNER.")
         if not link["rebind_pending"] or link["installation_id"] is not None:
             raise HTTPException(409, "Najpierw zwolnij poprzednia instalacje przez OWNER.")
+        # A pending rebind must not be mistaken for a successful migration
+        # if the old paid installation mirror still reports it as current.
+        old_mirror = connection.execute(
+            text("""SELECT installation_external_id FROM guard.installations
+                    WHERE license_id=:license_id AND is_current=TRUE
+                    LIMIT 1"""),
+            {"license_id": link["keygate_license_id"]},
+        ).first()
+        if old_mirror:
+            raise HTTPException(409, "Stara instalacja licencji nadal jest aktywna.")
         if link["lifecycle"] in {"UNASSIGNED", "EXPIRED", "REVOKED"}:
             raise HTTPException(409, "Nie mozna odzyskac nieaktywnej licencji.")
         if link["valid_until"] is not None and link["valid_until"] <= _utcnow():
