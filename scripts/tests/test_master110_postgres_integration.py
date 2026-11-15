@@ -84,6 +84,32 @@ class PostgresJournal(unittest.TestCase):
             state=c.execute("SELECT state FROM guard.keygate_provision_attempts WHERE id=%s",(attempt,)).fetchone()[0]
         self.assertEqual(rows,0)
         self.assertEqual(state,"INTENT")
+    def test_concurrent_atomic_intents_return_one_conflict_without_sql_exception(self):
+        # Exercise the ON CONFLICT clause used by production before calling
+        # KeyGate. Both competitors start at the same instant.
+        barrier=threading.Barrier(2)
+        def contender(device):
+            barrier.wait(timeout=5)
+            with connect() as c:
+                row=c.execute("""
+                    INSERT INTO guard.keygate_provision_attempts
+                        (id,keygate_license_id,installation_id,device_id,state)
+                    VALUES (%s,%s,%s,%s,'INTENT')
+                    ON CONFLICT (keygate_license_id)
+                        WHERE state IN ('INTENT','NEEDS_REVIEW')
+                    DO NOTHING RETURNING id
+                """,(uuid.uuid4(),self.license,uuid.uuid4(),device)).fetchone()
+                return "INSERTED" if row else "RECOVERY_RECONCILIATION_REQUIRED"
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results=list(pool.map(contender,["device-A","device-B"]))
+        self.assertCountEqual(results,["INSERTED","RECOVERY_RECONCILIATION_REQUIRED"])
+        with connect() as c:
+            count=c.execute(
+                "SELECT count(*) FROM guard.keygate_provision_attempts WHERE keygate_license_id=%s",
+                (self.license,)
+            ).fetchone()[0]
+        self.assertEqual(count,1)
+
     def test_concurrent_competitors_only_one_intent(self):
         barrier=threading.Barrier(2)
         def contender(device):
