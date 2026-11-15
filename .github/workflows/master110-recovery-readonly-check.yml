@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test atomic license binding competing installs
+        run: python -m unittest scripts/tests/test_master110_provision_binding_cas.py -v
       - name: Test OWNER approval with transactional fake database
         run: python -m unittest scripts/tests/test_master110_owner_approval_transaction.py -v
       - name: Execute provision recovery guards against actual backend code
