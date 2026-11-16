@@ -2215,7 +2215,7 @@ def request_legacy_migration(req: LegacyMigrationRequest):
         raise HTTPException(400, "Nowe poswiadczenie musi byc niezalezne od starego.")
 
     try:
-        migration_id = uuid.UUID(req.request_id) if req.request_id else uuid.uuid4()
+        migration_id = uuid.UUID(req.request_id) if getattr(req, "request_id", None) else uuid.uuid4()
     except ValueError as exc:
         raise HTTPException(400, "Nieprawidlowy requestId migracji.") from exc
 
