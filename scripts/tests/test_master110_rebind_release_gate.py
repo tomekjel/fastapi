@@ -34,8 +34,20 @@ class RebindReleaseSafetyTests(unittest.TestCase):
 
     def test_owner_rebind_requires_recorded_completion_or_manual_reconciliation(self):
         fn = function_node("rebind_reception_license")
-        self.assertEqual(len(calls(fn, "_finish_keygate_rebind_attempt")), 1,
-                         "UNSAFE REBIND: missing persistent outcome/reconciliation handling")
+        finishes = calls(fn, "_finish_keygate_rebind_attempt")
+        # One recorded outcome on the exception branch (NEEDS_REVIEW) and
+        # one after the database transaction commits (COMMITTED).
+        self.assertEqual(len(finishes), 2,
+                         "UNSAFE REBIND: both failure and success must be journaled")
+        flags = []
+        for call in finishes:
+            args = {arg.arg: arg.value for arg in call.keywords}
+            self.assertIn("committed", args)
+            value = args["committed"]
+            self.assertIsInstance(value, ast.Constant)
+            flags.append(value.value)
+        self.assertCountEqual(flags, [False, True],
+                              "UNSAFE REBIND: missing success or manual-reconciliation path")
 
     def test_approval_remains_owner_only(self):
         fn = function_node("approve_pending_recovery")
