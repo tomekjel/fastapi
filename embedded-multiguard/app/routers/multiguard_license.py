@@ -169,6 +169,19 @@ class RecordKeygateReviewRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class LegacyMigrationRequest(BaseModel):
+    old_installation_id: str = Field(alias="oldInstallationId")
+    old_installation_credential: str = Field(
+        alias="oldInstallationCredential", min_length=32, max_length=512
+    )
+    new_installation_id: str = Field(alias="newInstallationId")
+    device_id: str = Field(alias="deviceId", min_length=64, max_length=64)
+    new_discovery_credential: str = Field(
+        alias="newDiscoveryCredential", min_length=32, max_length=512
+    )
+    model_config = {"populate_by_name": True}
+
+
 class ApproveRecoveryRequest(BaseModel):
     reception_id: str = Field(alias="receptionId")
     expected_license_id: str = Field(alias="expectedLicenseId", min_length=1)
@@ -505,6 +518,23 @@ CREATE INDEX IF NOT EXISTS idx_guard_license_links_device
     ON guard.license_links(service_device_id);
 CREATE INDEX IF NOT EXISTS idx_guard_license_links_lifecycle
     ON guard.license_links(lifecycle);
+
+-- Legacy migration applications are requests only, NEVER a license grant.
+-- A UNIQUE old installation prevents concurrent owner-recovery requests.
+CREATE TABLE IF NOT EXISTS guard.legacy_migration_requests (
+    id UUID PRIMARY KEY,
+    old_installation_id UUID NOT NULL UNIQUE,
+    new_installation_id UUID NOT NULL UNIQUE,
+    device_id TEXT NOT NULL CHECK (length(device_id)=64),
+    new_discovery_sha256 TEXT NOT NULL CHECK (length(new_discovery_sha256)=64),
+    license_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'WAITING_OWNER'
+        CHECK (status IN ('WAITING_OWNER','APPROVED','REJECTED','COMPLETED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guard_legacy_migration_status
+    ON guard.legacy_migration_requests(status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS guard.pending_installations (
     installation_id UUID PRIMARY KEY,
@@ -2135,6 +2165,94 @@ def owner_recovery_preview(
         "requiresOwnerApproval": True,
         "automaticallyAuthorized": False,
         "mutated": False,
+    }
+
+
+@router.post("/v1/multi-guard/legacy-migration/request")
+def request_legacy_migration(req: LegacyMigrationRequest):
+    """Authenticate v1 possession and stage a new v2 candidate for OWNER.
+
+    A staged request DOES NOT grant a signed license, clear old credentials,
+    touch KeyGate/MeshCentral, or authorize a clone. Any migration requires an
+    independent OWNER decision and a separately journaled commit protocol.
+    """
+    _ensure_schema()
+    try:
+        old_id = uuid.UUID(req.old_installation_id)
+        new_id = uuid.UUID(req.new_installation_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidlowy UUID migracji.") from exc
+    if old_id == new_id:
+        raise HTTPException(400, "Migracja wymaga nowej tozsamosci instalacji.")
+    if not all(ch in "0123456789abcdefABCDEF" for ch in req.device_id):
+        raise HTTPException(400, "Nieprawidlowy odcisk urzadzenia.")
+    if not secrets.compare_digest(
+        req.old_installation_credential, req.new_discovery_credential
+    ) and len(req.new_discovery_credential.strip()) >= 32:
+        pass
+    else:
+        raise HTTPException(400, "Nowe poswiadczenie musi byc niezalezne od starego.")
+
+    with engine.begin() as connection:
+        # Serialize with OWNER mutations on the same paid-license row.
+        old = connection.execute(
+            text("""SELECT * FROM guard.license_links
+                    WHERE installation_id=:old_id FOR UPDATE"""),
+            {"old_id": old_id},
+        ).mappings().first()
+        if not old:
+            raise HTTPException(404, "RECOVERY_REQUIRED: Stara instalacja nie jest przypisana w OWNER.")
+        expected = str(old.get("credential_sha256") or "")
+        if (not expected or not secrets.compare_digest(
+            expected, _hash(req.old_installation_credential)
+        )):
+            raise HTTPException(403, "RECOVERY_REQUIRED: Nieprawidlowe poswiadczenie starej instalacji.")
+        if (not secrets.compare_digest(str(old.get("device_id") or ""), req.device_id)
+            or old["lifecycle"] in {"UNASSIGNED", "EXPIRED", "REVOKED"}
+            or old.get("rebind_pending")
+            or old.get("valid_until") is None
+            or old["valid_until"] <= _utcnow()):
+            raise HTTPException(
+                409, "RECOVERY_REQUIRED: Niezgodny komputer lub nieaktywna licencja."
+            )
+        conflict = connection.execute(
+            text("""SELECT id FROM guard.license_links
+                    WHERE installation_id=:new_id LIMIT 1"""),
+            {"new_id": new_id},
+        ).first()
+        if conflict:
+            raise HTTPException(409, "Docelowa tozsamosc jest juz przypisana.")
+        migration_id = uuid.uuid4()
+        created = connection.execute(
+            text("""
+                INSERT INTO guard.legacy_migration_requests
+                    (id,old_installation_id,new_installation_id,
+                     device_id,new_discovery_sha256,license_id,status)
+                VALUES (:id,:old_id,:new_id,:device_id,:credential_hash,
+                        :license_id,'WAITING_OWNER')
+                ON CONFLICT DO NOTHING
+                RETURNING id
+            """),
+            {
+                "id": migration_id, "old_id": old_id, "new_id": new_id,
+                "device_id": req.device_id,
+                "credential_hash": _hash(req.new_discovery_credential),
+                "license_id": old["keygate_license_id"],
+            },
+        ).first()
+        if not created:
+            raise HTTPException(
+                409, "RECOVERY_REQUIRED: Istnieje inne zgłoszenie migracji. Decyzja OWNER wymagana."
+            )
+
+    return {
+        "requestId": str(migration_id),
+        "status": "WAITING_OWNER",
+        "requiresOwnerApproval": True,
+        "licenseChanged": False,
+        "keygateChanged": False,
+        "meshChanged": False,
+        "validUntilChanged": False,
     }
 
 
