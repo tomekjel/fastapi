@@ -169,6 +169,13 @@ class RecordKeygateReviewRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ApproveLegacyMigrationRequest(BaseModel):
+    expected_license_id: str = Field(alias="expectedLicenseId", min_length=1)
+    old_installation_id: str = Field(alias="oldInstallationId")
+    new_installation_id: str = Field(alias="newInstallationId")
+    model_config = {"populate_by_name": True}
+
+
 class LegacyMigrationRequest(BaseModel):
     old_installation_id: str = Field(alias="oldInstallationId")
     old_installation_credential: str = Field(
@@ -2248,6 +2255,87 @@ def request_legacy_migration(req: LegacyMigrationRequest):
         "status": "WAITING_OWNER",
         "requiresOwnerApproval": True,
         "licenseChanged": False,
+        "keygateChanged": False,
+        "meshChanged": False,
+        "validUntilChanged": False,
+    }
+
+
+@router.post("/multiguard/legacy-migration/{request_id}/approve")
+def owner_approve_legacy_migration(
+    request_id: str,
+    body: ApproveLegacyMigrationRequest,
+    user: CurrentUser = Depends(require_owner),
+):
+    """OWNER approval of a staged v1->v2 request, not a paid activation.
+
+    Keeps existing link, DPAPI credential, consent and KeyGate untouched.
+    Only a separate authenticated migration commit may subsequently change
+    the canonical installation identifier.
+    """
+    _ensure_schema()
+    try:
+        mid = uuid.UUID(request_id)
+        old_id = uuid.UUID(body.old_installation_id)
+        new_id = uuid.UUID(body.new_installation_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidlowy identyfikator migracji.") from exc
+
+    with engine.begin() as connection:
+        stage = connection.execute(
+            text("""SELECT * FROM guard.legacy_migration_requests
+                    WHERE id=:mid FOR UPDATE"""),
+            {"mid": mid},
+        ).mappings().first()
+        if not stage:
+            raise HTTPException(404, "Nie znaleziono zgloszenia migracji.")
+        if (stage["status"] != "WAITING_OWNER"
+            or stage["old_installation_id"] != old_id
+            or stage["new_installation_id"] != new_id
+            or str(stage["license_id"]) != body.expected_license_id.strip()):
+            raise HTTPException(409, "Zgloszenie migracji zmienilo sie lub zostalo rozpatrzone.")
+        if (_utcnow() - stage["created_at"]).total_seconds() > 900:
+            raise HTTPException(409, "Zgloszenie migracji wygaslo. Wymagane nowe uwierzytelnienie Windows.")
+
+        # Lock order is stage -> paid link; this endpoint never calls KeyGate.
+        link = connection.execute(
+            text("""SELECT * FROM guard.license_links
+                    WHERE installation_id=:old_id FOR UPDATE"""),
+            {"old_id": old_id},
+        ).mappings().first()
+        if not link or str(link["keygate_license_id"]) != str(stage["license_id"]):
+            raise HTTPException(409, "Licencja nie odpowiada starej instalacji.")
+        if (str(link.get("device_id") or "") != str(stage["device_id"])
+            or not link.get("credential_sha256")
+            or link.get("rebind_pending")
+            or link["lifecycle"] in {"UNASSIGNED", "EXPIRED", "REVOKED"}
+            or link.get("valid_until") is None
+            or link["valid_until"] <= _utcnow()):
+            raise HTTPException(409, "Licencja utracila uprawnienie do migracji.")
+        conflict = connection.execute(
+            text("""SELECT id FROM guard.license_links
+                    WHERE installation_id=:new_id LIMIT 1"""),
+            {"new_id": new_id},
+        ).first()
+        if conflict:
+            raise HTTPException(409, "Nowa instalacja jest juz przypisana.")
+
+        result = connection.execute(
+            text("""UPDATE guard.legacy_migration_requests
+                    SET status='APPROVED', updated_at=now()
+                    WHERE id=:mid AND status='WAITING_OWNER'
+                    RETURNING id"""),
+            {"mid": mid},
+        ).first()
+        if not result:
+            raise HTTPException(409, "Rownoczesna zmiana zgloszenia migracji.")
+
+    return {
+        "requestId": str(mid),
+        "status": "APPROVED",
+        "requiresClientCommit": True,
+        "licenseChanged": False,
+        "credentialChanged": False,
         "keygateChanged": False,
         "meshChanged": False,
         "validUntilChanged": False,
