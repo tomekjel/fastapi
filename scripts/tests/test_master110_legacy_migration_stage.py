@@ -45,6 +45,8 @@ class Connection:
             if self.state.get("already_staged"):
                 return Result(None)
             return Result((args["id"],))
+        if "FROM GUARD.LEGACY_MIGRATION_REQUESTS" in sql:
+            return Result(self.state.get("existing_stage"))
         raise AssertionError("unexpected SQL: "+sql[:100])
 
 class FakeEngine:
@@ -136,6 +138,36 @@ class StageTests(unittest.TestCase):
         self.state["already_staged"]=True
         with self.assertRaises(HTTPException) as e:self.call(self.req)
         self.assertEqual(e.exception.status_code,409)
+
+    def test_exact_idempotent_retry_reuses_same_request(self):
+        self.req.request_id = str(uuid.uuid4())
+        self.state["already_staged"] = True
+        self.state["existing_stage"] = {
+            "id": uuid.UUID(self.req.request_id),
+            "new_installation_id": self.new,
+            "device_id": self.device,
+            "license_id": self.link["keygate_license_id"],
+            "new_discovery_sha256": hashlib.sha256(self.new_secret.encode()).hexdigest(),
+            "status": "WAITING_OWNER",
+        }
+        result = self.call(self.req)
+        self.assertEqual(result["requestId"], self.req.request_id)
+        self.assertEqual(result["status"], "WAITING_OWNER")
+
+    def test_conflicting_retry_with_wrong_discovery_secret_is_rejected(self):
+        self.req.request_id = str(uuid.uuid4())
+        self.state["already_staged"] = True
+        self.state["existing_stage"] = {
+            "id": uuid.UUID(self.req.request_id),
+            "new_installation_id": self.new,
+            "device_id": self.device,
+            "license_id": self.link["keygate_license_id"],
+            "new_discovery_sha256": hashlib.sha256(b"different-discovery").hexdigest(),
+            "status": "WAITING_OWNER",
+        }
+        with self.assertRaises(HTTPException) as exc:
+            self.call(self.req)
+        self.assertEqual(exc.exception.status_code, 409)
 
     def test_new_uuid_cannot_be_existing_license_or_old_uuid(self):
         self.state["claimed"]=("already-claimed",)
