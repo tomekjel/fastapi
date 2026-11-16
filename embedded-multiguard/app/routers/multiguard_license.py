@@ -571,6 +571,9 @@ CREATE TABLE IF NOT EXISTS guard.keygate_provision_attempts (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Distinguish the durable external effect without exposing license secrets.
+ALTER TABLE guard.keygate_provision_attempts
+    ADD COLUMN IF NOT EXISTS operation TEXT NOT NULL DEFAULT 'PROVISION';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_guard_keygate_provision_unresolved
     ON guard.keygate_provision_attempts(keygate_license_id)
     WHERE state IN ('INTENT','NEEDS_REVIEW');
@@ -2867,60 +2870,143 @@ def reveal_reception_license(
     }
 
 
+def _begin_keygate_rebind_attempt(link: dict[str, Any]) -> uuid.UUID:
+    """Durable rebind INTENT, shared with the provisioning conflict index.
+
+    An unresolved release blocks subsequent KeyGate provisioning on this
+    commercial license. No credentials or license keys are stored.
+    """
+    _ensure_schema()
+    old_installation = link.get("installation_id")
+    old_device = str(link.get("device_id") or "")
+    if not old_installation or not old_device:
+        raise HTTPException(409, "RECOVERY_REQUIRED: Brak zweryfikowanej starej instalacji.")
+    attempt_id = uuid.uuid4()
+    with engine.begin() as connection:
+        inserted = connection.execute(
+            text("""
+                INSERT INTO guard.keygate_provision_attempts
+                    (id,keygate_license_id,installation_id,device_id,state,operation)
+                VALUES (:id,:license_id,:installation_id,:device_id,'INTENT','REBIND')
+                ON CONFLICT (keygate_license_id)
+                    WHERE state IN ('INTENT','NEEDS_REVIEW')
+                DO NOTHING
+                RETURNING id
+            """),
+            {
+                "id": attempt_id,
+                "license_id": link["keygate_license_id"],
+                "installation_id": old_installation,
+                "device_id": old_device,
+            },
+        ).first()
+        if not inserted:
+            raise HTTPException(
+                409, "RECOVERY_RECONCILIATION_REQUIRED: Inna operacja KeyGate wymaga kontroli OWNER."
+            )
+    return attempt_id
+
+
+def _finish_keygate_rebind_attempt(attempt_id: uuid.UUID, committed: bool) -> None:
+    """Finish only after the OWNER transaction commits; unknown outcome blocks retry."""
+    _finish_keygate_provision_attempt(attempt_id, committed)
+
+
 @router.post("/multiguard/licenses/receptions/{reception_id}/rebind")
 def rebind_reception_license(
     reception_id: str,
     user: CurrentUser = Depends(require_owner),
 ):
+    _ensure_schema()
     try:
         rid = uuid.UUID(reception_id)
     except ValueError as exc:
         raise HTTPException(400, "Nieprawidłowe ID zlecenia.") from exc
+
     link = _link_by_reception_id(rid)
     if not link:
         raise HTTPException(404, "Zlecenie nie ma licencji Multi-Guard.")
     link = _normalize_link(link)
-    if link["lifecycle"] in {"EXPIRED", "REVOKED"}:
-        raise HTTPException(409, f"Nie można przenieść licencji {link['lifecycle']}.")
+    if (link["lifecycle"] in {"UNASSIGNED", "EXPIRED", "REVOKED"}
+            or (link.get("valid_until") is not None
+                and link["valid_until"] <= _utcnow())):
+        raise HTTPException(409, "Nie można przenieść nieaktywnej licencji.")
+    if (link.get("rebind_pending") or not link.get("installation_id")
+            or not link.get("device_id")):
+        raise HTTPException(409, "RECOVERY_REQUIRED: Licencja nie ma aktywnego powiązania.")
 
+    # Key reveal is read-only. Preserve the original binding on any failure
+    # and never call KeyGate before a committed durable INTENT exists.
     license_key = _keygate_reveal(link["keygate_license_id"])
-    old_device_id = link.get("device_id") or ""
-    if old_device_id:
-        _keygate_deactivate(license_key, old_device_id)
+    old_installation = link["installation_id"]
+    old_device_id = str(link["device_id"])
+    attempt_id = _begin_keygate_rebind_attempt(link)
+    try:
+        with engine.begin() as connection:
+            # Lock the authoritative row, and reject changes since the read
+            # before the external KeyGate call. The journal prevents other
+            # provision/release operations on the same commercial license.
+            current = connection.execute(
+                text("""
+                    SELECT * FROM guard.license_links
+                    WHERE id=:id FOR UPDATE
+                """), {"id": link["id"]}
+            ).mappings().first()
+            if (not current
+                or current["installation_id"] != old_installation
+                or str(current.get("device_id") or "") != old_device_id
+                or current.get("rebind_pending")
+                or current["lifecycle"] in {"EXPIRED", "REVOKED", "UNASSIGNED"}
+                or (current.get("valid_until") is not None
+                    and current["valid_until"] <= _utcnow())):
+                raise HTTPException(
+                    409, "RECOVERY_RECONCILIATION_REQUIRED: Powiązanie licencji zmieniło się."
+                )
 
-    with engine.begin() as connection:
-        if link.get("installation_id"):
+            # An external failure may have an unknown outcome; the durable
+            # attempt will then remain NEEDS_REVIEW rather than retrying.
+            _keygate_deactivate(license_key, old_device_id)
+
             connection.execute(
-                text(
-                    """
+                text("""
                     UPDATE guard.installations
                     SET is_current=FALSE, updated_at=now()
                     WHERE installation_external_id=:installation_id
-                    """
-                ),
-                {"installation_id": link["installation_id"]},
+                      AND is_current=TRUE
+                """), {"installation_id": old_installation}
             )
-        row = connection.execute(
-            text(
-                """
-                UPDATE guard.license_links
-                SET installation_id=NULL,
-                    device_id=NULL,
-                    credential_sha256=NULL,
-                    app_version='',
-                    rebind_pending=TRUE,
-                    rebind_requested_at=now(),
-                    updated_at=now()
-                WHERE id=:id
-                RETURNING *
-                """
-            ),
-            {"id": link["id"]},
-        ).mappings().one()
-        link = _normalize_link(dict(row))
+            row = connection.execute(
+                text("""
+                    UPDATE guard.license_links
+                    SET installation_id=NULL,
+                        device_id=NULL,
+                        credential_sha256=NULL,
+                        app_version='',
+                        rebind_pending=TRUE,
+                        rebind_requested_at=now(),
+                        updated_at=now()
+                    WHERE id=:id
+                      AND installation_id=:installation_id
+                      AND device_id=:device_id
+                      AND rebind_pending=FALSE
+                    RETURNING *
+                """),
+                {"id": link["id"], "installation_id": old_installation,
+                 "device_id": old_device_id},
+            ).mappings().first()
+            if row is None:
+                raise HTTPException(
+                    409, "RECOVERY_RECONCILIATION_REQUIRED: Nie zapisano zwolnienia licencji."
+                )
+            link = _normalize_link(dict(row))
+    except Exception:
+        _finish_keygate_rebind_attempt(attempt_id, committed=False)
+        raise
 
+    # Crash between commit and finish remains an INTENT and needs review.
+    _finish_keygate_rebind_attempt(attempt_id, committed=True)
     return {
         **_public_status(link),
         "licenseKey": license_key,
-        "message": "Licencja gotowa do instalacji na nowym komputerze. Data końcowa nie została zmieniona.",
+        "message": "Zwolnienie zatwierdzone w OWNER. Data końcowa licencji nie została zmieniona.",
     }
