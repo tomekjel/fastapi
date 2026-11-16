@@ -192,6 +192,7 @@ class ApproveLegacyMigrationRequest(BaseModel):
 
 
 class LegacyMigrationRequest(BaseModel):
+    request_id: str | None = Field(default=None, alias="requestId")
     old_installation_id: str = Field(alias="oldInstallationId")
     old_installation_credential: str = Field(
         alias="oldInstallationCredential", min_length=32, max_length=512
@@ -2213,6 +2214,11 @@ def request_legacy_migration(req: LegacyMigrationRequest):
     ):
         raise HTTPException(400, "Nowe poswiadczenie musi byc niezalezne od starego.")
 
+    try:
+        migration_id = uuid.UUID(req.request_id) if req.request_id else uuid.uuid4()
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidlowy requestId migracji.") from exc
+
     with engine.begin() as connection:
         # Serialize with OWNER mutations on the same paid-license row.
         old = connection.execute(
@@ -2242,7 +2248,6 @@ def request_legacy_migration(req: LegacyMigrationRequest):
         ).first()
         if conflict:
             raise HTTPException(409, "Docelowa tozsamosc jest juz przypisana.")
-        migration_id = uuid.uuid4()
         created = connection.execute(
             text("""
                 INSERT INTO guard.legacy_migration_requests
@@ -2261,13 +2266,32 @@ def request_legacy_migration(req: LegacyMigrationRequest):
             },
         ).first()
         if not created:
-            raise HTTPException(
-                409, "RECOVERY_REQUIRED: Istnieje inne zgłoszenie migracji. Decyzja OWNER wymagana."
-            )
+            # Lost HTTP response after a successful stage must not create
+            # another request. Replay is allowed only for identical details.
+            existing = connection.execute(
+                text("""SELECT * FROM guard.legacy_migration_requests
+                        WHERE old_installation_id=:old_id FOR UPDATE"""),
+                {"old_id": old_id},
+            ).mappings().first()
+            if (not existing
+                or existing["id"] != migration_id
+                or existing["new_installation_id"] != new_id
+                or str(existing["device_id"]) != req.device_id
+                or str(existing["license_id"]) != str(old["keygate_license_id"])
+                or not secrets.compare_digest(
+                    str(existing["new_discovery_sha256"]),
+                    _hash(req.new_discovery_credential)
+                ) or existing["status"] not in {"WAITING_OWNER", "APPROVED"}):
+                raise HTTPException(
+                    409, "RECOVERY_REQUIRED: Istnieje inne zgłoszenie migracji. Decyzja OWNER wymagana."
+                )
+            stage_status = existing["status"]
+        else:
+            stage_status = "WAITING_OWNER"
 
     return {
         "requestId": str(migration_id),
-        "status": "WAITING_OWNER",
+        "status": stage_status,
         "requiresOwnerApproval": True,
         "licenseChanged": False,
         "keygateChanged": False,
