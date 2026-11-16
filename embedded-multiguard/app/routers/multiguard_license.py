@@ -2462,6 +2462,26 @@ def commit_legacy_migration(request_id: str, req: CommitLegacyMigrationRequest):
             or link["valid_until"] <= _utcnow()):
             raise HTTPException(409, "RECOVERY_REQUIRED: Stara licencja lub poswiadczenie sa nieaktualne.")
 
+        # The canonical link and its installation mirror must agree before
+        # the migration. A stale/cloned mirror requires independent OWNER review.
+        mirror = connection.execute(
+            text("""SELECT installation_external_id, device_id_hash, credential_sha256
+                    FROM guard.installations
+                    WHERE license_id=:license_id AND is_current=TRUE
+                    FOR UPDATE"""),
+            {"license_id": link["keygate_license_id"]},
+        ).mappings().first()
+        if (not mirror
+            or str(mirror["installation_external_id"]) != str(old_id)
+            or str(mirror["device_id_hash"]) != str(stage["device_id"])
+            or not secrets.compare_digest(
+                str(mirror["credential_sha256"]),
+                str(link["credential_sha256"]),
+            )):
+            raise HTTPException(
+                409, "RECOVERY_REQUIRED: Rozbieznosc aktywnego rekordu instalacji."
+            )
+
         conflict = connection.execute(
             text("""SELECT id FROM guard.license_links
                     WHERE installation_id=:new_id LIMIT 1"""),
