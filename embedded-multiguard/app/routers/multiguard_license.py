@@ -2186,11 +2186,9 @@ def request_legacy_migration(req: LegacyMigrationRequest):
         raise HTTPException(400, "Migracja wymaga nowej tozsamosci instalacji.")
     if not all(ch in "0123456789abcdefABCDEF" for ch in req.device_id):
         raise HTTPException(400, "Nieprawidlowy odcisk urzadzenia.")
-    if not secrets.compare_digest(
+    if secrets.compare_digest(
         req.old_installation_credential, req.new_discovery_credential
-    ) and len(req.new_discovery_credential.strip()) >= 32:
-        pass
-    else:
+    ):
         raise HTTPException(400, "Nowe poswiadczenie musi byc niezalezne od starego.")
 
     with engine.begin() as connection:
