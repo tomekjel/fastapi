@@ -169,6 +169,21 @@ class RecordKeygateReviewRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class CommitLegacyMigrationRequest(BaseModel):
+    old_installation_id: str = Field(alias="oldInstallationId")
+    old_installation_credential: str = Field(
+        alias="oldInstallationCredential", min_length=32, max_length=512
+    )
+    new_installation_id: str = Field(alias="newInstallationId")
+    new_discovery_credential: str = Field(
+        alias="newDiscoveryCredential", min_length=32, max_length=512
+    )
+    new_installation_credential: str = Field(
+        alias="newInstallationCredential", min_length=32, max_length=512
+    )
+    model_config = {"populate_by_name": True}
+
+
 class ApproveLegacyMigrationRequest(BaseModel):
     expected_license_id: str = Field(alias="expectedLicenseId", min_length=1)
     old_installation_id: str = Field(alias="oldInstallationId")
@@ -2339,6 +2354,136 @@ def owner_approve_legacy_migration(
         "keygateChanged": False,
         "meshChanged": False,
         "validUntilChanged": False,
+    }
+
+
+@router.post("/v1/multi-guard/legacy-migration/{request_id}/commit")
+def commit_legacy_migration(request_id: str, req: CommitLegacyMigrationRequest):
+    """Atomically rebind existing paid license after explicit OWNER approval.
+
+    Same device ID and existing KeyGate activation: no extra paid activation
+    or date changes. New installation credential is generated and sealed by
+    the Windows client BEFORE the request, enabling idempotent recovery after
+    an ambiguous HTTP response. The signed lease is generated in-transaction.
+    """
+    _ensure_schema()
+    try:
+        mid = uuid.UUID(request_id)
+        old_id = uuid.UUID(req.old_installation_id)
+        new_id = uuid.UUID(req.new_installation_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidlowe UUID migracji.") from exc
+    if old_id == new_id:
+        raise HTTPException(400, "Nowe installationId musi sie roznic od starego.")
+    if (secrets.compare_digest(req.new_installation_credential, req.old_installation_credential)
+        or secrets.compare_digest(req.new_installation_credential, req.new_discovery_credential)):
+        raise HTTPException(400, "Nowe poswiadczenie instalacji musi byc niezalezne.")
+
+    with engine.begin() as connection:
+        stage = connection.execute(
+            text("""SELECT * FROM guard.legacy_migration_requests
+                    WHERE id=:mid FOR UPDATE"""),
+            {"mid": mid},
+        ).mappings().first()
+        if not stage:
+            raise HTTPException(404, "Brak zgloszenia migracji.")
+        if (stage["old_installation_id"] != old_id
+            or stage["new_installation_id"] != new_id
+            or not secrets.compare_digest(
+                str(stage["new_discovery_sha256"]), _hash(req.new_discovery_credential)
+            )):
+            raise HTTPException(403, "RECOVERY_REQUIRED: Tozsamosc docelowa nie odpowiada zgloszeniu.")
+
+        # An ambiguous response after commit is safely replayable only with
+        # proof of the exact NEW credential, not the revoked old one.
+        if stage["status"] == "COMPLETED":
+            row = connection.execute(
+                text("""SELECT * FROM guard.license_links
+                        WHERE installation_id=:new_id FOR UPDATE"""),
+                {"new_id": new_id},
+            ).mappings().first()
+            if (not row or str(row["keygate_license_id"]) != str(stage["license_id"])
+                or not secrets.compare_digest(
+                    str(row.get("credential_sha256") or ""),
+                    _hash(req.new_installation_credential)
+                )):
+                raise HTTPException(409, "RECOVERY_REQUIRED: Nie mozna potwierdzic zakonczonej migracji.")
+            return {
+                "requestId": str(mid),
+                "status": "COMPLETED",
+                "signedLicense": _signed_envelope(dict(row), recovery_approved=True),
+                "alreadyCommitted": True,
+                "validUntilChanged": False,
+                "keygateChanged": False,
+                "meshReenrollmentRequired": True,
+            }
+
+        if stage["status"] != "APPROVED":
+            raise HTTPException(409, "RECOVERY_REQUIRED: Brak zatwierdzenia OWNER.")
+        if (_utcnow() - stage["created_at"]).total_seconds() > 900:
+            raise HTTPException(409, "RECOVERY_REQUIRED: Zgoda migracji wygasla.")
+
+        link = connection.execute(
+            text("""SELECT * FROM guard.license_links
+                    WHERE installation_id=:old_id FOR UPDATE"""),
+            {"old_id": old_id},
+        ).mappings().first()
+        if (not link or str(link["keygate_license_id"]) != str(stage["license_id"])
+            or not secrets.compare_digest(
+                str(link.get("credential_sha256") or ""), _hash(req.old_installation_credential)
+            ) or str(link.get("device_id") or "") != str(stage["device_id"])
+            or link.get("rebind_pending")
+            or link["lifecycle"] in {"UNASSIGNED", "REVOKED", "EXPIRED"}
+            or link.get("valid_until") is None
+            or link["valid_until"] <= _utcnow()):
+            raise HTTPException(409, "RECOVERY_REQUIRED: Stara licencja lub poswiadczenie sa nieaktualne.")
+
+        conflict = connection.execute(
+            text("""SELECT id FROM guard.license_links
+                    WHERE installation_id=:new_id LIMIT 1"""),
+            {"new_id": new_id},
+        ).first()
+        if conflict:
+            raise HTTPException(409, "RECOVERY_REQUIRED: Nowy identyfikator jest juz zajety.")
+
+        row = connection.execute(
+            text("""UPDATE guard.license_links
+                    SET installation_id=:new_id,
+                        credential_sha256=:new_hash,
+                        updated_at=now()
+                    WHERE id=:id AND installation_id=:old_id
+                      AND credential_sha256=:old_hash AND rebind_pending=FALSE
+                    RETURNING *"""),
+            {
+                "id": link["id"], "old_id": old_id, "new_id": new_id,
+                "old_hash": link["credential_sha256"],
+                "new_hash": _hash(req.new_installation_credential),
+            },
+        ).mappings().first()
+        if not row:
+            raise HTTPException(409, "RECOVERY_REQUIRED: Konflikt przy aktualizacji licencji.")
+        _update_installation_mirror(connection, _normalize_link(dict(row)))
+        updated = connection.execute(
+            text("""UPDATE guard.legacy_migration_requests
+                    SET status='COMPLETED', updated_at=now()
+                    WHERE id=:mid AND status='APPROVED'
+                    RETURNING id"""),
+            {"mid": mid},
+        ).first()
+        if not updated:
+            raise HTTPException(409, "RECOVERY_REQUIRED: Nie mozna zatwierdzic migracji.")
+        # Generate a signed lease before the transaction commits, so signing
+        # failures cannot leave the client without a verifiable lease.
+        signed = _signed_envelope(dict(row), recovery_approved=True)
+
+    return {
+        "requestId": str(mid),
+        "status": "COMPLETED",
+        "signedLicense": signed,
+        "alreadyCommitted": False,
+        "validUntilChanged": False,
+        "keygateChanged": False,
+        "meshReenrollmentRequired": True,
     }
 
 
