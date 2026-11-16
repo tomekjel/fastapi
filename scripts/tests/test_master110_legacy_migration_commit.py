@@ -43,6 +43,8 @@ class Transaction:
             if self.state["link"]["installation_id"]==args["new_id"]:
                 return Rows(self.state["link"])
             return Rows(self.state.get("conflict"))
+        if "FROM GUARD.INSTALLATIONS" in sql:
+            return Rows(self.state.get("mirror"))
         if "SELECT ID FROM GUARD.LICENSE_LINKS" in sql:return Rows(self.state.get("conflict"))
         if "UPDATE GUARD.LICENSE_LINKS" in sql:
             if self.fail:raise RuntimeError("simulated database failure")
@@ -92,6 +94,11 @@ class Tests(unittest.TestCase):
                 "lifecycle":"ACTIVE",
                 "valid_until":self.until,
             },
+        }
+        self.state["mirror"]={
+            "installation_external_id":self.old,
+            "device_id_hash":"a"*64,
+            "credential_sha256":hashlib.sha256(self.old_secret.encode()).hexdigest(),
         }
         self.db=Transaction(self.state)
         self.req=Request(self.old,self.new,self.old_secret,self.new_secret,self.discover)
@@ -144,6 +151,19 @@ class Tests(unittest.TestCase):
         self.state["conflict"]=("other-license",)
         with self.assertRaises(HTTPException):self.call(str(self.mid),self.req)
         self.assertEqual(self.db.events,[])
+    def test_stale_installation_mirror_rejected_without_rotation(self):
+        self.state["mirror"]["installation_external_id"]=uuid.uuid4()
+        with self.assertRaises(HTTPException) as err:self.call(str(self.mid),self.req)
+        self.assertEqual(err.exception.status_code,409)
+        self.assertEqual(self.state["link"]["installation_id"],self.old)
+        self.assertFalse(self.db.events)
+
+    def test_mirror_credential_mismatch_fails_closed(self):
+        self.state["mirror"]["credential_sha256"]="f"*64
+        with self.assertRaises(HTTPException) as err:self.call(str(self.mid),self.req)
+        self.assertEqual(err.exception.status_code,409)
+        self.assertFalse(self.db.events)
+
     def test_expired_paid_licence_rejected(self):
         self.state["link"]["valid_until"]=datetime.now(timezone.utc)-timedelta(days=1)
         with self.assertRaises(HTTPException):self.call(str(self.mid),self.req)
