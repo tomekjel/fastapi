@@ -2138,6 +2138,70 @@ def owner_recovery_preview(
     }
 
 
+@router.get("/multiguard/licenses/receptions/{reception_id}/legacy-v1-preflight")
+def owner_legacy_v1_preflight(
+    reception_id: str,
+    installation_id: str,
+    user: CurrentUser = Depends(require_owner),
+):
+    """Read-only OWNER review of an existing v1 paid installation.
+
+    Not a migration approval or an authentication proof. In particular, a
+    copied installation.json cannot authorize a new computer, and a preview
+    must never mutate PostgreSQL, KeyGate, or MeshCentral.
+    """
+    _ensure_schema()
+    try:
+        rid = uuid.UUID(reception_id)
+        iid = uuid.UUID(installation_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidlowy identyfikator instalacji lub zlecenia.") from exc
+
+    with engine.connect() as connection:
+        link = connection.execute(
+            text("""SELECT * FROM guard.license_links
+                    WHERE reception_id=:rid LIMIT 1"""),
+            {"rid": rid},
+        ).mappings().first()
+        if not link:
+            raise HTTPException(404, "Brak licencji w OWNER.")
+        # Do not allow arbitrary old IDs to be claimed through a client hint.
+        if link.get("installation_id") != iid:
+            raise HTTPException(409, "Podana stara instalacja nie odpowiada licencji OWNER.")
+        conflicting = connection.execute(
+            text("""SELECT id FROM guard.license_links
+                    WHERE installation_id=:iid AND id<>:link_id LIMIT 1"""),
+            {"iid": iid, "link_id": link["id"]},
+        ).first()
+        existing = connection.execute(
+            text("""SELECT installation_external_id FROM guard.installations
+                    WHERE license_id=:license_id AND is_current=TRUE
+                    LIMIT 1"""),
+            {"license_id": link["keygate_license_id"]},
+        ).first()
+
+    now = _utcnow()
+    eligible = (
+        link["lifecycle"] not in {"UNASSIGNED", "EXPIRED", "REVOKED"}
+        and (link.get("valid_until") is None or link["valid_until"] > now)
+        and not bool(link.get("rebind_pending"))
+        and not bool(conflicting)
+        and bool(existing)
+        and str(existing[0]) == str(iid)
+    )
+    return {
+        "oldInstallationId": str(iid),
+        "licenseId": str(link["keygate_license_id"]),
+        "licenseLifecycle": str(link["lifecycle"]),
+        "validUntil": _iso(link.get("valid_until")),
+        "eligibleForOwnerReview": eligible,
+        "requiresOwnerApproval": True,
+        "authorizesMigration": False,
+        "mutated": False,
+        "warning": "Tozsamosc v1 jest tylko wskazowka. Wymagane nowe uwierzytelnienie Windows, zatwierdzenie OWNER i transakcyjna migracja.",
+    }
+
+
 @router.post("/multiguard/pending-installations/{installation_id}/approve-recovery")
 def approve_pending_recovery(
     installation_id: str,
