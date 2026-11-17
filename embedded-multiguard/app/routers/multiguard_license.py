@@ -954,9 +954,9 @@ def _required_documents() -> list[dict[str, str]]:
         )
     # MASTER110: do not send an obsolete three-document bundle to new
     # installers. This also guards missing or duplicate policy kinds.
-    if len(result) != 2 or {d["kind"] for d in result} != {"owner_text", "remote_policy"}:
+    if len(result) != 2 or {d["kind"] for d in result} != {"remote_policy", "browser_shield"}:
         raise HTTPException(
-            503, "Multi-Guard wymaga dwóch skonfigurowanych polityk: owner_text i remote_policy."
+            503, "Multi-Guard wymaga dwóch skonfigurowanych polityk: remote_policy i browser_shield."
         )
     return result
 
