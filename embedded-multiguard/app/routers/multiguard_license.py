@@ -1585,9 +1585,9 @@ def acceptance(req: AcceptanceRequest):
         raise HTTPException(409, "Licencja nie oczekuje na akceptację klienta.")
 
     required = _required_documents()
-    if len(required) != 3:
+    if len(required) != 2:
         raise HTTPException(
-            503, "Przed aktywacją muszą być skonfigurowane dokładnie 3 dokumenty."
+            503, "Przed aktywacją muszą być skonfigurowane dokładnie 2 dokumenty."
         )
 
     expected = {
@@ -1597,8 +1597,8 @@ def acceptance(req: AcceptanceRequest):
     received = {
         (item.kind, item.version, item.sha256.lower()) for item in req.documents
     }
-    if received != expected:
-        raise HTTPException(400, "Zaakceptowane dokumenty nie są aktualnym zestawem.")
+    if len(req.documents) != 2 or len(received) != 2 or received != expected:
+        raise HTTPException(400, "Wymagane są dokładnie dwa aktualne, różne dokumenty.")
 
     started = _utcnow()
     valid_until = _add_months(started, int(link["duration_months"]))
