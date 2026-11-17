@@ -42,7 +42,7 @@ def check():
             raise SystemExit("STOP: document content missing: "+kind)
         print("KIND:",kind,"VERSION:",version,"SHA256:",hashlib.sha256(body.encode("utf-8")).hexdigest())
         kinds.append(kind)
-    if kinds != ["owner_text","remote_policy"]:
+    if kinds != ["remote_policy","browser_shield"]:
         raise SystemExit("STOP: live configuration is not the two approved policy kinds in order; deployment required")
     print("PASS: exactly two correctly named policy documents configured (compare SHA256 with installer before deployment)")
 if __name__=="__main__":
