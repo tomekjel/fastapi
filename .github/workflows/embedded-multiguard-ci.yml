@@ -26,6 +26,7 @@ jobs:
         run: |
           python3 -m pip install --quiet 'cryptography>=43,<47'
           python3 -m unittest discover -s scripts/tests -p 'test_multiguard_owner_grant.py'
+          python3 -m unittest discover -s scripts/tests -p 'test_multiguard_two_documents_contract.py'
 
       - name: Verify Python syntax
         run: |
