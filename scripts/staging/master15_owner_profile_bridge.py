@@ -94,6 +94,19 @@ def owner_profile_grant(req:Identity):
         """),{"iid":req.installationId}).scalar_one_or_none()
         if occupied:
             raise HTTPException(409,"Poprzednie przełączenie nadal trwa.")
+        # A newly provisioned installation may reach this authenticated OWNER
+        # profile broker without an owner_mesh_group_sync row. Bootstrap its
+        # saved OWNER target BEFORE issuing the Windows reservation, so the
+        # subsequently verified SCM report cannot predate the sync request.
+        # Never rewrite an existing revision on every routine licence poll.
+        from app.routers import master15_owner_mesh_sync_engine as mesh_sync
+        mesh_sync.ensure_schema(db)
+        existing_sync = db.execute(text("""
+            SELECT requested_group FROM guard.owner_mesh_group_sync
+            WHERE installation_id=:iid
+        """), {"iid":req.installationId}).scalar_one_or_none()
+        if existing_sync is None:
+            mesh_sync.queue_after_owner_save(db, req.installationId)
         rid=uuid4()
         db.execute(text("""
             INSERT INTO guard.workshop_profile_transitions
