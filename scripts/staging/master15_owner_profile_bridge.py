@@ -115,7 +115,7 @@ def owner_profile_grant(req:Identity):
         )
     return {"requestId":req.requestId,"reservationId":str(rid),"grant":grant}
 
-def _sync_standard_after_verified_ack(iid: UUID) -> None:
+def _sync_standard_after_verified_ack(iid: UUID, reservation_id: UUID) -> None:
     """Run only after the signed Windows receipt was accepted and committed."""
     import logging
     from app.routers import master15_owner_mesh_sync_engine as sync
@@ -127,6 +127,7 @@ def _sync_standard_after_verified_ack(iid: UUID) -> None:
             # its default requested_at would be newer than the report's
             # created_at. _verified_standard_shutdown would then reject that
             # very report forever as "stale".
+            sync.ensure_schema(db)
             previous = db.execute(text("""
                 SELECT revision,requested_group,requested_at
                 FROM guard.owner_mesh_group_sync
@@ -143,13 +144,14 @@ def _sync_standard_after_verified_ack(iid: UUID) -> None:
                     FROM guard.workshop_profile_transitions t
                     WHERE s.installation_id=:iid
                       AND t.installation_id=s.installation_id
+                      AND t.reservation_id=:reservation_id
                       AND s.requested_group='NONE'
                       AND s.status='WAITING'
                       AND t.state='COMPLETED'
                       AND t.target_mode='STANDARD'
                       AND t.created_at IS NOT NULL
                       AND t.created_at < s.requested_at
-                """), {"iid":iid})
+                """), {"iid":iid, "reservation_id":reservation_id})
             # A prior failed Standard attempt is automatically requeued.
             sync.request_manual_retry(db, iid)
         sync.run_pending_installation(workshop.engine, iid)
@@ -190,6 +192,6 @@ def owner_profile_report(req:TransitionReport, background_tasks: BackgroundTasks
             WHERE installation_id=:iid AND reservation_id=:rid AND state='RESERVED'
         """),{"iid":req.installationId,"rid":req.reservationId})
     if target == "STANDARD":
-        background_tasks.add_task(_sync_standard_after_verified_ack, req.installationId)
+        background_tasks.add_task(_sync_standard_after_verified_ack, req.installationId, req.reservationId)
     return {"requestId":req.requestId,"reservationId":str(req.reservationId),
             "state":"COMPLETED","admissionBlocked":False}
