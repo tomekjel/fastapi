@@ -121,7 +121,35 @@ def _sync_standard_after_verified_ack(iid: UUID) -> None:
     from app.routers import master15_owner_mesh_sync_engine as sync
     try:
         with workshop.engine.begin() as db:
+            # The signed Windows report may be the first occasion on which a
+            # freshly provisioned Standard installation enters OWNER Mesh sync.
+            # If the sync row is created AFTER the completed Windows report,
+            # its default requested_at would be newer than the report's
+            # created_at. _verified_standard_shutdown would then reject that
+            # very report forever as "stale".
+            previous = db.execute(text("""
+                SELECT revision,requested_group,requested_at
+                FROM guard.owner_mesh_group_sync
+                WHERE installation_id=:iid FOR UPDATE
+            """), {"iid":iid}).mappings().first()
             sync.queue_after_owner_save(db, iid)
+            if previous is None:
+                # Bind this initial request to the exact independently verified
+                # completed Standard reservation, never to a past receipt on an
+                # existing OWNER revision. The row is installation-scoped.
+                db.execute(text("""
+                    UPDATE guard.owner_mesh_group_sync s
+                    SET requested_at=t.created_at
+                    FROM guard.workshop_profile_transitions t
+                    WHERE s.installation_id=:iid
+                      AND t.installation_id=s.installation_id
+                      AND s.requested_group='NONE'
+                      AND s.status='WAITING'
+                      AND t.state='COMPLETED'
+                      AND t.target_mode='STANDARD'
+                      AND t.created_at IS NOT NULL
+                      AND t.created_at < s.requested_at
+                """), {"iid":iid})
             # A prior failed Standard attempt is automatically requeued.
             sync.request_manual_retry(db, iid)
         sync.run_pending_installation(workshop.engine, iid)
