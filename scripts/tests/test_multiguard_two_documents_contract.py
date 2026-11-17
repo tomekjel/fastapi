@@ -11,7 +11,7 @@ SOURCE=(ROOT/"embedded-multiguard/app/routers/multiguard_license.py").read_text(
 class AcceptanceContract(unittest.TestCase):
     def test_only_two_current_documents_are_configured(self):
         self.assertIn('if len(result) != 2',SOURCE)
-        self.assertIn('{"owner_text", "remote_policy"}',SOURCE)
+        self.assertIn('{"remote_policy", "browser_shield"}',SOURCE)
         self.assertIn('if len(required) != 2',SOURCE)
         self.assertNotIn('if len(required) != 3',SOURCE)
     def test_duplicate_or_outdated_acceptance_fails_before_keygate_changes(self):
