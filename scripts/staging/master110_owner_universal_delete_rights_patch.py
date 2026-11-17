@@ -103,7 +103,7 @@ replacement = """        except mesh.MeshCentralError as exc:
 updated=original.replace(preflight_anchor, preflight+preflight_anchor,1)
 updated=updated.replace(remove_anchor,replacement,1)
 ast.parse(updated)
-assert updated.count(MARKER)==3
+assert updated.count(MARKER)==2
 assert "DELETE FROM guard.license_links" in updated
 assert "DELETE FROM guard.installations" in updated
 assert "RemoveDevice" in updated
