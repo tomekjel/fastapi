@@ -136,6 +136,33 @@ def request_manual_retry(db, iid: UUID) -> bool:
     """),{"iid":iid})
     return result.rowcount == 1
 
+def requeue_after_verified_mesh_registration(db, iid: UUID, node_id: str) -> bool:
+    """Requeue ONLY the exact installation after its authenticated node bind.
+
+    Call within the same transaction as a successful mesh-register, AFTER the
+    endpoint verifies authenticated installation identity, active entitlement,
+    exact Mesh inventory membership and non-conflicting node ownership.
+    The mesh-register route is the authorization boundary: this helper cannot
+    bind a node, authenticate one, move a node or enable remote access.
+    """
+    registered = db.execute(text("""
+        SELECT n.mesh_node_id
+        FROM guard.workshop_mesh_nodes n
+        WHERE n.installation_id=:iid
+    """), {"iid": iid}).scalar_one_or_none()
+    if registered != node_id:
+        return False
+    result = db.execute(text("""
+        UPDATE guard.owner_mesh_group_sync
+        SET status='WAITING', attempts=0, revision=revision+1,
+            last_error=NULL, updated_at=now()
+        WHERE installation_id=:iid
+          AND requested_group IN ('CLIENT','SERVICE')
+          AND status='RETRY'
+    """), {"iid": iid})
+    return result.rowcount == 1
+
+
 def get_status(db, iid: UUID) -> tuple[str, str, int]:
     """Read status without writing. Group is the actual/last confirmed
     group until OWNER Save creates a new desired sync revision."""
