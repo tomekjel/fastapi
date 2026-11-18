@@ -146,9 +146,9 @@ def requeue_after_verified_mesh_registration(db, iid: UUID, node_id: str) -> boo
     bind a node, authenticate one, move a node or enable remote access.
     """
     registered = db.execute(text("""
-        SELECT n.mesh_node_id
-        FROM guard.workshop_mesh_nodes n
-        WHERE n.installation_id=:iid
+        SELECT i.mesh_node_id
+        FROM guard.installations i
+        WHERE i.installation_external_id=:iid
     """), {"iid": iid}).scalar_one_or_none()
     if registered != node_id:
         return False
@@ -221,9 +221,13 @@ def _list_visible_nodes() -> list[dict]:
 def _fetch_record(db, iid: UUID) -> SyncRecord | None:
     row=db.execute(text("""
         SELECT s.installation_id,s.revision,s.requested_group,s.status,
-               s.attempts,s.target_mesh_id,n.mesh_node_id
+               s.attempts,s.target_mesh_id,
+               COALESCE(i.mesh_node_id,n.mesh_node_id) AS mesh_node_id
         FROM guard.owner_mesh_group_sync s
-        LEFT JOIN guard.workshop_mesh_nodes n ON n.installation_id=s.installation_id
+        LEFT JOIN guard.installations i
+          ON i.installation_external_id=s.installation_id
+        LEFT JOIN guard.workshop_mesh_nodes n
+          ON n.installation_id=s.installation_id
         WHERE s.installation_id=:iid
     """),{"iid":iid}).mappings().first()
     return SyncRecord(**dict(row)) if row else None
