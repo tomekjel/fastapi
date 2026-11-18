@@ -296,8 +296,14 @@ def sync_once(engine,iid:UUID,revision:int)->str:
         ok=seen==current.target_mesh_id
         if not ok:
             raise MeshSyncError("MESH_GROUP_NOT_CONFIRMED")
+    except MeshSyncError as exc:
+        # Only fixed, non-sensitive diagnostic codes authored in this module.
+        # Preserve the exact reason (e.g. MESH_NODE_ID_NOT_LINKED), instead
+        # of hiding every failure behind the generic 'MeshSyncError' string.
+        issue=str(exc)[:180]
     except Exception as exc:
-        # No tokens, device identifiers, or CLI output persisted in DB.
+        # MeshCtrl may include secrets or node identifiers in exception text.
+        # Never persist the raw external exception, CLI output or tokens.
         issue=type(exc).__name__
     with engine.begin() as db:
         db.execute(text("""
