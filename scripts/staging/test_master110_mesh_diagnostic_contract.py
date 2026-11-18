@@ -31,6 +31,11 @@ class MeshFailureReasonTests(unittest.TestCase):
         self.assertIn("requested_group IN ('CLIENT','SERVICE')", SOURCE)
         self.assertIn("SET status='WAITING', attempts=0, revision=revision+1", SOURCE)
 
+    def test_sync_reuses_paid_registration_not_only_workshop_registration(self):
+        self.assertIn("COALESCE(i.mesh_node_id,n.mesh_node_id) AS mesh_node_id", SOURCE)
+        self.assertIn("i.installation_external_id=s.installation_id", SOURCE)
+        self.assertIn("WHERE i.installation_external_id=:iid", SOURCE)
+
     def test_no_fake_success_when_registration_is_missing(self):
         self.assertIn("if not current.mesh_node_id:", SOURCE)
         self.assertIn('raise MeshSyncError("MESH_NODE_ID_NOT_LINKED")', SOURCE)
