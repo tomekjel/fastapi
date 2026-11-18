@@ -23,6 +23,14 @@ class MeshFailureReasonTests(unittest.TestCase):
         self.assertIn("except Exception as exc:", SOURCE)
         self.assertIn("issue=type(exc).__name__", SOURCE)
 
+    def test_requeue_after_verified_registration_is_scoped(self):
+        self.assertIn("def requeue_after_verified_mesh_registration(", SOURCE)
+        self.assertIn("if registered != node_id:", SOURCE)
+        self.assertIn("WHERE installation_id=:iid", SOURCE)
+        self.assertIn("AND status='RETRY'", SOURCE)
+        self.assertIn("requested_group IN ('CLIENT','SERVICE')", SOURCE)
+        self.assertIn("SET status='WAITING', attempts=0, revision=revision+1", SOURCE)
+
     def test_no_fake_success_when_registration_is_missing(self):
         self.assertIn("if not current.mesh_node_id:", SOURCE)
         self.assertIn('raise MeshSyncError("MESH_NODE_ID_NOT_LINKED")', SOURCE)
